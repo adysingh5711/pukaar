@@ -1,0 +1,21 @@
+[package]
+name = "pukaar_logic"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+# Standalone: don't adopt a parent workspace.
+[workspace]
+
+[dependencies]
+ed25519-dalek = "2.1"
+getrandom = "0.2"
+hex = "0.4"
+postcard = { version = "1.1", features = ["alloc"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+
+# Signature checks dominate the convergence test; optimise deps even in debug.
+[profile.dev.package."*"]
+opt-level = 3
