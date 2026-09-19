@@ -1,0 +1,21 @@
+target/
+result
+result-*
+.DS_Store
+# staged by `nix build …#rust-sdk-src` (Task 10); never commit it
+modules/pukaar_core/logos-rust-sdk-src
+modules/pukaar_core/rust-lib/generated/
+# tool out-links (symlinks, so no trailing slash) and local scratch, Tasks 10–12
+modules/pukaar_core/lm
+modules/pukaar_core/logos
+modules/pukaar_core/pm
+modules/pukaar_core/modules/
+/lgx
+/trusted-keys/
+/dist/
+# local agent config, not part of the repo
+.claude/
+# local planning notes, never committed
+docs/
+plan.md
+next-steps.md
