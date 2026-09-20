@@ -2,3 +2,4 @@
 //! reducer, anti-entropy and checkpoints. The Logos module in ../rust-lib wraps `Node`.
 
 pub mod event;
+pub mod store;
