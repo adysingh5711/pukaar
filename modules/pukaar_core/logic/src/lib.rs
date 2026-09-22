@@ -4,3 +4,4 @@
 pub mod checkpoint;
 pub mod event;
 pub mod store;
+pub mod sync;
