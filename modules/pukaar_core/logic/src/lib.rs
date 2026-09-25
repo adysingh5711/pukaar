@@ -4,6 +4,7 @@
 pub mod checkpoint;
 pub mod event;
 pub mod node;
+pub mod persist;
 pub mod reducer;
 pub mod store;
 pub mod sync;
