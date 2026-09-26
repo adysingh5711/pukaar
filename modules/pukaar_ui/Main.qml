@@ -21,6 +21,7 @@ Item {
 
     // ---- design tokens: the only place a colour or the stage->colour map is spelled out ----
     readonly property color dangerColor: "#d73a49"
+    readonly property color mutedColor: "gray"
     readonly property var stageColors: ({
         Open: "#b45309",
         Acknowledged: "#b45309",
@@ -122,6 +123,8 @@ Item {
         required property string nextText
         required property bool overdue
         required property color tint
+        required property color alertColor
+        required property color mutedColor
         signal opened()
         width: ListView.view.width
         contentItem: Column {
@@ -136,7 +139,7 @@ Item {
                     Layout.fillWidth: true
                     wrapMode: Text.Wrap
                     font.pixelSize: 11
-                    color: card.overdue ? "#d73a49" : "gray"
+                    color: card.overdue ? card.alertColor : card.mutedColor
                     text: (card.issue.status === "AwaitingConfirmation" ? "Fix claimed: waiting for the reporter to confirm. " : "")
                           + (card.issue.reopen_count > 0 ? "Reopened " + card.issue.reopen_count + "×. " : "")
                           + card.nextText
@@ -151,9 +154,10 @@ Item {
         id: row
         required property string lineText
         required property bool rejected
+        required property color alertColor
         width: ListView.view.width
         wrapMode: Text.Wrap
-        color: row.rejected ? "#d73a49" : palette.text
+        color: row.rejected ? row.alertColor : palette.text
         text: row.lineText
     }
 
@@ -182,7 +186,7 @@ Item {
             Item { Layout.fillWidth: true }
             TextEdit {   // selectable, so the admin can copy the site id to share
                 visible: root.inSite; readOnly: true; selectByMouse: true
-                text: "site " + (root.me.site || ""); font.pixelSize: 10; color: "gray"
+                text: "site " + (root.me.site || ""); font.pixelSize: 10; color: root.mutedColor
             }
             Label {
                 visible: root.inSite
@@ -271,6 +275,8 @@ Item {
                                     nextText: root.nextLine(modelData)
                                     overdue: root.isOverdue(modelData)
                                     tint: root.stageColor(modelData.status)
+                                    alertColor: root.dangerColor
+                                    mutedColor: root.mutedColor
                                     onOpened: root.selected = root.call("issue_timeline", [modelData.id])
                                 }
                             }
@@ -300,6 +306,7 @@ Item {
                             model: root.selected ? root.selected.events : []
                             delegate: TimelineRow {
                                 required property var modelData
+                                alertColor: root.dangerColor
                                 rejected: !!modelData.rejected
                                 lineText: root.when(modelData.ts) + "  " + modelData.kind + " by " + root.who(modelData.author, modelData.author_name)
                                           + (modelData.body ? ": " + modelData.body : "")
