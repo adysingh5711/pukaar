@@ -31,13 +31,7 @@ impl Wire {
 
 #[must_use]
 pub fn heads_msg(store: &Store) -> Wire {
-    Wire::Heads(
-        store
-            .heads()
-            .into_iter()
-            .map(|(a, (s, _))| (a, s))
-            .collect(),
-    )
+    Wire::Heads(store.head_seqs())
 }
 
 /// Should this node answer a Heads message? Every receiver ranks the members the same way,

@@ -102,9 +102,19 @@ impl Store {
         h
     }
 
+    /// `heads()` without the ids: what a checkpoint or a gossip message names.
+    pub fn head_seqs(&self) -> Vec<(Key, u64)> {
+        self.heads().into_iter().map(|(a, (s, _))| (a, s)).collect()
+    }
+
+    /// One author's latest (seq, id), found directly instead of building every author's head.
     pub fn next_seq(&self, author: &Key) -> (u64, Id) {
-        match self.heads().get(author) {
-            Some((s, id)) => (s + 1, *id),
+        match self
+            .events
+            .range((*author, 0)..=(*author, u64::MAX))
+            .next_back()
+        {
+            Some((_, e)) => (e.u.seq + 1, e.id),
             None => (0, ZERO),
         }
     }

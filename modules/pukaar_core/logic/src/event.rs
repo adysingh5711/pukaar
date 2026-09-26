@@ -158,11 +158,10 @@ pub fn new_key() -> SigningKey {
 }
 
 pub fn sign(key: &SigningKey, u: Unsigned) -> Event {
-    let mut payload = DOMAIN.to_vec();
-    payload.extend(postcard::to_allocvec(&u).expect("postcard encode"));
+    let body = postcard::to_allocvec(&u).expect("postcard encode");
+    let payload = [DOMAIN, &body].concat();
     let sig = key.sign(&payload);
-    let mut bytes = sig.to_bytes().to_vec();
-    bytes.extend_from_slice(&payload);
+    let bytes = [&sig.to_bytes()[..], &payload].concat();
     Event {
         id: sha256(&payload),
         u,

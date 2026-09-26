@@ -26,7 +26,8 @@ pub fn save(node: &Node, dir: &Path) -> io::Result<()> {
     fs::create_dir_all(dir)?;
     write_atomic(&dir.join("key"), &node.key.to_bytes())?;
     write_atomic(&dir.join("site"), &node.store.site)?;
-    let mut buf = Vec::new();
+    let total: usize = node.store.events.values().map(|e| 4 + e.bytes.len()).sum();
+    let mut buf = Vec::with_capacity(total);
     for e in node.store.events.values() {
         buf.extend((e.bytes.len() as u32).to_le_bytes());
         buf.extend(&e.bytes);

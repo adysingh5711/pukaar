@@ -56,11 +56,7 @@ fn cp_message(site: &Id, root: &[u8; 32], n_events: u64) -> Vec<u8> {
 }
 
 pub fn checkpoint_now(store: &Store, key: &SigningKey) -> Checkpoint {
-    let heads: Vec<(Key, u64)> = store
-        .heads()
-        .into_iter()
-        .map(|(a, (s, _))| (a, s))
-        .collect();
+    let heads = store.head_seqs();
     let heads_root = root_for(store, &heads).expect("own heads are always present");
     let n_events = heads.iter().map(|(_, s)| s + 1).sum();
     let sig = key

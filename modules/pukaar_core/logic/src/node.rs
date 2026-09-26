@@ -115,7 +115,7 @@ impl Node {
             "site": hex::encode(self.store.site),
             "name": s.config.name,
             "categories": s.config.categories,
-            "locations": s.locations.iter().map(|l| json!({ "code": l.code, "label": l.label, "group": l.group })).collect::<Vec<_>>(),
+            "locations": s.locations.iter().map(|l| json!(l)).collect::<Vec<_>>(),
             "members": s.roles.iter().map(|(k, r)| { let mut m = member(k); m["role"] = json!(format!("{r:?}")); m }).collect::<Vec<_>>(),
             "pending": s.pending_members.iter().map(member).collect::<Vec<_>>(),
             "events": self.store.events.len(),
