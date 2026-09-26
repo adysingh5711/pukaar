@@ -1,0 +1,151 @@
+{
+  "accounts": [
+    {
+      "name": "CheckpointRecord",
+      "type": {
+        "fields": [
+          {
+            "name": "site_id",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "heads_root",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "n_events",
+            "type": "u64"
+          },
+          {
+            "name": "signer_pk",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "sig_r",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "sig_s",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ],
+        "kind": "struct"
+      }
+    }
+  ],
+  "errors": [],
+  "instructions": [
+    {
+      "accounts": [
+        {
+          "init": true,
+          "name": "record",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "cp"
+              },
+              {
+                "kind": "arg",
+                "path": "site_id"
+              },
+              {
+                "kind": "arg",
+                "path": "heads_root"
+              }
+            ]
+          },
+          "signer": false,
+          "writable": true
+        },
+        {
+          "init": false,
+          "name": "payer",
+          "signer": true,
+          "writable": false
+        }
+      ],
+      "args": [
+        {
+          "name": "site_id",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "heads_root",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "n_events",
+          "type": "u64"
+        },
+        {
+          "name": "signer_pk",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "sig_r",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "sig_s",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ],
+      "name": "anchor"
+    }
+  ],
+  "name": "pukaar_registry",
+  "types": [],
+  "version": "0.1.0"
+}

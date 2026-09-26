@@ -1,0 +1,6 @@
+target/
+Cargo.lock.bak
+.env.local
+.scaffold
+# derived from idl/*.json by `lgs build client`; never hand-edited
+src/generated/
