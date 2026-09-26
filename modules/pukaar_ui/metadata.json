@@ -1,0 +1,18 @@
+{
+  "name": "pukaar_ui",
+  "display_name": "Pukaar",
+  "version": "0.1.0",
+  "type": "ui_qml",
+  "category": "civic",
+  "description": "Report, track and confirm fixes at your site",
+  "view": "Main.qml",
+  "icon": "src/icons/pukaar.png",
+  "dependencies": ["pukaar_core"],
+  "provides": [],
+  "uses": [],
+  "nix": {
+    "packages": { "build": [], "runtime": [] },
+    "external_libraries": [],
+    "cmake": { "find_packages": [], "extra_sources": [], "extra_include_dirs": [], "extra_link_libraries": [] }
+  }
+}
