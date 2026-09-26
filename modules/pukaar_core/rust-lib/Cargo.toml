@@ -5,21 +5,18 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 # Standalone crate: the empty table keeps cargo from adopting a parent workspace.
+# `logic` is excluded because it declares its own `[workspace]` (so it stays
+# plain-`cargo test`-able on its own, no Nix needed) — nesting a workspace
+# root inside another workspace's member set is a cargo error otherwise.
 [workspace]
+exclude = ["logic"]
 
 [lib]
 crate-type = ["staticlib"]
 
 [dependencies]
 hex = "0.4"
+pukaar_logic = { path = "logic" }
 serde_json = "1"
-# Below: pukaar_logic's own deps, needed here because ../logic/src is mounted
-# by path (see the ponytail note at the top of src/lib.rs) rather than
-# depended on as a separate crate.
-ed25519-dalek = "2.1"
-getrandom = "0.2"
-postcard = { version = "1.1", features = ["alloc"] }
-serde = { version = "1", features = ["derive"] }
-sha2 = "0.10"
 # Staged by the builder from the same revision as its code generator (Step 7).
 logos-rust-sdk = { path = "../logos-rust-sdk-src" }

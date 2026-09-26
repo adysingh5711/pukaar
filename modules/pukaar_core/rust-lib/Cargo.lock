@@ -288,10 +288,19 @@ dependencies = [
 name = "pukaar_core"
 version = "0.1.0"
 dependencies = [
+ "hex",
+ "logos-rust-sdk",
+ "pukaar_logic",
+ "serde_json",
+]
+
+[[package]]
+name = "pukaar_logic"
+version = "0.1.0"
+dependencies = [
  "ed25519-dalek",
  "getrandom",
  "hex",
- "logos-rust-sdk",
  "postcard",
  "serde",
  "serde_json",

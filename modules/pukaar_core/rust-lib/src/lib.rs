@@ -1,43 +1,16 @@
 //! Logos glue for Pukaar. The trait below IS the module's API (the builder
-//! derives the .lidl from it). All rules live in ../logic (pukaar_logic);
-//! this file only moves bytes between that crate, the disk and Delivery.
+//! derives the .lidl from it). All rules live in ./logic (pukaar_logic, a
+//! standalone plain-`cargo test`-able crate nested under this one so
+//! logos-module-builder's `cp -r <codegen.rust.crate>` staging sees it — see
+//! rust-lib/Cargo.toml); this file only moves bytes between that crate, the
+//! disk and Delivery.
 
-// ponytail: these 7 modules are a physical copy of ../logic/src (the
-// standalone, plain-`cargo test`-able `pukaar_logic` crate — 28 tests live
-// there), mounted at crate root by path instead of depended on via
-// `pukaar_logic = { path = "../logic" }`. logos-module-builder 0.3.1 stages
-// the Rust cdylib with `cp -r <codegen.rust.crate>` alone (see `rustCrateSrc`
-// in its `lib/mkLogosModule.nix`), so a sibling crate outside `rust-lib/`
-// doesn't exist in the sandboxed build. Mounting by path (rather than a `mod
-// logic;` wrapper module) keeps every `crate::event`/`crate::store`/etc.
-// reference inside the copied files working unmodified, so the two copies
-// stay byte-identical and diffable with plain `cp`. Upgrade path: drop this
-// copy and go back to the path dependency once the builder vendors the whole
-// flake source (or grows an `extra_source_dirs` knob) instead of just the
-// named crate dir.
-// verify_anchor is part of pukaar_logic's public API (exercised by its own
-// tests, exempt from dead_code there); this glue doesn't call it yet.
-#[path = "logic/checkpoint.rs"]
-#[allow(dead_code)]
-mod checkpoint;
-#[path = "logic/event.rs"]
-mod event;
-#[path = "logic/node.rs"]
-mod node;
-#[path = "logic/persist.rs"]
-mod persist;
-#[path = "logic/reducer.rs"]
-mod reducer;
-#[path = "logic/store.rs"]
-mod store;
-#[path = "logic/sync.rs"]
-mod sync;
-
-use event::{Body, Event, Location, Role, SigningKey};
-use node::{action_body, genesis_from_json, parse_id, Node};
+use pukaar_logic::event::{Body, Event, Location, Role, SigningKey};
+use pukaar_logic::node::{action_body, genesis_from_json, parse_id, Node};
+use pukaar_logic::persist;
+use pukaar_logic::store::Accept;
+use pukaar_logic::sync::{heads_msg, should_answer, to_resend, to_resend_own, Wire};
 use std::path::PathBuf;
-use store::Accept;
-use sync::{heads_msg, should_answer, to_resend, to_resend_own, Wire};
 // Mutex comes from the generated scaffold below (same module scope): a second
 // `use std::sync::Mutex;` here would be a duplicate import (confirmed at Step 8).
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};

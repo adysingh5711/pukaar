@@ -5,7 +5,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: modules/pukaar_core/logic
+        working-directory: modules/pukaar_core/rust-lib/logic
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: modules/pukaar_core/logic
+        working-directory: modules/pukaar_core/rust-lib/logic
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly

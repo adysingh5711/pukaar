@@ -66,7 +66,7 @@ Pukaar takes that power away from the operator:
 
 | Component | Path | Status |
 |---|---|---|
-| Rules engine (`pukaar_logic`): events, chains, reducer, sync, checkpoints, persistence | `modules/pukaar_core/logic/` | **Done.** 28 tests, clippy `-D warnings` clean, fuzzed in CI |
+| Rules engine (`pukaar_logic`): events, chains, reducer, sync, checkpoints, persistence | `modules/pukaar_core/rust-lib/logic/` | **Done.** 28 tests, clippy `-D warnings` clean, fuzzed in CI |
 | Checkpoint registry (`pukaar_registry`), a SPEL program on LEZ | `programs/pukaar_registry/` | **Done.** Deployed and anchored on localnet ([record](programs/pukaar_registry/ANCHOR.md)) |
 | Logos core module (`pukaar_core`), a Rust cdylib plus Delivery glue | `modules/pukaar_core/` | In progress |
 | QML UI module (`pukaar_ui`) | `modules/pukaar_ui/` | To be added in later version |
@@ -129,7 +129,7 @@ A one-instruction [SPEL](https://github.com/logos-co/spel) program ([source](pro
 ### Run the rules engine tests
 
 ```bash
-cd modules/pukaar_core/logic
+cd modules/pukaar_core/rust-lib/logic
 cargo test                                   # 28 tests
 cargo clippy --all-targets -- -D warnings
 cargo +nightly fuzz run decode -- -max_total_time=60   # needs cargo-fuzz
@@ -187,17 +187,20 @@ The `heads_root` and `n_events` it prints must equal the values that your own re
 
 ```
 modules/pukaar_core/
-  logic/                 pukaar_logic: every rule, tested with plain cargo
-    src/event.rs         signed envelope, strict decode
-    src/store.rs         per-author chains, pending buffer, fork proofs
-    src/checkpoint.rs    Merkle root, checkpoint signature, verification
-    src/sync.rs          Wire enum, heads-based anti-entropy
-    src/reducer.rs       state machine → State
-    src/node.rs          one participant: publish/receive + JSON views
-    src/persist.rs       atomic on-disk replica
-    tests/               event, store, checkpoint, sync, lifecycle, convergence, persist
-    fuzz/                cargo-fuzz decode target
-  rust-lib/              the Logos module crate (in progress)
+  rust-lib/               the Logos module crate (in progress)
+    logic/                pukaar_logic: every rule, tested with plain cargo,
+                          nested here so the Nix build's crate-dir staging
+                          sees it (single source of truth, no copy)
+      src/event.rs        signed envelope, strict decode
+      src/store.rs        per-author chains, pending buffer, fork proofs
+      src/checkpoint.rs   Merkle root, checkpoint signature, verification
+      src/sync.rs         Wire enum, heads-based anti-entropy
+      src/reducer.rs      state machine → State
+      src/node.rs         one participant: publish/receive + JSON views
+      src/persist.rs      atomic on-disk replica
+      tests/              event, store, checkpoint, sync, lifecycle, convergence, persist
+      fuzz/               cargo-fuzz decode target
+    src/lib.rs            Logos glue: PukaarCoreModule trait + delivery_module wiring
 programs/pukaar_registry/  SPEL checkpoint registry (LEZ)
 .github/workflows/ci.yml   tests, clippy, 60 s fuzz smoke run
 ```
@@ -224,7 +227,7 @@ Dates and milestones beyond L1: to be added in later version.
 
 ## Contributing
 
-Issues and pull requests are welcome. Before opening a PR, run `cargo test`, `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` in `modules/pukaar_core/logic`. Changes to the wire format must keep `Body` append-only.
+Issues and pull requests are welcome. Before opening a PR, run `cargo test`, `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` in `modules/pukaar_core/rust-lib/logic`. Changes to the wire format must keep `Body` append-only.
 
 Contribution guidelines and code of conduct: to be added in later version.
 
