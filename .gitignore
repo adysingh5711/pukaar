@@ -20,6 +20,6 @@ modules/pukaar_core/logic/fuzz/corpus/
 modules/pukaar_core/logic/fuzz/artifacts/
 modules/pukaar_core/logic/fuzz/Cargo.lock
 # local planning notes, never committed
-docs/
+idea-docs/
 plan.md
 next-steps.md
