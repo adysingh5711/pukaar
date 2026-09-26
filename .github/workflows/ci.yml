@@ -1,0 +1,25 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  logic:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: modules/pukaar_core/logic
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: cargo test
+      - run: cargo clippy --all-targets -- -D warnings
+  fuzz-smoke:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: modules/pukaar_core/logic
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo install cargo-fuzz --locked
+      - run: cargo +nightly fuzz run decode -- -max_total_time=60

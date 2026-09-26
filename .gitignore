@@ -15,6 +15,10 @@ modules/pukaar_core/modules/
 /dist/
 # local agent config, not part of the repo
 .claude/
+# cargo-fuzz local outputs (Task 14), never commit fuzzer-generated inputs
+modules/pukaar_core/logic/fuzz/corpus/
+modules/pukaar_core/logic/fuzz/artifacts/
+modules/pukaar_core/logic/fuzz/Cargo.lock
 # local planning notes, never committed
 docs/
 plan.md
