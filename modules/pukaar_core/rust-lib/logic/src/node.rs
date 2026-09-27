@@ -235,8 +235,18 @@ pub fn action_body(
 }
 
 /// `{"Genesis": {...}}`, the serde shape of `Body::Genesis`.
+/// The create form's placeholder: a genesis still carrying it names nobody.
+const NAME_PLACEHOLDER: &str = "<your name>";
+
+/// Staff are always named, so a new site's admin must be too. Checked here, at creation,
+/// not in the reducer: replaying an already-shared genesis must never change its outcome.
 pub fn genesis_from_json(json: &str) -> Result<Body, String> {
     match serde_json::from_str::<Body>(json) {
+        Ok(Body::Genesis { ref admin_name, .. })
+            if matches!(admin_name.trim(), "" | NAME_PLACEHOLDER) =>
+        {
+            Err("the admin must be named".into())
+        }
         Ok(b @ Body::Genesis { .. }) => Ok(b),
         Ok(_) => Err("not a genesis body".into()),
         Err(e) => Err(e.to_string()),

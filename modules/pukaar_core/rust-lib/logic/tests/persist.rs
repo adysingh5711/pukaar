@@ -27,3 +27,21 @@ fn json_and_action_parsing() {
         "there is no delete"
     );
 }
+
+#[test]
+fn genesis_must_name_the_admin() {
+    let g = |name: &str| {
+        format!(
+            r#"{{"Genesis":{{"name":"Dhun","admin_name":"{name}","categories":["water"],"locations":[],
+                "sla_ack_h":12,"sla_fix_h":48,"max_open_per_author":10}}}}"#
+        )
+    };
+    for unnamed in ["", "   ", "<your name>", " <your name> "] {
+        assert_eq!(
+            genesis_from_json(&g(unnamed)),
+            Err("the admin must be named".into()),
+            "{unnamed:?}"
+        );
+    }
+    assert!(genesis_from_json(&g("Ops lead")).is_ok());
+}
