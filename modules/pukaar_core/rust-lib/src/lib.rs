@@ -57,6 +57,21 @@ include!(concat!(
 const HEADS_EVERY: Duration = Duration::from_secs(60);
 const ANSWER_EVERY: Duration = Duration::from_secs(10);
 
+/// Delivery bring-up, advanced one step per flush(). Not done in on_context_ready: the host
+/// authorises our calls to delivery_module only after that returns, so a createNode/start made
+/// there fails "unauthorized", the node never starts, and nothing ever crosses (seen headless).
+/// Only moves forward, so a nodeStarted that lands mid-flush is never overwritten.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+enum Link {
+    #[default]
+    Down,
+    /// start() dispatched; nodeStarted moves it on.
+    Starting,
+    Started,
+    /// Channel open on our site: the outbox goes out.
+    Open,
+}
+
 struct Shared {
     dir: PathBuf,
     node: Option<Node>,
@@ -65,6 +80,9 @@ struct Shared {
     outbox: Vec<Vec<u8>>,
     last_heads: Option<Instant>,
     last_answer: Option<Instant>,
+    link: Link,
+    /// Last Delivery failure, shown as `"delivery": "error: …"` until a later step succeeds.
+    link_error: Option<String>,
 }
 
 static SHARED: Mutex<Option<Shared>> = Mutex::new(None);
@@ -80,14 +98,96 @@ fn err(e: impl std::fmt::Display) -> String {
     format!("error: {e}")
 }
 
-fn open_channel(site_hex: &str, me_hex: &str) {
-    let topic = format!("/pukaar/1/site-{site_hex}/proto");
-    if let Err(e) = modules()
-        .delivery_module
-        .channel_create(site_hex, &topic, me_hex)
-    {
-        eprintln!("pukaar: channelCreate failed: {e}");
+/// Delivery methods answer `{"success", "value", "error"}`, so a refusal ("context not
+/// initialized") arrives as `Ok`: fold it into the error it is.
+fn delivered(
+    method: &str,
+    r: Result<serde_json::Value, logos_rust_sdk::LogosError>,
+) -> Result<(), String> {
+    let v = r.map_err(|e| format!("{method}: {e}"))?;
+    match v.get("success").unwrap_or(&v) {
+        serde_json::Value::Bool(false) => Err(format!(
+            "{method}: {}",
+            v.get("error")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("refused")
+        )),
+        _ => Ok(()),
     }
+}
+
+/// Record the outcome of a bring-up step. An error keeps the link where it is: the next flush retries.
+fn advance(r: Result<Link, String>) {
+    if let Some(sh) = SHARED.lock().unwrap().as_mut() {
+        match r {
+            Ok(l) => {
+                sh.link = sh.link.max(l);
+                sh.link_error = None;
+            }
+            Err(e) => sh.link_error = Some(e),
+        }
+    }
+}
+
+fn delivery_status() -> String {
+    match SHARED.lock().unwrap().as_ref() {
+        None => "module not ready".into(),
+        Some(Shared {
+            link_error: Some(e),
+            ..
+        }) => err(e),
+        Some(sh) => format!("{:?}", sh.link),
+    }
+}
+
+/// Run `handle` on every `decode`d event from `sub`, on a thread of its own.
+fn listen<T: 'static>(
+    sub: Result<logos_rust_sdk::EventSubscription, logos_rust_sdk::LogosError>,
+    decode: fn(&logos_rust_sdk::EventData) -> Option<T>,
+    handle: fn(T),
+) -> Result<(), String> {
+    let sub = sub.map_err(|e| format!("subscribe: {e}"))?;
+    std::thread::spawn(move || sub.filter_map(|ev| decode(&ev)).for_each(handle));
+    Ok(())
+}
+
+/// createNode (another module may own it: "already initialized" is fine), subscribe, start.
+fn bring_up() -> Result<(), String> {
+    use delivery_module::DeliveryModuleClient as D;
+    // PUKAAR_DELIVERY_CFG overrides the network (LAN entry-node, L2).
+    let cfg = std::env::var("PUKAAR_DELIVERY_CFG")
+        .unwrap_or_else(|_| r#"{"mode":"Edge","preset":"logos.test"}"#.to_string());
+    match delivered("createNode", modules().delivery_module.create_node(&cfg)) {
+        Err(e) if !e.contains("already initialized") => return Err(e),
+        _ => {}
+    }
+    listen(
+        modules().delivery_module.on_node_started(),
+        D::decode_node_started,
+        |ev| {
+            // A failed start (e.g. the node was already running) still lets us try the channel.
+            advance(Ok(Link::Started));
+            if !ev.success {
+                advance(Err(format!("nodeStarted: {}", ev.message)));
+            }
+        },
+    )?;
+    listen(
+        modules().delivery_module.on_channel_message_received(),
+        D::decode_channel_message_received,
+        |m| on_wire(&m.payload),
+    )?;
+    delivered("start", modules().delivery_module.start())
+}
+
+fn open_channel(site_hex: &str, me_hex: &str) -> Result<(), String> {
+    let topic = format!("/pukaar/1/site-{site_hex}/proto");
+    delivered(
+        "channelCreate",
+        modules()
+            .delivery_module
+            .channel_create(site_hex, &topic, me_hex),
+    )
 }
 
 /// Called from the Delivery event thread for every message on our channel.
@@ -130,9 +230,9 @@ fn on_wire(bytes: &[u8]) {
     }
 }
 
-/// Send what's queued, plus our heads once a minute. The UI polls every 2 s, so this runs often.
-fn flush() {
-    let (site, out) = {
+/// Send what's queued, plus our heads once a minute. The outbox waits until the channel is open.
+fn send_queued(site: &str) -> Result<(), String> {
+    let out = {
         let mut g = SHARED.lock().unwrap();
         let Some(Shared {
             node: Some(node),
@@ -141,19 +241,47 @@ fn flush() {
             ..
         }) = g.as_mut()
         else {
-            return;
+            return Ok(());
         };
         if last_heads.is_none_or(|t| t.elapsed() >= HEADS_EVERY) {
             *last_heads = Some(Instant::now());
             outbox.push(heads_msg(&node.store).encode());
         }
-        (hex::encode(node.store.site), std::mem::take(outbox))
+        std::mem::take(outbox)
     };
-    for msg in out {
-        if let Err(e) = modules().delivery_module.channel_send(&site, &msg) {
-            eprintln!("pukaar: channelSend failed: {e}");
+    // try every message, keep the last failure; a lost one comes back through anti-entropy
+    let mut r = Ok(());
+    for msg in &out {
+        if let Err(e) = delivered(
+            "channelSend",
+            modules().delivery_module.channel_send(site, msg),
+        ) {
+            r = Err(e);
         }
     }
+    r
+}
+
+/// One Delivery step: bring the node up, open our site's channel, then send. The UI polls
+/// my_identity every 2 s, so this runs often.
+fn flush() {
+    let (link, ids) = {
+        let g = SHARED.lock().unwrap();
+        let Some(sh) = g.as_ref() else {
+            return;
+        };
+        let ids = sh
+            .node
+            .as_ref()
+            .map(|n| (hex::encode(n.store.site), hex::encode(n.me())));
+        (sh.link, ids)
+    };
+    advance(match (link, ids) {
+        (Link::Down, _) => bring_up().map(|()| Link::Starting),
+        (Link::Started, Some((site, me))) => open_channel(&site, &me).map(|()| Link::Open),
+        (Link::Open, Some((site, _))) => send_queued(&site).map(|()| Link::Open),
+        _ => return, // waiting for nodeStarted, or no site yet
+    });
 }
 
 fn read<T>(f: impl FnOnce(&Node) -> T) -> Result<T, String> {
@@ -190,7 +318,7 @@ fn publish(body: Body) -> String {
 
 /// Create or join: install a fresh Node for this instance.
 fn start_site(make: impl FnOnce(SigningKey) -> Node) -> String {
-    let (site, me) = {
+    let site = {
         let mut g = SHARED.lock().unwrap();
         let Some(sh) = g.as_mut() else {
             return err("module not ready");
@@ -206,7 +334,7 @@ fn start_site(make: impl FnOnce(SigningKey) -> Node) -> String {
         if let Err(e) = persist::save(&node, &sh.dir) {
             return err(e);
         }
-        let ids = (hex::encode(node.store.site), hex::encode(node.me()));
+        let site = hex::encode(node.store.site);
         // send what we just signed (genesis, or the joiner's announce) straight away
         sh.outbox.extend(
             node.store
@@ -215,9 +343,8 @@ fn start_site(make: impl FnOnce(SigningKey) -> Node) -> String {
                 .map(|e| Wire::Event(e.bytes.clone()).encode()),
         );
         sh.node = Some(node);
-        ids
+        site
     };
-    open_channel(&site, &me);
     flush();
     site
 }
@@ -242,7 +369,13 @@ impl PukaarCoreModule for Pukaar {
     }
 
     fn my_identity(&mut self) -> String {
-        read(|n| n.identity_json()).unwrap_or_else(|_| "{\"site\":null}".into())
+        flush();
+        let mut v = read(|n| n.identity_json())
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_else(|| serde_json::json!({ "site": null }));
+        v["delivery"] = delivery_status().into();
+        v.to_string()
     }
 
     fn set_profile(&mut self, display_name: String) -> String {
@@ -320,7 +453,6 @@ impl PukaarCoreModule for Pukaar {
     }
 
     fn list_issues(&mut self) -> String {
-        flush();
         read(|n| n.issues_json()).unwrap_or_else(err)
     }
 
@@ -346,46 +478,16 @@ impl PukaarCoreModule for Pukaar {
             eprintln!("pukaar: could not load replica: {e}");
             None
         });
-        let ids = node
-            .as_ref()
-            .map(|n| (hex::encode(n.store.site), hex::encode(n.me())));
+        // No Delivery calls here (see Link): flush() brings the node up on the first poll.
         *SHARED.lock().unwrap() = Some(Shared {
             dir,
             node,
             outbox: vec![],
             last_heads: None,
             last_answer: None,
+            link: Link::Down,
+            link_error: None,
         });
-
-        // delivery_module is one node per Logos Core, shared by every module:
-        // "already created" is normal. PUKAAR_DELIVERY_CFG overrides it (LAN entry-node, L2).
-        let cfg = std::env::var("PUKAAR_DELIVERY_CFG")
-            .unwrap_or_else(|_| r#"{"mode":"Edge","preset":"logos.test"}"#.to_string());
-        if let Err(e) = modules().delivery_module.create_node(&cfg) {
-            eprintln!("pukaar: createNode: {e} (fine if another module created the node)");
-        }
-        if let Err(e) = modules().delivery_module.start() {
-            eprintln!("pukaar: start: {e}");
-        }
-        if let Some((site, me)) = ids {
-            open_channel(&site, &me);
-        }
-        match modules().delivery_module.on_channel_message_received() {
-            Ok(sub) => {
-                std::thread::spawn(move || {
-                    for ev in sub {
-                        if let Some(m) =
-                            delivery_module::DeliveryModuleClient::decode_channel_message_received(
-                                &ev,
-                            )
-                        {
-                            on_wire(&m.payload);
-                        }
-                    }
-                });
-            }
-            Err(e) => eprintln!("pukaar: subscribe to channelMessageReceived failed: {e}"),
-        }
     }
 }
 
