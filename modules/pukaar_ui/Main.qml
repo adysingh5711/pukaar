@@ -188,6 +188,10 @@ Item {
                 visible: root.inSite; readOnly: true; selectByMouse: true
                 text: "site " + (root.me.site || ""); font.pixelSize: 10; color: root.mutedColor
             }
+            Label {   // Delivery bring-up status from pukaar_core; errors stay visible until it recovers
+                text: "delivery " + (root.me.delivery || "…")
+                color: root.failed(root.me.delivery) ? root.dangerColor : root.mutedColor
+            }
             Label {
                 visible: root.inSite
                 text: "you: " + (root.me.name || "pseudonym") + " · " + (root.me.fingerprint || "") + " · "
@@ -207,13 +211,13 @@ Item {
                 buttonText: "Join"
                 onSubmitted: root.run("site_join", [joinField.text])
             }
-            Label { text: "Or create one (site admin only). Set your real name and edit the location list first." }
+            Label { text: "Or create one (site admin only). Edit the location list, then give your name." }
             TextArea {
                 id: genesis
                 Layout.fillWidth: true
                 Layout.preferredHeight: 160
                 wrapMode: TextEdit.Wrap
-                text: '{"Genesis":{"name":"Dhun","admin_name":"<your name>",'
+                text: '{"Genesis":{"name":"Dhun",'
                     + '"categories":["water","waste","power","access","rooms","kitchen","safety"],'
                     + '"locations":['
                     + '{"code":"W-01","label":"Tap, dining hall","group":"Water points"},'
@@ -223,7 +227,23 @@ Item {
                     + '{"code":"R-01","label":"Tent 1","group":"Rooms and tents"}],'
                     + '"sla_ack_h":12,"sla_fix_h":48,"max_open_per_author":10}}'
             }
-            Button { text: "Create site"; onClicked: root.run("site_create", [genesis.text]) }
+            LabelledField {   // staff are always named: the name goes into the genesis, not the JSON above
+                id: adminField
+                placeholder: "Your name, as residents will see it"
+                buttonText: "Create site"
+                buttonEnabled: adminField.text.trim() !== ""
+                onSubmitted: {
+                    var g
+                    try {
+                        g = JSON.parse(genesis.text)
+                        g.Genesis.admin_name = adminField.text.trim()
+                    } catch (e) {
+                        root.message = "error: site settings: " + e
+                        return
+                    }
+                    root.run("site_create", [JSON.stringify(g)])
+                }
+            }
         }
 
         // ---------- in a site ----------
