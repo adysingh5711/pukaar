@@ -111,7 +111,10 @@ Item {
         implicitHeight: chipText.implicitHeight + 4
         radius: height / 2
         color: chip.tint
-        Label { id: chipText; anchors.centerIn: parent; text: chip.label; color: "white"; font.pixelSize: 11 }
+        Label {   // elides when the parent narrows the chip below its natural width
+            id: chipText; anchors.centerIn: parent; width: Math.min(implicitWidth, chip.width - 12)
+            elide: Text.ElideRight; text: chip.label; color: "white"; font.pixelSize: 11
+        }
     }
 
     // One board card. All text is pre-computed by the caller (place/nextLine/stageColor),
@@ -132,18 +135,16 @@ Item {
             spacing: 2
             Label { width: parent.width; wrapMode: Text.Wrap; font.bold: true; text: card.placeText }
             Label { width: parent.width; wrapMode: Text.Wrap; text: card.issue.text }
-            RowLayout {
+            // Stacked, not side by side: a wide chip must never squeeze the hint to a sliver.
+            StatusChip { width: Math.min(implicitWidth, parent.width); label: card.issue.stage; tint: card.tint }
+            Label {
                 width: parent.width
-                StatusChip { label: card.issue.stage; tint: card.tint }
-                Label {
-                    Layout.fillWidth: true
-                    wrapMode: Text.Wrap
-                    font.pixelSize: 11
-                    color: card.overdue ? card.alertColor : card.mutedColor
-                    text: (card.issue.status === "AwaitingConfirmation" ? "Fix claimed: waiting for the reporter to confirm. " : "")
-                          + (card.issue.reopen_count > 0 ? "Reopened " + card.issue.reopen_count + "×. " : "")
-                          + card.nextText
-                }
+                wrapMode: Text.Wrap
+                font.pixelSize: 11
+                color: card.overdue ? card.alertColor : card.mutedColor
+                text: (card.issue.status === "AwaitingConfirmation" ? "Fix claimed: waiting for the reporter to confirm. " : "")
+                      + (card.issue.reopen_count > 0 ? "Reopened " + card.issue.reopen_count + "×. " : "")
+                      + card.nextText
             }
         }
         onClicked: card.opened()
