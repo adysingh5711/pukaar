@@ -30,6 +30,8 @@ pub trait PukaarCoreModule: Send + 'static {
     fn set_profile(&mut self, display_name: String) -> String;
     /// `name` is required for steward/admin and must be empty for residents.
     fn grant_role(&mut self, subject_hex: String, role: String, name: String) -> String;
+    /// Admin only (the rules reject anyone else's); `reason` is required.
+    fn revoke_role(&mut self, subject_hex: String, reason: String) -> String;
     fn add_location(&mut self, code: String, label: String, group: String) -> String;
     /// `location` is a site-list code, or "other" with a `landmark` note.
     fn report(
@@ -460,6 +462,10 @@ impl PukaarCoreModule for Pukaar {
             }
             None => err("bad key"),
         }
+    }
+
+    fn revoke_role(&mut self, subject_hex: String, reason: String) -> String {
+        publish_with(|n| n.revoke_role(&subject_hex, &reason, now()))
     }
 
     fn add_location(&mut self, code: String, label: String, group: String) -> String {

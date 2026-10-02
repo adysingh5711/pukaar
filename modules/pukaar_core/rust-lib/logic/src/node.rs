@@ -235,6 +235,28 @@ impl Node {
         .to_string()
     }
 
+    /// Revoke a member's role. The reason is required here, at creation (like the admin's
+    /// name), not in the reducer, so replaying shared events never changes their outcome.
+    pub fn revoke_role(
+        &mut self,
+        subject_hex: &str,
+        reason: &str,
+        ts: u64,
+    ) -> Result<Event, String> {
+        let subject = parse_id(subject_hex.trim()).ok_or("bad key")?;
+        let reason = reason.trim();
+        if reason.is_empty() {
+            return Err("a revoke needs a reason".into());
+        }
+        self.publish(
+            Body::RoleRevoke {
+                subject,
+                reason: reason.into(),
+            },
+            ts,
+        )
+    }
+
     /// After `spel anchor` succeeds: publish the checkpoint so every client can check it.
     pub fn record_anchor(
         &mut self,

@@ -478,10 +478,20 @@ Item {
                 Label { text: "Members"; font.bold: true }
                 Repeater {
                     model: root.info.members
-                    delegate: Label {
+                    delegate: RowLayout {
+                        id: memberRow
                         required property var modelData
-                        text: modelData.fingerprint + "  " + modelData.role + "  " + (modelData.name || "pseudonym")
-                        font.family: "monospace"
+                        Label {
+                            text: memberRow.modelData.fingerprint + "  " + memberRow.modelData.role + "  " + (memberRow.modelData.name || "pseudonym")
+                            font.family: "monospace"
+                        }
+                        TextField { id: revokeReason; visible: memberRow.modelData.key !== root.me.key; maximumLength: 500; placeholderText: "reason for revoking"; Layout.preferredWidth: 200 }
+                        Button {
+                            visible: revokeReason.visible
+                            text: "Revoke"
+                            enabled: revokeReason.text.trim().length > 0
+                            onClicked: root.run("revoke_role", [memberRow.modelData.key, revokeReason.text])
+                        }
                     }
                 }
                 Label { text: "Add a location (for example, found on the site walk)"; font.bold: true }

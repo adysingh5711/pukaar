@@ -618,3 +618,24 @@ fn an_oversize_genesis_is_refused() {
     let e = Node::create_site(new_key(), g, 0).err().unwrap();
     assert!(e.starts_with("too long"), "{e}");
 }
+
+// ---- role revoke ----
+
+#[test]
+fn the_admin_revokes_a_steward_with_a_reason() {
+    let mut s = Site::new();
+    let steward = hex::encode(s.steward.me());
+    let before = s.admin.store.events.len();
+    assert_eq!(
+        s.admin.revoke_role(&steward, "  ", 5).unwrap_err(),
+        "a revoke needs a reason"
+    );
+    assert_eq!(s.admin.store.events.len(), before, "nothing signed");
+    let e = s.admin.revoke_role(&steward, "left the site", 5).unwrap();
+    assert!(!s.admin.state().rejected.contains_key(&e.id));
+    assert!(!s.admin.state().roles.contains_key(&s.steward.me()));
+    // a non-admin's revoke is recorded but inert
+    let admin = hex::encode(s.admin.me());
+    let r = s.asha.revoke_role(&admin, "coup", 6).unwrap();
+    assert_eq!(s.asha.state().rejected[&r.id], "only admin revokes roles");
+}
