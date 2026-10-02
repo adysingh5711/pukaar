@@ -93,6 +93,16 @@ pub fn reduce<'a>(ordered: impl IntoIterator<Item = &'a Event>) -> State {
 /// One guard for every role/permission/state check below: `cond` holds or the event is
 /// rejected with `msg`. Collapses what would otherwise be an `if !cond { return Err(..) }`
 /// at each call site into a single line.
+fn progress_by(by: Key, ts: u64, note: &str, next_step: &str, eta_h: u32) -> Option<Progress> {
+    Some(Progress {
+        by,
+        ts,
+        note: note.trim_end_matches([' ', ':']).to_string(),
+        next_step: next_step.to_string(),
+        eta_h,
+    })
+}
+
 fn require(cond: bool, msg: impl Into<String>) -> Result<(), String> {
     if cond {
         Ok(())
@@ -275,6 +285,7 @@ fn apply(s: &mut State, e: &Event) -> Result<(), String> {
             require(!i.status.is_terminal(), not_permitted(i.status))?;
             i.status = Duplicate;
             i.duplicate_of = Some(*of);
+            i.progress = progress_by(a, e.u.ts, "Marked duplicate", "", 0);
             Ok(())
         }
         body => {
@@ -284,13 +295,7 @@ fn apply(s: &mut State, e: &Event) -> Result<(), String> {
             let i = s.issues.get_mut(&iid).ok_or("unknown issue")?;
             let st = i.status;
             let progress = |note: &str, next_step: &str, eta_h: u32| {
-                Some(Progress {
-                    by: a,
-                    ts: e.u.ts,
-                    note: note.to_string(),
-                    next_step: next_step.to_string(),
-                    eta_h,
-                })
+                progress_by(a, e.u.ts, note, next_step, eta_h)
             };
             match body {
                 Comment { .. } => {}
@@ -344,7 +349,7 @@ fn apply(s: &mut State, e: &Event) -> Result<(), String> {
                     i.status = ClosedWontfix;
                     i.progress = progress(reason, "", 0);
                 }
-                Confirm { .. } => {
+                Confirm { note, .. } => {
                     require(st == AwaitingConfirmation, not_permitted(st))?;
                     require(
                         i.claimant != Some(a),
@@ -359,6 +364,10 @@ fn apply(s: &mut State, e: &Event) -> Result<(), String> {
                         }
                     } else {
                         return Err("only the reporter or residents confirm".into());
+                    }
+                    if i.status == ConfirmedResolved {
+                        // the claim's "next: confirm" step is done; show who closed it
+                        i.progress = progress(&format!("Confirmed: {note}"), "", 0);
                     }
                 }
                 Reopen { reason, .. } => {
@@ -380,6 +389,7 @@ fn apply(s: &mut State, e: &Event) -> Result<(), String> {
                     };
                     if go {
                         i.status = Open;
+                        i.progress = progress(&format!("Reopened: {reason}"), "", 0);
                         i.claimant = None;
                         i.confirms.clear();
                         i.reopen_votes.clear();

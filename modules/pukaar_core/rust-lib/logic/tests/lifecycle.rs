@@ -410,3 +410,49 @@ fn a_pseudonymous_joiner_still_shows_up_for_approval() {
     assert!(st.pending_members.contains(&joiner.me()));
     assert!(!st.names.contains_key(&joiner.me()), "no name was set");
 }
+
+#[test]
+fn finished_cards_carry_no_pending_next_step() {
+    let mut s = Site::new();
+    let (done, dup, other) = (
+        report(&mut s.asha),
+        report(&mut s.asha),
+        report(&mut s.asha),
+    );
+    s.sync();
+    s.steward.publish(
+        Body::ClaimResolved {
+            issue: done,
+            note: "washer".into(),
+        },
+        11,
+    );
+    s.sync();
+    s.asha.publish(
+        Body::Confirm {
+            issue: done,
+            note: "works".into(),
+        },
+        12,
+    );
+    s.steward.publish(
+        Body::MarkDuplicate {
+            issue: dup,
+            of: other,
+        },
+        13,
+    );
+    s.sync();
+    let list: serde_json::Value = serde_json::from_str(&s.asha.issues_json()).unwrap();
+    for (id, who) in [(done, "works"), (dup, "duplicate")] {
+        let p = list
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["id"] == hex::encode(id))
+            .unwrap()["progress"]
+            .clone();
+        assert_eq!(p["next_step"], "", "no pending step: {p}");
+        assert!(p["note"].as_str().unwrap().contains(who), "{p}");
+    }
+}
