@@ -29,23 +29,27 @@ impl Site {
         let asha = Node::join(new_key(), site);
         let ravi = Node::join(new_key(), site);
         let meera = Node::join(new_key(), site);
-        admin.publish(
-            Body::RoleGrant {
-                subject: steward.me(),
-                role: Role::Steward,
-                name: Some("Facilities".into()),
-            },
-            1,
-        );
-        for r in [&asha, &ravi, &meera] {
-            admin.publish(
+        admin
+            .publish(
                 Body::RoleGrant {
-                    subject: r.me(),
-                    role: Role::Resident,
-                    name: None,
+                    subject: steward.me(),
+                    role: Role::Steward,
+                    name: Some("Facilities".into()),
                 },
                 1,
-            );
+            )
+            .unwrap();
+        for r in [&asha, &ravi, &meera] {
+            admin
+                .publish(
+                    Body::RoleGrant {
+                        subject: r.me(),
+                        role: Role::Resident,
+                        name: None,
+                    },
+                    1,
+                )
+                .unwrap();
         }
         let mut s = Site {
             admin,

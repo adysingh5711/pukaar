@@ -17,6 +17,8 @@ Item {
     readonly property bool inSite: !!(me && me.site)
     readonly property bool staff: me.role === "Steward" || me.role === "Admin"
     readonly property bool isAdmin: me.role === "Admin"
+    // A restored identity waits for its own history before signing anything (core refuses meanwhile).
+    readonly property bool syncing: !!me.syncing_own_history
     readonly property string otherLabel: "Other (not on the list)"
 
     // ---- design tokens: the only place a colour or the stage->colour map is spelled out ----
@@ -201,6 +203,15 @@ Item {
             }
         }
         Label { visible: root.message !== ""; text: root.message; color: root.dangerColor; wrapMode: Text.Wrap; Layout.fillWidth: true }
+        RowLayout {
+            visible: root.inSite && root.syncing
+            Layout.fillWidth: true
+            Label {
+                Layout.fillWidth: true; wrapMode: Text.Wrap; color: root.dangerColor
+                text: "Restoring your earlier reports from the network. Actions are paused until they arrive, so your new ones can't conflict with them."
+            }
+            Button { text: "Skip waiting (history lost)"; onClicked: root.run("skip_history_sync", []) }
+        }
 
         // ---------- first run: create or join ----------
         ColumnLayout {
@@ -371,6 +382,7 @@ Item {
                         }
                         Flow {
                             Layout.fillWidth: true
+                            enabled: !root.syncing
                             spacing: 6
                             Button { visible: root.staff && detail.st === "Open"; text: "Acknowledge"; onClicked: detail.act("acknowledge", eta.value) }
                             Button { visible: root.staff && root.isActionable(detail.st); text: "Post update"; onClicked: detail.act("update", eta.value) }
@@ -395,6 +407,7 @@ Item {
 
             // Report: pick a group, then a place; or "Other" plus a landmark
             ColumnLayout {
+                enabled: !root.syncing
                 Label { text: "What's wrong?" }
                 ComboBox { id: category; model: root.info.categories; Layout.preferredWidth: 240 }
                 RowLayout {
@@ -443,6 +456,7 @@ Item {
 
             // Members (admin): grant pending keys after the fingerprint is read aloud
             ColumnLayout {
+                enabled: !root.syncing
                 Label { text: "Pending: grant only after the person reads this fingerprint aloud"; font.bold: true }
                 Repeater {
                     model: root.info.pending
@@ -486,6 +500,7 @@ Item {
 
             // Anchor: compute, run the printed spel command in a terminal, record the reference
             ColumnLayout {
+                enabled: !root.syncing
                 Button { text: "Compute checkpoint"; onClicked: root.checkpoint = root.call("checkpoint_now", []) }
                 Label { visible: !!root.checkpoint; text: root.checkpoint ? root.checkpoint.n_events + " events, root " + root.checkpoint.heads_root.substr(0, 16) + "…" : "" }
                 TextArea {

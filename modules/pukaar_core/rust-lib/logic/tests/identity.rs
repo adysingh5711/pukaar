@@ -88,7 +88,7 @@ fn pasted_whitespace_is_tolerated() {
 fn import_into_a_fresh_device_gives_an_empty_node_with_the_same_identity() {
     let s = Site::new();
     let dir = tmp("fresh");
-    let n = import_into(&dir, &blob(&s), PW).unwrap();
+    let n = import_into(&dir, &blob(&s), PW, 0).unwrap();
     assert_eq!(n.me(), s.asha.me());
     assert_eq!(n.store.site, s.asha.store.site);
     assert!(n.store.events.is_empty(), "history arrives through sync");
@@ -102,7 +102,7 @@ fn import_is_refused_when_a_site_exists() {
     let s = Site::new();
     let dir = tmp("taken");
     save(&s.ravi, &dir).unwrap();
-    let e = import_into(&dir, &blob(&s), PW).err().unwrap();
+    let e = import_into(&dir, &blob(&s), PW, 0).err().unwrap();
     assert_eq!(e, "this device already has an identity");
     assert_eq!(load(&dir).unwrap().unwrap().me(), s.ravi.me(), "untouched");
     std::fs::remove_dir_all(dir).unwrap();
@@ -112,7 +112,117 @@ fn import_is_refused_when_a_site_exists() {
 fn a_failed_import_writes_nothing() {
     let s = Site::new();
     let dir = tmp("nothing");
-    assert!(import_into(&dir, &blob(&s), "wrong password").is_err());
+    assert!(import_into(&dir, &blob(&s), "wrong password", 0).is_err());
     assert!(load(&dir).unwrap().is_none());
     assert!(!dir.join("key").exists());
+}
+
+// ---- a restored identity must not fork its own chain before its history is back ----
+
+use pukaar_logic::event::{Body, Key};
+use pukaar_logic::node::{Node, HEADS_TO_SETTLE, SKIP_SYNC_AFTER};
+use pukaar_logic::store::Accept;
+
+const SYNCING: &str = "still syncing your history, try again shortly";
+
+fn note(n: &mut Node) -> Result<pukaar_logic::event::Event, String> {
+    n.publish(
+        Body::Profile {
+            display_name: Some("asha".into()),
+        },
+        200,
+    )
+}
+
+/// Asha has two events out there (seq 0 and 1); then she restores on a new device.
+fn restored(tag: &str) -> (Site, Node, PathBuf) {
+    let mut s = Site::new();
+    note(&mut s.asha).unwrap();
+    note(&mut s.asha).unwrap();
+    s.sync();
+    let dir = tmp(tag);
+    let n = import_into(&dir, &blob(&s), PW, 100).unwrap();
+    (s, n, dir)
+}
+
+fn heads(n: &mut Node, from: &[(Key, u64)], times: u32) {
+    for _ in 0..times {
+        n.observe_heads(from);
+    }
+}
+
+#[test]
+fn a_restored_node_refuses_to_publish_until_its_history_is_back() {
+    let (s, mut n, dir) = restored("guard");
+    assert_eq!(note(&mut n).unwrap_err(), SYNCING);
+    assert!(n.store.events.is_empty(), "nothing inserted");
+    let me: serde_json::Value = serde_json::from_str(&n.identity_json()).unwrap();
+    assert_eq!(me["syncing_own_history"], true);
+    // peers keep naming us at seq 1, but we hold none of our events yet
+    heads(&mut n, &s.admin.store.head_seqs(), HEADS_TO_SETTLE + 5);
+    assert_eq!(note(&mut n).unwrap_err(), SYNCING);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn once_caught_up_the_next_event_continues_the_old_chain() {
+    let (mut s, mut n, dir) = restored("caught-up");
+    heads(&mut n, &s.admin.store.head_seqs(), HEADS_TO_SETTLE);
+    copy_all(&s.admin, &mut n);
+    let me: serde_json::Value = serde_json::from_str(&n.identity_json()).unwrap();
+    assert_eq!(me["syncing_own_history"], false);
+    let e = note(&mut n).unwrap();
+    assert_eq!(e.u.seq, 2);
+    assert_eq!(s.admin.receive(&e.bytes).unwrap(), Accept::New, "no fork");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_peer_naming_a_later_seq_keeps_us_waiting() {
+    let (mut s, mut n, dir) = restored("later");
+    copy_all(&s.admin, &mut n); // seq 0 and 1 back
+    note(&mut s.asha).unwrap(); // the old device also signed seq 2, which only it has
+    heads(&mut n, &s.asha.store.head_seqs(), HEADS_TO_SETTLE);
+    assert_eq!(
+        note(&mut n).unwrap_err(),
+        SYNCING,
+        "seq 2 is still out there"
+    );
+    copy_all(&s.asha, &mut n);
+    assert_eq!(note(&mut n).unwrap().u.seq, 3);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn too_few_heads_messages_keep_us_waiting() {
+    let (s, mut n, dir) = restored("few");
+    copy_all(&s.admin, &mut n);
+    heads(&mut n, &s.admin.store.head_seqs(), HEADS_TO_SETTLE - 1);
+    assert_eq!(note(&mut n).unwrap_err(), SYNCING);
+    heads(&mut n, &s.admin.store.head_seqs(), 1);
+    assert!(note(&mut n).is_ok());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn the_user_can_skip_the_wait_only_after_a_timeout() {
+    let (_s, mut n, dir) = restored("skip");
+    let early = n.skip_history_sync(100 + SKIP_SYNC_AFTER - 1).unwrap_err();
+    assert!(early.contains("minute"), "{early}");
+    assert_eq!(note(&mut n).unwrap_err(), SYNCING);
+    n.skip_history_sync(100 + SKIP_SYNC_AFTER).unwrap();
+    assert!(note(&mut n).is_ok());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn the_syncing_flag_survives_a_restart_and_clears_on_disk() {
+    let (s, mut n, dir) = restored("restart");
+    let back = load(&dir).unwrap().unwrap();
+    assert_eq!(back.restore.as_ref().map(|r| r.since), Some(100));
+    heads(&mut n, &s.admin.store.head_seqs(), HEADS_TO_SETTLE);
+    copy_all(&s.admin, &mut n);
+    save(&n, &dir).unwrap();
+    assert!(load(&dir).unwrap().unwrap().restore.is_none());
+    std::fs::remove_dir_all(dir).unwrap();
 }

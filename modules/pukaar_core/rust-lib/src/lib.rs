@@ -22,8 +22,11 @@ pub trait PukaarCoreModule: Send + 'static {
     fn my_identity(&mut self) -> String;
     /// A password-sealed backup of this identity: one `pukaar-id-1:…` line, or `error: …`.
     fn export_identity(&mut self, password: String) -> String;
-    /// Restore a backup on a fresh device (no site yet): `ok` or `error: …`.
+    /// Restore a backup on a fresh device (no site yet): `ok` or `error: …`. Publishing is
+    /// refused until our own history is back (`my_identity().syncing_own_history`).
     fn import_identity(&mut self, blob: String, password: String) -> String;
+    /// Stop waiting for a restored identity's history (allowed 10 min after the restore).
+    fn skip_history_sync(&mut self) -> String;
     fn set_profile(&mut self, display_name: String) -> String;
     /// `name` is required for steward/admin and must be empty for residents.
     fn grant_role(&mut self, subject_hex: String, role: String, name: String) -> String;
@@ -104,6 +107,15 @@ fn now() -> u64 {
 
 fn err(e: impl std::fmt::Display) -> String {
     format!("error: {e}")
+}
+
+const NO_SITE: &str = "no site yet: create or join one";
+
+/// Save the replica; a failure is logged, never fatal (the events are still in memory).
+fn save(node: &Node, dir: &std::path::Path) {
+    if let Err(e) = persist::save(node, dir) {
+        eprintln!("pukaar: save failed: {e}");
+    }
 }
 
 /// Delivery methods answer `{"success", "value", "error"}`, so a refusal ("context not
@@ -215,12 +227,16 @@ fn on_wire(bytes: &[u8]) {
     match Wire::decode(bytes) {
         Some(Wire::Event(b)) => {
             if let Ok(Accept::New) = node.receive(&b) {
-                if let Err(e) = persist::save(node, dir) {
-                    eprintln!("pukaar: save failed: {e}");
-                }
+                save(node, dir);
             }
         }
-        Some(Wire::Heads(theirs)) if last_answer.is_none_or(|t| t.elapsed() >= ANSWER_EVERY) => {
+        Some(Wire::Heads(theirs)) => {
+            if node.observe_heads(&theirs) {
+                save(node, dir); // a restore's wait just ended
+            }
+            if last_answer.is_some_and(|t| t.elapsed() < ANSWER_EVERY) {
+                return; // answered one recently
+            }
             // Everyone re-sends their OWN missing events; only the kiosk (admin) and 3 elected
             // peers re-send everyone's, so a newcomer gets 3-4 copies instead of 30.
             *last_answer = Some(Instant::now());
@@ -234,8 +250,7 @@ fn on_wire(bytes: &[u8]) {
             };
             outbox.extend(batch.into_iter().map(|b| Wire::Event(b).encode()));
         }
-        Some(Wire::Heads(_)) => {} // answered one recently
-        None => {}                 // junk on the topic
+        None => {} // junk on the topic
     }
 }
 
@@ -299,33 +314,39 @@ fn flush() {
 fn read<T>(f: impl FnOnce(&Node) -> T) -> Result<T, String> {
     let g = SHARED.lock().unwrap();
     let sh = g.as_ref().ok_or("module not ready")?;
-    let node = sh.node.as_ref().ok_or("no site yet: create or join one")?;
+    let node = sh.node.as_ref().ok_or(NO_SITE)?;
     Ok(f(node))
+}
+
+/// Change our node, then save it. `f` may queue wire messages on the outbox.
+fn write<T>(
+    f: impl FnOnce(&mut Node, &mut Vec<Vec<u8>>) -> Result<T, String>,
+) -> Result<T, String> {
+    let mut g = SHARED.lock().unwrap();
+    let sh = g.as_mut().ok_or("module not ready")?;
+    let node = sh.node.as_mut().ok_or(NO_SITE)?;
+    let r = f(node, &mut sh.outbox)?;
+    save(node, &sh.dir);
+    Ok(r)
 }
 
 /// Sign an event, save, queue it for sending. Rule violations are still published
 /// (inert and visible, by design); the caller gets `rejected: <why>`.
 fn publish_with(f: impl FnOnce(&mut Node) -> Result<Event, String>) -> String {
-    let r = (|| {
-        let mut g = SHARED.lock().unwrap();
-        let sh = g.as_mut().ok_or("module not ready")?;
-        let node = sh.node.as_mut().ok_or("no site yet: create or join one")?;
+    let r = write(|node, outbox| {
         let e = f(node)?;
-        if let Err(e) = persist::save(node, &sh.dir) {
-            eprintln!("pukaar: save failed: {e}");
-        }
-        sh.outbox.push(Wire::Event(e.bytes.clone()).encode());
-        Ok::<_, String>(match node.state().rejected.get(&e.id) {
+        outbox.push(Wire::Event(e.bytes.clone()).encode());
+        Ok(match node.state().rejected.get(&e.id) {
             Some(why) => format!("rejected: {why}"),
             None => hex::encode(e.id),
         })
-    })();
+    });
     flush();
     r.unwrap_or_else(err)
 }
 
 fn publish(body: Body) -> String {
-    publish_with(|n| Ok(n.publish(body, now())))
+    publish_with(|n| n.publish(body, now()))
 }
 
 /// Create or join: install a fresh Node for this instance.
@@ -400,11 +421,17 @@ impl PukaarCoreModule for Pukaar {
         let r = (|| {
             let mut g = SHARED.lock().unwrap();
             let sh = g.as_mut().ok_or("module not ready")?;
-            sh.node = Some(identity::import_into(&sh.dir, &blob, &password)?);
+            sh.node = Some(identity::import_into(&sh.dir, &blob, &password, now())?);
             Ok::<_, String>("ok".to_string())
         })();
         flush(); // opens the channel; our heads go out and peers re-send our history
         r.unwrap_or_else(err)
+    }
+
+    fn skip_history_sync(&mut self) -> String {
+        write(|n, _| n.skip_history_sync(now()))
+            .map(|()| "ok".to_string())
+            .unwrap_or_else(err)
     }
 
     fn set_profile(&mut self, display_name: String) -> String {

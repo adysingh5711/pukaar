@@ -15,6 +15,7 @@ fn report(n: &mut Node) -> Id {
         },
         10,
     )
+    .unwrap()
     .id
 }
 
@@ -27,48 +28,58 @@ fn claim_reopen_claim_confirm() {
     let mut s = Site::new();
     let i = report(&mut s.asha);
     s.sync();
-    s.steward.publish(
-        Body::Acknowledge {
-            issue: i,
-            eta_h: 4,
-            note: "".into(),
-        },
-        11,
-    );
-    s.steward.publish(
-        Body::ClaimResolved {
-            issue: i,
-            note: "washer replaced".into(),
-        },
-        12,
-    );
+    s.steward
+        .publish(
+            Body::Acknowledge {
+                issue: i,
+                eta_h: 4,
+                note: "".into(),
+            },
+            11,
+        )
+        .unwrap();
+    s.steward
+        .publish(
+            Body::ClaimResolved {
+                issue: i,
+                note: "washer replaced".into(),
+            },
+            12,
+        )
+        .unwrap();
     s.sync();
     assert_eq!(status(&s.asha, i), Status::AwaitingConfirmation);
-    s.asha.publish(
-        Body::Reopen {
-            issue: i,
-            reason: "still dripping".into(),
-        },
-        13,
-    );
+    s.asha
+        .publish(
+            Body::Reopen {
+                issue: i,
+                reason: "still dripping".into(),
+            },
+            13,
+        )
+        .unwrap();
     s.sync();
     assert_eq!(status(&s.steward, i), Status::Open);
     assert_eq!(s.steward.state().issues[&i].reopen_count, 1);
-    s.steward.publish(
-        Body::ClaimResolved {
-            issue: i,
-            note: "new tap".into(),
-        },
-        14,
-    );
+    s.steward
+        .publish(
+            Body::ClaimResolved {
+                issue: i,
+                note: "new tap".into(),
+            },
+            14,
+        )
+        .unwrap();
     s.sync();
-    s.asha.publish(
-        Body::Confirm {
-            issue: i,
-            note: "works".into(),
-        },
-        15,
-    );
+    s.asha
+        .publish(
+            Body::Confirm {
+                issue: i,
+                note: "works".into(),
+            },
+            15,
+        )
+        .unwrap();
     s.sync();
     for n in s.nodes() {
         assert_eq!(status(n, i), Status::ConfirmedResolved);
@@ -80,28 +91,37 @@ fn forbidden_transitions_are_inert_and_visible() {
     let mut s = Site::new();
     let i = report(&mut s.asha);
     s.sync();
-    let e1 = s.ravi.publish(
-        Body::Acknowledge {
-            issue: i,
-            eta_h: 1,
-            note: "".into(),
-        },
-        11,
-    ); // resident can't
-    let e2 = s.asha.publish(
-        Body::Confirm {
-            issue: i,
-            note: "".into(),
-        },
-        12,
-    ); // nothing claimed yet
-    let e3 = s.steward.publish(
-        Body::CloseWontfix {
-            issue: i,
-            reason: " ".into(),
-        },
-        13,
-    ); // no reason
+    let e1 = s
+        .ravi
+        .publish(
+            Body::Acknowledge {
+                issue: i,
+                eta_h: 1,
+                note: "".into(),
+            },
+            11,
+        )
+        .unwrap(); // resident can't
+    let e2 = s
+        .asha
+        .publish(
+            Body::Confirm {
+                issue: i,
+                note: "".into(),
+            },
+            12,
+        )
+        .unwrap(); // nothing claimed yet
+    let e3 = s
+        .steward
+        .publish(
+            Body::CloseWontfix {
+                issue: i,
+                reason: " ".into(),
+            },
+            13,
+        )
+        .unwrap(); // no reason
     s.sync();
     let st = s.admin.state();
     assert_eq!(st.issues[&i].status, Status::Open);
@@ -125,41 +145,51 @@ fn fixer_cannot_confirm_own_fix() {
             },
             10,
         )
+        .unwrap()
         .id;
-    s.steward.publish(
-        Body::ClaimResolved {
-            issue: i,
-            note: "emptied".into(),
-        },
-        11,
-    );
-    let own = s.steward.publish(
-        Body::Confirm {
-            issue: i,
-            note: "".into(),
-        },
-        12,
-    );
+    s.steward
+        .publish(
+            Body::ClaimResolved {
+                issue: i,
+                note: "emptied".into(),
+            },
+            11,
+        )
+        .unwrap();
+    let own = s
+        .steward
+        .publish(
+            Body::Confirm {
+                issue: i,
+                note: "".into(),
+            },
+            12,
+        )
+        .unwrap();
     s.sync();
     assert_eq!(status(&s.admin, i), Status::AwaitingConfirmation);
     assert!(s.admin.state().rejected[&own.id].contains("fixer"));
     // two residents, neither the claimant, can close it
-    s.ravi.publish(
-        Body::Confirm {
-            issue: i,
-            note: "".into(),
-        },
-        13,
-    );
+    s.ravi
+        .publish(
+            Body::Confirm {
+                issue: i,
+                note: "".into(),
+            },
+            13,
+        )
+        .unwrap();
     s.sync();
     assert_eq!(status(&s.admin, i), Status::AwaitingConfirmation);
-    s.meera.publish(
-        Body::Confirm {
-            issue: i,
-            note: "".into(),
-        },
-        14,
-    );
+    s.meera
+        .publish(
+            Body::Confirm {
+                issue: i,
+                note: "".into(),
+            },
+            14,
+        )
+        .unwrap();
     s.sync();
     assert_eq!(status(&s.admin, i), Status::ConfirmedResolved);
 }
@@ -169,30 +199,36 @@ fn two_residents_reopen_a_wontfix() {
     let mut s = Site::new();
     let i = report(&mut s.asha);
     s.sync();
-    s.steward.publish(
-        Body::CloseWontfix {
-            issue: i,
-            reason: "not ours".into(),
-        },
-        11,
-    );
+    s.steward
+        .publish(
+            Body::CloseWontfix {
+                issue: i,
+                reason: "not ours".into(),
+            },
+            11,
+        )
+        .unwrap();
     s.sync();
-    s.ravi.publish(
-        Body::Reopen {
-            issue: i,
-            reason: "it is".into(),
-        },
-        12,
-    );
+    s.ravi
+        .publish(
+            Body::Reopen {
+                issue: i,
+                reason: "it is".into(),
+            },
+            12,
+        )
+        .unwrap();
     s.sync();
     assert_eq!(status(&s.admin, i), Status::ClosedWontfix);
-    s.meera.publish(
-        Body::Reopen {
-            issue: i,
-            reason: "agreed".into(),
-        },
-        13,
-    );
+    s.meera
+        .publish(
+            Body::Reopen {
+                issue: i,
+                reason: "agreed".into(),
+            },
+            13,
+        )
+        .unwrap();
     s.sync();
     assert_eq!(status(&s.admin, i), Status::Open);
 }
@@ -201,12 +237,14 @@ fn two_residents_reopen_a_wontfix() {
 fn membership_and_caps() {
     let mut s = Site::new();
     let mut stranger = Node::join(new_key(), s.admin.store.site);
-    stranger.publish(
-        Body::Profile {
-            display_name: Some("Kiran".into()),
-        },
-        1,
-    );
+    stranger
+        .publish(
+            Body::Profile {
+                display_name: Some("Kiran".into()),
+            },
+            1,
+        )
+        .unwrap();
     let r = report(&mut stranger);
     for e in stranger.store.events.values() {
         s.admin.receive(&e.bytes).unwrap();
@@ -246,13 +284,16 @@ fn anchored_checkpoint_shows_in_timeline() {
     let tl: serde_json::Value =
         serde_json::from_str(&s.steward.timeline_json(&hex::encode(i))).unwrap();
     assert_eq!(tl["events"][0]["anchored_tx"], "pda:Public/abc");
-    let later = s.steward.publish(
-        Body::Comment {
-            issue: i,
-            text: "after the anchor".into(),
-        },
-        40,
-    );
+    let later = s
+        .steward
+        .publish(
+            Body::Comment {
+                issue: i,
+                text: "after the anchor".into(),
+            },
+            40,
+        )
+        .unwrap();
     let tl: serde_json::Value =
         serde_json::from_str(&s.steward.timeline_json(&hex::encode(i))).unwrap();
     assert!(tl["events"]
@@ -278,32 +319,39 @@ fn updates_track_what_happens_next() {
     let mut s = Site::new();
     let i = report(&mut s.asha);
     s.sync();
-    s.steward.publish(
-        Body::Acknowledge {
-            issue: i,
-            eta_h: 4,
-            note: "seen".into(),
-        },
-        11,
-    );
-    let blank = s.steward.publish(
-        Body::Update {
-            issue: i,
-            note: " ".into(),
-            next_step: "".into(),
-            eta_h: 0,
-        },
-        12,
-    );
-    s.steward.publish(
-        Body::Update {
-            issue: i,
-            note: "washer ordered from Phagi".into(),
-            next_step: "fit washer".into(),
-            eta_h: 24,
-        },
-        13,
-    );
+    s.steward
+        .publish(
+            Body::Acknowledge {
+                issue: i,
+                eta_h: 4,
+                note: "seen".into(),
+            },
+            11,
+        )
+        .unwrap();
+    let blank = s
+        .steward
+        .publish(
+            Body::Update {
+                issue: i,
+                note: " ".into(),
+                next_step: "".into(),
+                eta_h: 0,
+            },
+            12,
+        )
+        .unwrap();
+    s.steward
+        .publish(
+            Body::Update {
+                issue: i,
+                note: "washer ordered from Phagi".into(),
+                next_step: "fit washer".into(),
+                eta_h: 24,
+            },
+            13,
+        )
+        .unwrap();
     s.sync();
     let st = s.asha.state();
     assert!(st.rejected[&blank.id].contains("needs a note"));
@@ -319,13 +367,16 @@ fn updates_track_what_happens_next() {
     assert_eq!(list[0]["progress"]["by_name"], "Facilities");
     assert_eq!(list[0]["progress"]["due_ts"], 13 + 24 * 3600);
     // a fix claim must say what was done
-    let silent = s.steward.publish(
-        Body::ClaimResolved {
-            issue: i,
-            note: "".into(),
-        },
-        14,
-    );
+    let silent = s
+        .steward
+        .publish(
+            Body::ClaimResolved {
+                issue: i,
+                note: "".into(),
+            },
+            14,
+        )
+        .unwrap();
     s.sync();
     assert!(s.asha.state().rejected[&silent.id].contains("what was done"));
 }
@@ -334,32 +385,43 @@ fn updates_track_what_happens_next() {
 fn staff_are_named_and_residents_choose() {
     let mut s = Site::new();
     let mut newbie = Node::join(new_key(), s.admin.store.site);
-    newbie.publish(Body::Profile { display_name: None }, 1);
+    newbie
+        .publish(Body::Profile { display_name: None }, 1)
+        .unwrap();
     for e in newbie.store.events.values() {
         s.admin.receive(&e.bytes).unwrap();
     }
-    let nameless = s.admin.publish(
-        Body::RoleGrant {
-            subject: newbie.me(),
-            role: Role::Steward,
-            name: None,
-        },
-        2,
-    );
-    let outed = s.admin.publish(
-        Body::RoleGrant {
-            subject: newbie.me(),
-            role: Role::Resident,
-            name: Some("Kiran".into()),
-        },
-        3,
-    );
+    let nameless = s
+        .admin
+        .publish(
+            Body::RoleGrant {
+                subject: newbie.me(),
+                role: Role::Steward,
+                name: None,
+            },
+            2,
+        )
+        .unwrap();
+    let outed = s
+        .admin
+        .publish(
+            Body::RoleGrant {
+                subject: newbie.me(),
+                role: Role::Resident,
+                name: Some("Kiran".into()),
+            },
+            3,
+        )
+        .unwrap();
     let st = s.admin.state();
     assert!(st.rejected[&nameless.id].contains("staff must be named"));
     assert!(st.rejected[&outed.id].contains("residents choose"));
     // a steward can't rename (or un-name) themselves
     s.sync();
-    let hide = s.steward.publish(Body::Profile { display_name: None }, 4);
+    let hide = s
+        .steward
+        .publish(Body::Profile { display_name: None }, 4)
+        .unwrap();
     s.sync();
     let st = s.admin.state();
     assert!(st.rejected[&hide.id].contains("set by the admin"));
@@ -374,24 +436,30 @@ fn staff_are_named_and_residents_choose() {
 #[test]
 fn unlisted_place_needs_a_landmark() {
     let mut s = Site::new();
-    let bare = s.asha.publish(
-        Body::Report {
-            category: "water".into(),
-            location: "other".into(),
-            landmark: " ".into(),
-            text: "leak".into(),
-        },
-        1,
-    );
-    let ok = s.asha.publish(
-        Body::Report {
-            category: "water".into(),
-            location: "other".into(),
-            landmark: "pipe behind tent 4".into(),
-            text: "leak".into(),
-        },
-        2,
-    );
+    let bare = s
+        .asha
+        .publish(
+            Body::Report {
+                category: "water".into(),
+                location: "other".into(),
+                landmark: " ".into(),
+                text: "leak".into(),
+            },
+            1,
+        )
+        .unwrap();
+    let ok = s
+        .asha
+        .publish(
+            Body::Report {
+                category: "water".into(),
+                location: "other".into(),
+                landmark: "pipe behind tent 4".into(),
+                text: "leak".into(),
+            },
+            2,
+        )
+        .unwrap();
     let st = s.asha.state();
     assert!(st.rejected[&bare.id].contains("landmark"));
     assert_eq!(st.issues[&ok.id].landmark, "pipe behind tent 4");
@@ -420,28 +488,34 @@ fn finished_cards_carry_no_pending_next_step() {
         report(&mut s.asha),
     );
     s.sync();
-    s.steward.publish(
-        Body::ClaimResolved {
-            issue: done,
-            note: "washer".into(),
-        },
-        11,
-    );
+    s.steward
+        .publish(
+            Body::ClaimResolved {
+                issue: done,
+                note: "washer".into(),
+            },
+            11,
+        )
+        .unwrap();
     s.sync();
-    s.asha.publish(
-        Body::Confirm {
-            issue: done,
-            note: "works".into(),
-        },
-        12,
-    );
-    s.steward.publish(
-        Body::MarkDuplicate {
-            issue: dup,
-            of: other,
-        },
-        13,
-    );
+    s.asha
+        .publish(
+            Body::Confirm {
+                issue: done,
+                note: "works".into(),
+            },
+            12,
+        )
+        .unwrap();
+    s.steward
+        .publish(
+            Body::MarkDuplicate {
+                issue: dup,
+                of: other,
+            },
+            13,
+        )
+        .unwrap();
     s.sync();
     let list: serde_json::Value = serde_json::from_str(&s.asha.issues_json()).unwrap();
     for (id, who) in [(done, "works"), (dup, "duplicate")] {

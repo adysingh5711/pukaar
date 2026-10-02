@@ -8,9 +8,44 @@ use crate::store::{Accept, Store};
 use ed25519_dalek::SigningKey;
 use serde_json::{json, Value};
 
+/// Heads messages to hear after a restore before trusting that our history is back.
+pub const HEADS_TO_SETTLE: u32 = 3;
+/// Seconds after a restore before the user may skip the wait (history lost with the old device).
+pub const SKIP_SYNC_AFTER: u64 = 600;
+const SYNCING: &str = "still syncing your history, try again shortly";
+
+/// A restored identity's chain lives on other devices: signing before it's back would reuse
+/// a seq we already signed and fork our own chain. Set by a restore, persisted, and cleared
+/// once we hold at least one of our events, have heard `HEADS_TO_SETTLE` Heads messages, and
+/// hold our chain up to the highest seq any of them named for us.
+// ponytail: Heads carry no sender, so 3 messages may be one peer three times (or our own
+// echo); a peer that holds a later event and stays silent still forks us, flagged, not lost.
+// Count distinct signed Heads if that bites.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Restore {
+    /// When the restore happened (our clock): the skip timeout counts from here.
+    pub since: u64,
+    heads_seen: u32,
+    /// Highest seq any Heads message named for us.
+    claimed: Option<u64>,
+}
+
+impl Restore {
+    #[must_use]
+    pub fn new(since: u64) -> Self {
+        Restore {
+            since,
+            heads_seen: 0,
+            claimed: None,
+        }
+    }
+}
+
 pub struct Node {
     pub key: SigningKey,
     pub store: Store,
+    /// `Some` while a restored identity waits for its own history.
+    pub restore: Option<Restore>,
 }
 
 impl Node {
@@ -28,13 +63,26 @@ impl Node {
         let e = sign(&key, u);
         let mut store = Store::new(e.id);
         assert_eq!(store.insert(e), Accept::New);
-        Node { key, store }
+        Node {
+            key,
+            store,
+            restore: None,
+        }
     }
 
     pub fn join(key: SigningKey, site: Id) -> Node {
         Node {
             key,
             store: Store::new(site),
+            restore: None,
+        }
+    }
+
+    /// Join with an identity that already has history here: publish nothing until it's back.
+    pub fn join_restored(key: SigningKey, site: Id, now: u64) -> Node {
+        Node {
+            restore: Some(Restore::new(now)),
+            ..Node::join(key, site)
         }
     }
 
@@ -42,7 +90,8 @@ impl Node {
     /// member even if we never set a name (staying a pseudonym).
     pub fn join_announced(key: SigningKey, site: Id, ts: u64) -> Node {
         let mut n = Node::join(key, site);
-        n.publish(Body::Profile { display_name: None }, ts);
+        n.publish(Body::Profile { display_name: None }, ts)
+            .expect("a fresh node publishes freely");
         n
     }
 
@@ -53,7 +102,10 @@ impl Node {
 
     /// Sign and apply our own event. Validity is the reducer's call, not ours:
     /// an event the rules reject is still recorded, visibly, as rejected.
-    pub fn publish(&mut self, body: Body, ts: u64) -> Event {
+    pub fn publish(&mut self, body: Body, ts: u64) -> Result<Event, String> {
+        if self.restore.is_some() {
+            return Err(SYNCING.into());
+        }
         let me = self.me();
         let (seq, prev) = self.store.next_seq(&me);
         let u = Unsigned {
@@ -72,11 +124,49 @@ impl Node {
             Accept::New,
             "own chain is always valid"
         );
-        e
+        Ok(e)
     }
 
     pub fn receive(&mut self, bytes: &[u8]) -> Result<Accept, DecodeError> {
-        Ok(self.store.insert(decode(bytes)?))
+        let r = self.store.insert(decode(bytes)?);
+        self.settle();
+        Ok(r)
+    }
+
+    /// Note a peer's Heads message. True when it ended a restore's wait (time to save).
+    pub fn observe_heads(&mut self, theirs: &[(Key, u64)]) -> bool {
+        let me = self.me();
+        let Some(r) = self.restore.as_mut() else {
+            return false;
+        };
+        r.heads_seen += 1;
+        let named = theirs.iter().filter(|(a, _)| *a == me).map(|(_, s)| *s);
+        r.claimed = r.claimed.into_iter().chain(named).max();
+        self.settle();
+        self.restore.is_none()
+    }
+
+    fn settle(&mut self) {
+        let Some(r) = &self.restore else { return };
+        let (next, _) = self.store.next_seq(&self.me());
+        if next > 0 && r.heads_seen >= HEADS_TO_SETTLE && r.claimed.is_none_or(|c| next > c) {
+            self.restore = None;
+        }
+    }
+
+    /// The user's way out when the old history is gone for good (it never left the old device).
+    pub fn skip_history_sync(&mut self, now: u64) -> Result<(), String> {
+        if let Some(r) = &self.restore {
+            let wait = (r.since + SKIP_SYNC_AFTER).saturating_sub(now);
+            if wait > 0 {
+                return Err(format!(
+                    "your earlier events may still arrive: you can skip in {} minute(s)",
+                    wait.div_ceil(60)
+                ));
+            }
+            self.restore = None;
+        }
+        Ok(())
     }
 
     #[must_use]
@@ -103,6 +193,7 @@ impl Node {
             "role": s.roles.get(&me).map(|r| format!("{r:?}")),
             "name": s.names.get(&me),
             "site": hex::encode(self.store.site),
+            "syncing_own_history": self.restore.is_some(),
         })
         .to_string()
     }
@@ -156,13 +247,13 @@ impl Node {
         if lez_ref.trim().is_empty() {
             return Err("missing LEZ reference".into());
         }
-        Ok(self.publish(
+        self.publish(
             Body::Checkpoint {
                 heads,
                 lez_tx: lez_ref.trim().into(),
             },
             ts,
-        ))
+        )
     }
 
     #[must_use]

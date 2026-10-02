@@ -1,14 +1,17 @@
 //! On-disk replica: `key` (32-byte seed, 0600), `site` (32 bytes), `events.bin`
-//! (u32-LE length-prefixed event bytes). Every write goes to a temp file and is
+//! (u32-LE length-prefixed event bytes), and `restoring` while a restore syncs. Every write goes to a temp file and is
 //! renamed into place, so a crash never leaves a half-written log.
 
 use crate::event::decode;
-use crate::node::Node;
+use crate::node::{Node, Restore};
 use crate::store::Store;
 use ed25519_dalek::SigningKey;
 use std::fs;
 use std::io;
 use std::path::Path;
+
+/// Present (holding the restore time, u64 LE) while a restored identity waits for its history.
+const RESTORING: &str = "restoring";
 
 fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
     let tmp = path.with_extension("tmp");
@@ -32,7 +35,15 @@ pub fn save(node: &Node, dir: &Path) -> io::Result<()> {
         buf.extend((e.bytes.len() as u32).to_le_bytes());
         buf.extend(&e.bytes);
     }
-    write_atomic(&dir.join("events.bin"), &buf)
+    write_atomic(&dir.join("events.bin"), &buf)?;
+    let flag = dir.join(RESTORING);
+    match &node.restore {
+        Some(r) => write_atomic(&flag, &r.since.to_le_bytes()),
+        None => match fs::remove_file(flag) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        },
+    }
 }
 
 /// The key alone, created on first use, so a member has an identity before joining a site.
@@ -56,9 +67,13 @@ pub fn load(dir: &Path) -> io::Result<Option<Node>> {
         .try_into()
         .map_err(|_| io::Error::other("bad site file"))?;
     let key = load_or_create_key(dir)?;
+    let restore = fs::read(dir.join(RESTORING))
+        .ok()
+        .map(|b| Restore::new(b.try_into().map(u64::from_le_bytes).unwrap_or(0)));
     let mut node = Node {
         key,
         store: Store::new(site),
+        restore,
     };
     let buf = fs::read(dir.join("events.bin")).unwrap_or_default();
     let mut rest = &buf[..];

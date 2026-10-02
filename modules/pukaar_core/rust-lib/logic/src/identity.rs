@@ -93,13 +93,14 @@ pub fn import_identity(blob: &str, password: &str) -> Result<(SigningKey, Id), S
 }
 
 /// Restore on a fresh device: refuses if `dir` already holds a site, otherwise writes the key
-/// and site and returns an empty node that catches up through anti-entropy.
-pub fn import_into(dir: &Path, blob: &str, password: &str) -> Result<Node, String> {
+/// and site and returns an empty node that catches up through anti-entropy, and refuses to
+/// publish until our own history is back (see `node::Restore`).
+pub fn import_into(dir: &Path, blob: &str, password: &str, now: u64) -> Result<Node, String> {
     if dir.join("site").exists() {
         return Err("this device already has an identity".into());
     }
     let (key, site) = import_identity(blob, password)?;
-    let node = Node::join(key, site);
+    let node = Node::join_restored(key, site, now);
     persist::save(&node, dir).map_err(|e| e.to_string())?;
     Ok(node)
 }

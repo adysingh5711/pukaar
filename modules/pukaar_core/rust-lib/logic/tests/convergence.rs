@@ -86,7 +86,7 @@ fn any_delivery_order_gives_the_same_state() {
                 let who = r.pick(5);
                 let issues: Vec<Id> = s.nodes()[who].state().issues.keys().copied().collect();
                 let body = random_action(&mut r, &issues);
-                s.nodes()[who].publish(body, r.next() % 1000);
+                s.nodes()[who].publish(body, r.next() % 1000).unwrap();
             }
             if r.pick(2) == 0 {
                 s.sync();
