@@ -65,6 +65,9 @@ const ANSWER_EVERY: Duration = Duration::from_secs(10);
 enum Link {
     #[default]
     Down,
+    /// Node created and our two subscriptions live: never redone, so a failed start retries
+    /// only start (redoing this step leaked a listener thread per 2 s poll).
+    Listening,
     /// start() dispatched; nodeStarted moves it on.
     Starting,
     Started,
@@ -151,8 +154,10 @@ fn listen<T: 'static>(
     Ok(())
 }
 
-/// createNode (another module may own it: "already initialized" is fine), subscribe, start.
-fn bring_up() -> Result<(), String> {
+/// createNode (another module may own it: "already initialized" is fine), then subscribe.
+// ponytail: if the 2nd subscribe fails after the 1st worked, the retry adds one duplicate
+// nodeStarted listener (harmless: advance is idempotent); split the step if that ever matters.
+fn create_and_listen() -> Result<(), String> {
     use delivery_module::DeliveryModuleClient as D;
     // PUKAAR_DELIVERY_CFG overrides the network (LAN entry-node, L2).
     let cfg = std::env::var("PUKAAR_DELIVERY_CFG")
@@ -176,8 +181,7 @@ fn bring_up() -> Result<(), String> {
         modules().delivery_module.on_channel_message_received(),
         D::decode_channel_message_received,
         |m| on_wire(&m.payload),
-    )?;
-    delivered("start", modules().delivery_module.start())
+    )
 }
 
 fn open_channel(site_hex: &str, me_hex: &str) -> Result<(), String> {
@@ -277,7 +281,10 @@ fn flush() {
         (sh.link, ids)
     };
     advance(match (link, ids) {
-        (Link::Down, _) => bring_up().map(|()| Link::Starting),
+        (Link::Down, _) => create_and_listen().map(|()| Link::Listening),
+        (Link::Listening, _) => {
+            delivered("start", modules().delivery_module.start()).map(|()| Link::Starting)
+        }
         (Link::Started, Some((site, me))) => open_channel(&site, &me).map(|()| Link::Open),
         (Link::Open, Some((site, _))) => send_queued(&site).map(|()| Link::Open),
         _ => return, // waiting for nodeStarted, or no site yet
