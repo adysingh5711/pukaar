@@ -167,6 +167,7 @@ Item {
         id: lf
         property alias text: field.text
         property alias placeholder: field.placeholderText
+        property alias echoMode: field.echoMode
         property string buttonText: "Go"
         property bool buttonEnabled: true
         signal submitted()
@@ -247,6 +248,31 @@ Item {
             }
         }
 
+        // ---------- first run: restore a backed-up identity ----------
+        ColumnLayout {
+            visible: !root.inSite
+            Layout.fillWidth: true
+            Label { text: "Or restore your identity from a backup (Identity tab, on your other device or before you reinstalled)" }
+            TextArea {
+                id: importBlob
+                Layout.fillWidth: true
+                Layout.preferredHeight: 70
+                wrapMode: TextEdit.WrapAnywhere
+                placeholderText: "pukaar-id-1:…"
+            }
+            LabelledField {
+                id: importPassword
+                placeholder: "backup password"
+                echoMode: TextInput.Password
+                buttonText: "Import identity"
+                buttonEnabled: importBlob.text.trim() !== "" && importPassword.text !== ""
+                onSubmitted: {
+                    var r = root.run("import_identity", [importBlob.text, importPassword.text])
+                    if (!root.failed(r)) { importBlob.text = ""; importPassword.text = "" }
+                }
+            }
+        }
+
         // ---------- in a site ----------
         TabBar {
             id: tabs
@@ -256,6 +282,7 @@ Item {
             TabButton { text: "Report" }
             TabButton { text: "Members"; enabled: root.isAdmin }
             TabButton { text: "Anchor" }
+            TabButton { text: "Identity" }
         }
 
         StackLayout {
@@ -477,6 +504,40 @@ Item {
                         if (!root.failed(r)) { anchorField.text = ""; root.checkpoint = null }
                     }
                 }
+                Item { Layout.fillHeight: true }
+            }
+
+            // Identity: a password-sealed backup, to continue as the same person after a reinstall
+            ColumnLayout {
+                Label { text: "Back up your identity"; font.bold: true }
+                Label {
+                    text: "Keep this and your password safe. Anyone with both can act as you. Never run the same identity on two devices at once."
+                    color: root.dangerColor; wrapMode: Text.Wrap; Layout.fillWidth: true
+                }
+                TextField {
+                    id: exportPassword
+                    Layout.fillWidth: true
+                    echoMode: TextInput.Password
+                    placeholderText: "password (at least 8 characters)"
+                }
+                LabelledField {
+                    id: exportConfirm
+                    placeholder: "same password again"
+                    echoMode: TextInput.Password
+                    buttonText: "Export identity"
+                    buttonEnabled: exportPassword.text.length >= 8 && exportConfirm.text === exportPassword.text
+                    onSubmitted: {
+                        var r = root.run("export_identity", [exportPassword.text])
+                        if (!root.failed(r)) { exportOut.text = r; exportPassword.text = ""; exportConfirm.text = "" }
+                    }
+                }
+                TextArea {
+                    id: exportOut
+                    visible: text !== ""
+                    readOnly: true; selectByMouse: true; wrapMode: TextEdit.WrapAnywhere
+                    Layout.fillWidth: true
+                }
+                Button { visible: exportOut.text !== ""; text: "Hide"; flat: true; onClicked: exportOut.text = "" }
                 Item { Layout.fillHeight: true }
             }
         }
