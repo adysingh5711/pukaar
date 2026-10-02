@@ -10,7 +10,7 @@
 |---|---|
 | Demo video | To be added in later version |
 | Screenshots | To be added in later version |
-| Latest release | [v0.1.0-rc.1](https://github.com/adysingh5711/pukaar/releases/tag/v0.1.0-rc.1) (pre-release, unsigned test packages) |
+| Latest release | [v0.1.0-rc.2](https://github.com/adysingh5711/pukaar/releases/tag/v0.1.0-rc.2) (pre-release, signed test packages for Basecamp 0.3.1) |
 
 ---
 
@@ -179,7 +179,7 @@ The `heads_root` and `n_events` it prints must equal the values that your own re
 |---|---|
 | Security audit | To be added in later version |
 | Bug bounty | To be added in later version |
-| Release signing (publisher DID, `lgx verify`) | To be added in later version |
+| Release signing | Packages are signed with `lgx`. Publisher DID: `did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IlpfZkxKcnVWR3UyYnBiR0VNMlhMTElmY2FzdTFycVkycHJZM1Z0cklRR28ifQ`. Verify with `lgx keyring add publisher "<DID>" --dir ./trusted-keys` then `lgx verify <file>.lgx --keyring-dir ./trusted-keys`. The official index ships `trustedSigners: []`, so Basecamp doesn't enforce signatures yet |
 | Key storage at rest (password-sealed key file) | To be added in later version |
 | Reporting a vulnerability | Open a private [security advisory](https://github.com/adysingh5711/pukaar/security/advisories/new) on this repository |
 
