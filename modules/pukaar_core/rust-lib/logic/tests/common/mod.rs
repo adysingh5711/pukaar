@@ -23,7 +23,7 @@ pub fn copy_all(from: &Node, to: &mut Node) {
 
 impl Site {
     pub fn new() -> Site {
-        let mut admin = Node::create_site(new_key(), genesis(), 0);
+        let mut admin = Node::create_site(new_key(), genesis(), 0).unwrap();
         let site = admin.store.site;
         let steward = Node::join(new_key(), site);
         let asha = Node::join(new_key(), site);

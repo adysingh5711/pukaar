@@ -2,7 +2,10 @@
 //! Logos module exposes is a thin wrapper over this, so it's all testable with `cargo test`.
 
 use crate::checkpoint::{checkpoint_now, root_for};
-use crate::event::{decode, sign, Body, DecodeError, Event, Id, Key, Unsigned, VERSION, ZERO};
+use crate::event::{
+    decode, sign, Body, DecodeError, Event, Id, Key, Unsigned, MAX_EVENT_BYTES, MAX_TEXT, VERSION,
+    ZERO,
+};
 use crate::reducer::{reduce, Issue, State, Status};
 use crate::store::{Accept, Store};
 use ed25519_dalek::SigningKey;
@@ -49,7 +52,8 @@ pub struct Node {
 }
 
 impl Node {
-    pub fn create_site(key: SigningKey, genesis: Body, ts: u64) -> Node {
+    /// A new site from its genesis; refused if the genesis breaks a receiver limit.
+    pub fn create_site(key: SigningKey, genesis: Body, ts: u64) -> Result<Node, String> {
         let u = Unsigned {
             v: VERSION,
             site: ZERO,
@@ -60,14 +64,14 @@ impl Node {
             ts,
             body: genesis,
         };
-        let e = sign(&key, u);
+        let e = sign_within_limits(&key, u)?;
         let mut store = Store::new(e.id);
         assert_eq!(store.insert(e), Accept::New);
-        Node {
+        Ok(Node {
             key,
             store,
             restore: None,
-        }
+        })
     }
 
     pub fn join(key: SigningKey, site: Id) -> Node {
@@ -91,7 +95,7 @@ impl Node {
     pub fn join_announced(key: SigningKey, site: Id, ts: u64) -> Node {
         let mut n = Node::join(key, site);
         n.publish(Body::Profile { display_name: None }, ts)
-            .expect("a fresh node publishes freely");
+            .expect("an empty profile is within every limit");
         n
     }
 
@@ -118,7 +122,7 @@ impl Node {
             ts,
             body,
         };
-        let e = sign(&self.key, u);
+        let e = sign_within_limits(&self.key, u)?;
         assert_eq!(
             self.store.insert(e.clone()),
             Accept::New,
@@ -287,6 +291,22 @@ impl Node {
             })
             .collect();
         json!({ "issue": issue_json(&s, i), "events": events }).to_string()
+    }
+}
+
+/// Sign, then apply every check a receiver's `decode` applies (and the text cap to every text
+/// field, not just a report's): an event peers drop would stall every later event of ours.
+fn sign_within_limits(key: &SigningKey, u: Unsigned) -> Result<Event, String> {
+    if u.body.texts().iter().any(|t| t.len() > MAX_TEXT) {
+        return Err(format!("too long: keep each text under {MAX_TEXT} bytes"));
+    }
+    let e = sign(key, u);
+    match decode(&e.bytes) {
+        Ok(_) => Ok(e),
+        Err(DecodeError::TooLarge) => Err(format!(
+            "too long: the event is over {MAX_EVENT_BYTES} bytes"
+        )),
+        Err(other) => Err(format!("cannot sign: {other:?}")),
     }
 }
 

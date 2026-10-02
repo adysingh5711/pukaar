@@ -373,10 +373,10 @@ Item {
                                           + (modelData.anchored_tx ? "  ✓ anchored" : "")
                             }
                         }
-                        TextField { id: note; Layout.fillWidth: true; placeholderText: "note: what was seen / done / why" }
+                        TextField { id: note; Layout.fillWidth: true; maximumLength: 500; placeholderText: "note: what was seen / done / why" }
                         RowLayout {
                             visible: root.staff && root.isActionable(detail.st)
-                            TextField { id: nextStep; Layout.fillWidth: true; placeholderText: "next step (for updates)" }
+                            TextField { id: nextStep; Layout.fillWidth: true; maximumLength: 500; placeholderText: "next step (for updates)" }
                             Label { text: "ETA h" }
                             SpinBox { id: eta; from: 0; to: 168; value: 4 }
                         }
@@ -427,6 +427,8 @@ Item {
                         ? "Required: describe the place (e.g. pipe behind tent 4, by the neem tree)"
                         : "Optional landmark (e.g. the left tap, behind the water tank)"
                 }
+                // maximumLength counts characters; the core's 500 limit is bytes (Hindi is 3 B/char),
+                // so a long non-Latin line comes back as "error: too long" instead.
                 TextField { id: reportText; Layout.fillWidth: true; maximumLength: 500; placeholderText: "One line: what's wrong" }
                 Button {
                     text: "Report"

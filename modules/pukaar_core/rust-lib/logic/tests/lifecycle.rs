@@ -1,7 +1,7 @@
 mod common;
 mod util;
 use common::*;
-use pukaar_logic::event::{new_key, Body, Id, Role};
+use pukaar_logic::event::{new_key, Body, Id, Location, Role, MAX_TEXT};
 use pukaar_logic::node::Node;
 use pukaar_logic::reducer::Status;
 
@@ -529,4 +529,92 @@ fn finished_cards_carry_no_pending_next_step() {
         assert_eq!(p["next_step"], "", "no pending step: {p}");
         assert!(p["note"].as_str().unwrap().contains(who), "{p}");
     }
+}
+
+// ---- our own events obey the same limits every receiver applies ----
+
+fn report_text(n: &mut Node, text: &str) -> Result<pukaar_logic::event::Event, String> {
+    n.publish(
+        Body::Report {
+            category: "water".into(),
+            location: "W-03".into(),
+            landmark: String::new(),
+            text: text.into(),
+        },
+        10,
+    )
+}
+
+#[test]
+fn an_oversize_hindi_report_is_refused_and_nothing_is_inserted() {
+    let mut s = Site::new();
+    let hindi = "नल टपक रहा है ".repeat(15); // 210 chars, 540 bytes
+    assert!(hindi.chars().count() < MAX_TEXT && hindi.len() > MAX_TEXT);
+    let before = s.asha.store.events.len();
+    let e = report_text(&mut s.asha, &hindi).unwrap_err();
+    assert!(e.starts_with("too long"), "{e}");
+    assert_eq!(s.asha.store.events.len(), before);
+    assert!(
+        report_text(&mut s.asha, &"a".repeat(MAX_TEXT)).is_ok(),
+        "the limit itself is fine"
+    );
+}
+
+#[test]
+fn an_oversize_note_is_refused() {
+    let mut s = Site::new();
+    let i = report(&mut s.asha);
+    s.sync();
+    let before = s.steward.store.events.len();
+    let e = s
+        .steward
+        .publish(
+            Body::Update {
+                issue: i,
+                note: "ok".into(),
+                next_step: "x".repeat(MAX_TEXT + 1),
+                eta_h: 1,
+            },
+            11,
+        )
+        .unwrap_err();
+    assert!(e.starts_with("too long"), "{e}");
+    assert_eq!(s.steward.store.events.len(), before);
+}
+
+fn many_locations(n: usize) -> Vec<Location> {
+    (0..n)
+        .map(|k| Location {
+            code: format!("W-{k:03}"),
+            label: format!("Tap number {k} behind the long row of tents"),
+            group: "Water points".into(),
+        })
+        .collect()
+}
+
+#[test]
+fn an_event_over_the_size_cap_is_refused() {
+    let mut s = Site::new();
+    let before = s.admin.store.events.len();
+    let e = s
+        .admin
+        .publish(
+            Body::LocationsAdd {
+                locations: many_locations(100),
+            },
+            5,
+        )
+        .unwrap_err();
+    assert!(e.starts_with("too long"), "{e}");
+    assert_eq!(s.admin.store.events.len(), before);
+}
+
+#[test]
+fn an_oversize_genesis_is_refused() {
+    let mut g = genesis();
+    if let Body::Genesis { locations, .. } = &mut g {
+        *locations = many_locations(100);
+    }
+    let e = Node::create_site(new_key(), g, 0).err().unwrap();
+    assert!(e.starts_with("too long"), "{e}");
 }

@@ -350,7 +350,7 @@ fn publish(body: Body) -> String {
 }
 
 /// Create or join: install a fresh Node for this instance.
-fn start_site(make: impl FnOnce(SigningKey) -> Node) -> String {
+fn start_site(make: impl FnOnce(SigningKey) -> Result<Node, String>) -> String {
     let site = {
         let mut g = SHARED.lock().unwrap();
         let Some(sh) = g.as_mut() else {
@@ -363,7 +363,10 @@ fn start_site(make: impl FnOnce(SigningKey) -> Node) -> String {
             Ok(k) => k,
             Err(e) => return err(e),
         };
-        let node = make(key);
+        let node = match make(key) {
+            Ok(n) => n,
+            Err(e) => return err(e),
+        };
         if let Err(e) = persist::save(&node, &sh.dir) {
             return err(e);
         }
@@ -396,7 +399,7 @@ impl PukaarCoreModule for Pukaar {
     fn site_join(&mut self, site_hex: String) -> String {
         match parse_id(site_hex.trim()) {
             // announce with an empty profile, so a pseudonymous joiner still appears as pending
-            Some(site) => start_site(|key| Node::join_announced(key, site, now())),
+            Some(site) => start_site(|key| Ok(Node::join_announced(key, site, now()))),
             None => err("site id must be 64 hex characters"),
         }
     }

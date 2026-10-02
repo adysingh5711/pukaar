@@ -118,6 +118,54 @@ pub enum Body {
     },
 }
 
+fn location_texts(ls: &[Location]) -> impl Iterator<Item = &str> {
+    ls.iter()
+        .flat_map(|l| [l.code.as_str(), &l.label, &l.group])
+}
+
+impl Body {
+    /// Every free-text field, for the sender's length check.
+    #[must_use]
+    pub fn texts(&self) -> Vec<&str> {
+        use Body::*;
+        match self {
+            Genesis {
+                name,
+                admin_name,
+                categories,
+                locations,
+                ..
+            } => [name.as_str(), admin_name]
+                .into_iter()
+                .chain(categories.iter().map(String::as_str))
+                .chain(location_texts(locations))
+                .collect(),
+            RoleGrant { name, .. } | Profile { display_name: name } => {
+                name.as_deref().into_iter().collect()
+            }
+            LocationsAdd { locations } => location_texts(locations).collect(),
+            Report {
+                category,
+                location,
+                landmark,
+                text,
+            } => vec![category, location, landmark, text],
+            Update {
+                note, next_step, ..
+            } => vec![note, next_step],
+            RoleRevoke { reason: t, .. }
+            | Reopen { reason: t, .. }
+            | CloseWontfix { reason: t, .. }
+            | Acknowledge { note: t, .. }
+            | ClaimResolved { note: t, .. }
+            | Confirm { note: t, .. }
+            | Comment { text: t, .. }
+            | Checkpoint { lez_tx: t, .. } => vec![t],
+            MarkDuplicate { .. } => vec![],
+        }
+    }
+}
+
 /// Field order is part of the wire format: `v` then `site` then `author` puts the
 /// author key at a fixed offset, so the signature is checked before the body is decoded.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
