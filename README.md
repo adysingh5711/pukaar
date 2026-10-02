@@ -10,7 +10,7 @@
 |---|---|
 | Demo video | To be added in later version |
 | Screenshots | To be added in later version |
-| Latest release | To be added in later version |
+| Latest release | [v0.1.0-rc.1](https://github.com/adysingh5711/pukaar/releases/tag/v0.1.0-rc.1) (pre-release, unsigned test packages) |
 
 ---
 
