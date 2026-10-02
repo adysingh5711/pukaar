@@ -6,6 +6,7 @@
 //! disk and Delivery.
 
 use pukaar_logic::event::{Body, Event, Location, Role, SigningKey};
+use pukaar_logic::identity;
 use pukaar_logic::node::{action_body, genesis_from_json, parse_id, Node};
 use pukaar_logic::persist;
 use pukaar_logic::store::Accept;
@@ -19,6 +20,10 @@ pub trait PukaarCoreModule: Send + 'static {
     fn site_create(&mut self, genesis_json: String) -> String;
     fn site_join(&mut self, site_hex: String) -> String;
     fn my_identity(&mut self) -> String;
+    /// A password-sealed backup of this identity: one `pukaar-id-1:…` line, or `error: …`.
+    fn export_identity(&mut self, password: String) -> String;
+    /// Restore a backup on a fresh device (no site yet): `ok` or `error: …`.
+    fn import_identity(&mut self, blob: String, password: String) -> String;
     fn set_profile(&mut self, display_name: String) -> String;
     /// `name` is required for steward/admin and must be empty for residents.
     fn grant_role(&mut self, subject_hex: String, role: String, name: String) -> String;
@@ -383,6 +388,23 @@ impl PukaarCoreModule for Pukaar {
             .unwrap_or_else(|| serde_json::json!({ "site": null }));
         v["delivery"] = delivery_status().into();
         v.to_string()
+    }
+
+    fn export_identity(&mut self, password: String) -> String {
+        read(|n| identity::export_identity(&n.key, &n.store.site, &password))
+            .and_then(|r| r)
+            .unwrap_or_else(err)
+    }
+
+    fn import_identity(&mut self, blob: String, password: String) -> String {
+        let r = (|| {
+            let mut g = SHARED.lock().unwrap();
+            let sh = g.as_mut().ok_or("module not ready")?;
+            sh.node = Some(identity::import_into(&sh.dir, &blob, &password)?);
+            Ok::<_, String>("ok".to_string())
+        })();
+        flush(); // opens the channel; our heads go out and peers re-send our history
+        r.unwrap_or_else(err)
     }
 
     fn set_profile(&mut self, display_name: String) -> String {
