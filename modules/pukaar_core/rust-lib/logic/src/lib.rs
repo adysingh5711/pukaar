@@ -3,6 +3,7 @@
 
 pub mod checkpoint;
 pub mod event;
+pub mod identity;
 pub mod node;
 pub mod persist;
 pub mod reducer;
