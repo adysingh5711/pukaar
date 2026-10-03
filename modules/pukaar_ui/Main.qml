@@ -26,6 +26,7 @@ Item {
     property bool busy: false            // a call is running: every action button waits (no double submit)
     readonly property bool inSite: !!(me && me.site)
     readonly property bool staff: me.role === "Steward" || me.role === "Admin"
+    readonly property bool approved: !!me.role      // a pending key has no role yet; the core rejects its reports
     readonly property bool isAdmin: me.role === "Admin"
     // A restored identity waits for its own history before signing anything (core refuses meanwhile).
     readonly property bool syncing: !!me.syncing_own_history
@@ -591,6 +592,11 @@ Item {
             // Report: pick a group, then a place; or "Other" plus a landmark
             TabPage {
                 enabled: !root.syncing
+                Label {
+                    visible: !root.approved
+                    Layout.fillWidth: true; wrapMode: Text.Wrap; font.bold: true
+                    text: "Waiting for the admin to approve you. Read your fingerprint aloud at the kiosk; you can report once you are approved."
+                }
                 Label { text: "What's wrong?" }
                 ComboBox { id: category; model: root.categories; Layout.preferredWidth: 240 }
                 RowLayout {
@@ -619,7 +625,7 @@ Item {
                 ActionButton {
                     id: reportBtn
                     text: "Report"
-                    allowed: reportText.text.trim().length > 0
+                    allowed: root.approved && reportText.text.trim().length > 0
                              && (group.currentText === root.otherLabel ? landmark.text.trim().length > 0 : location.currentIndex >= 0)
                     onClicked: {
                         var code = group.currentText === root.otherLabel
