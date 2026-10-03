@@ -11,7 +11,7 @@ use pukaar_logic::node::{action_body, genesis_from_json, parse_id, Node};
 use pukaar_logic::persist;
 use pukaar_logic::store::Accept;
 use pukaar_logic::sync::{heads_msg, should_answer, to_resend, to_resend_own, Wire};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 // Mutex comes from the generated scaffold below (same module scope): a second
 // `use std::sync::Mutex;` here would be a duplicate import (confirmed at Step 8).
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -19,6 +19,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 pub trait PukaarCoreModule: Send + 'static {
     fn site_create(&mut self, genesis_json: String) -> String;
     fn site_join(&mut self, site_hex: String) -> String;
+    /// Drop this device's copy of the site (no event is published); the key stays, so
+    /// rejoining is the same person. `ok` or `error: …`.
+    fn leave_site(&mut self) -> String;
     fn my_identity(&mut self) -> String;
     /// A password-sealed backup of this identity: one `pukaar-id-1:…` line, or `error: …`.
     fn export_identity(&mut self, password: String) -> String;
@@ -114,7 +117,7 @@ fn err(e: impl std::fmt::Display) -> String {
 const NO_SITE: &str = "no site yet: create or join one";
 
 /// Save the replica; a failure is logged, never fatal (the events are still in memory).
-fn save(node: &Node, dir: &std::path::Path) {
+fn save(node: &Node, dir: &Path) {
     if let Err(e) = persist::save(node, dir) {
         eprintln!("pukaar: save failed: {e}");
     }
@@ -199,7 +202,7 @@ fn create_and_listen() -> Result<(), String> {
     listen(
         modules().delivery_module.on_channel_message_received(),
         D::decode_channel_message_received,
-        |m| on_wire(&m.payload),
+        |m| on_wire(&m.channel_id, &m.payload),
     )
 }
 
@@ -213,8 +216,9 @@ fn open_channel(site_hex: &str, me_hex: &str) -> Result<(), String> {
     )
 }
 
-/// Called from the Delivery event thread for every message on our channel.
-fn on_wire(bytes: &[u8]) {
+/// Called from the Delivery event thread for every channel message; only our site's count
+/// (a channel left behind by leave_site must not feed the new site, e.g. a restore's Heads).
+fn on_wire(channel: &str, bytes: &[u8]) {
     let mut g = SHARED.lock().unwrap();
     let Some(Shared {
         dir,
@@ -226,6 +230,9 @@ fn on_wire(bytes: &[u8]) {
     else {
         return;
     };
+    if channel != hex::encode(node.store.site) {
+        return;
+    }
     match Wire::decode(bytes) {
         Some(Wire::Event(b)) => {
             if let Ok(Accept::New) = node.receive(&b) {
@@ -352,7 +359,7 @@ fn publish(body: Body) -> String {
 }
 
 /// Create or join: install a fresh Node for this instance.
-fn start_site(make: impl FnOnce(SigningKey) -> Result<Node, String>) -> String {
+fn start_site(make: impl FnOnce(SigningKey, &Path) -> Result<Node, String>) -> String {
     let site = {
         let mut g = SHARED.lock().unwrap();
         let Some(sh) = g.as_mut() else {
@@ -365,7 +372,7 @@ fn start_site(make: impl FnOnce(SigningKey) -> Result<Node, String>) -> String {
             Ok(k) => k,
             Err(e) => return err(e),
         };
-        let node = match make(key) {
+        let node = match make(key, &sh.dir) {
             Ok(n) => n,
             Err(e) => return err(e),
         };
@@ -393,7 +400,7 @@ struct Pukaar;
 impl PukaarCoreModule for Pukaar {
     fn site_create(&mut self, genesis_json: String) -> String {
         match genesis_from_json(&genesis_json) {
-            Ok(g) => start_site(|key| Node::create_site(key, g, now())),
+            Ok(g) => start_site(|key, _| Node::create_site(key, g, now())),
             Err(e) => err(e),
         }
     }
@@ -401,8 +408,33 @@ impl PukaarCoreModule for Pukaar {
     fn site_join(&mut self, site_hex: String) -> String {
         match parse_id(site_hex.trim()) {
             // announce with an empty profile, so a pseudonymous joiner still appears as pending
-            Some(site) => start_site(|key| Ok(Node::join_announced(key, site, now()))),
+            Some(site) => start_site(|key, dir| Ok(persist::join_site(dir, key, site, now()))),
             None => err("site id must be 64 hex characters"),
+        }
+    }
+
+    fn leave_site(&mut self) -> String {
+        let r = (|| {
+            let mut g = SHARED.lock().unwrap();
+            let sh = g.as_mut().ok_or("module not ready")?;
+            let site = sh.node.as_ref().ok_or(NO_SITE)?.store.site;
+            persist::leave(&sh.dir, &site).map_err(|e| e.to_string())?;
+            sh.node = None;
+            sh.outbox.clear();
+            sh.last_heads = None;
+            let was_open = sh.link == Link::Open;
+            sh.link = sh.link.min(Link::Started); // the next site opens its own channel
+            Ok::<_, String>(was_open.then(|| hex::encode(site)))
+        })();
+        match r {
+            Ok(open) => {
+                // best effort: on_wire ignores other channels anyway
+                if let Some(site) = open {
+                    let _ = modules().delivery_module.channel_close(&site);
+                }
+                "ok".into()
+            }
+            Err(e) => err(e),
         }
     }
 

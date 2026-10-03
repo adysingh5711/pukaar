@@ -2,7 +2,7 @@ mod common;
 mod util;
 use common::*;
 use pukaar_logic::node::{action_body, genesis_from_json};
-use pukaar_logic::persist::{load, save};
+use pukaar_logic::persist::{join_site, leave, load, load_or_create_key, save};
 
 #[test]
 fn save_then_load_gives_the_same_state() {
@@ -44,4 +44,23 @@ fn genesis_must_name_the_admin() {
         );
     }
     assert!(genesis_from_json(&g("Ops lead")).is_ok());
+}
+
+#[test]
+fn leaving_drops_the_replica_but_keeps_the_key() {
+    let s = Site::new();
+    let site = s.asha.store.site;
+    let dir = std::env::temp_dir().join(format!("pukaar-leave-{}", std::process::id()));
+    save(&s.asha, &dir).unwrap();
+    leave(&dir, &site).unwrap();
+    assert!(load(&dir).unwrap().is_none(), "no site, no events");
+    let key = load_or_create_key(&dir).unwrap();
+    assert_eq!(key.to_bytes(), s.asha.key.to_bytes(), "same person");
+    // our chain in that site lives on: rejoining waits for it instead of re-signing seq 0
+    let back = join_site(&dir, key.clone(), site, 7);
+    assert!(back.restore.is_some() && back.store.events.is_empty());
+    let other = join_site(&dir, key, [9; 32], 7);
+    assert!(other.restore.is_none());
+    assert_eq!(other.store.events.len(), 1, "a new site gets the announce");
+    std::fs::remove_dir_all(dir).unwrap();
 }

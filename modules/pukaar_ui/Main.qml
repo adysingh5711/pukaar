@@ -8,7 +8,8 @@ import QtQuick.Layouts
 Item {
     id: root
     property var me: ({})
-    property var info: ({ categories: [], locations: [], members: [], pending: [] })
+    readonly property var noInfo: ({ categories: [], locations: [], members: [], pending: [] })
+    property var info: noInfo
     property var issues: []
     property var selected: null          // issue_timeline() result
     property var checkpoint: null        // checkpoint_now() result
@@ -58,6 +59,11 @@ Item {
         message = failed(r) ? r : ""
         refresh()
         return r
+    }
+    // Drop this device's copy of the site (the key stays); back to the first-run screen.
+    function leave() {
+        if (failed(run("leave_site", []))) return
+        selected = null; checkpoint = null; issues = []; info = noInfo
     }
     function refresh() {
         var m = call("my_identity", [])
@@ -203,6 +209,15 @@ Item {
             }
         }
         Label { visible: root.message !== ""; text: root.message; color: root.dangerColor; wrapMode: Text.Wrap; Layout.fillWidth: true }
+        RowLayout {   // joined, but the genesis hasn't arrived: wrong id, or nobody online yet
+            visible: root.inSite && !root.info.name
+            Layout.fillWidth: true
+            Label {
+                Layout.fillWidth: true; wrapMode: Text.Wrap
+                text: "Waiting for site data… If this lasts, check the site id, or wait for a member to come online."
+            }
+            Button { text: "Leave this site"; onClicked: root.leave() }
+        }
         RowLayout {
             visible: root.inSite && root.syncing
             Layout.fillWidth: true

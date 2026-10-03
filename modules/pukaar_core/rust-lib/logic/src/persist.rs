@@ -1,8 +1,9 @@
 //! On-disk replica: `key` (32-byte seed, 0600), `site` (32 bytes), `events.bin`
-//! (u32-LE length-prefixed event bytes), and `restoring` while a restore syncs. Every write goes to a temp file and is
+//! (u32-LE length-prefixed event bytes), `restoring` while a restore syncs, and `left`
+//! (sites this key left). Every write goes to a temp file and is
 //! renamed into place, so a crash never leaves a half-written log.
 
-use crate::event::decode;
+use crate::event::{decode, Id};
 use crate::node::{Node, Restore};
 use crate::store::Store;
 use ed25519_dalek::SigningKey;
@@ -12,6 +13,22 @@ use std::path::Path;
 
 /// Present (holding the restore time, u64 LE) while a restored identity waits for its history.
 const RESTORING: &str = "restoring";
+/// Ids of sites this key left (32 bytes each): our chain there lives on in other replicas.
+const LEFT: &str = "left";
+
+/// The `left` list, and whether it names `site`.
+fn left_list(dir: &Path, site: &Id) -> (Vec<u8>, bool) {
+    let left = fs::read(dir.join(LEFT)).unwrap_or_default();
+    let named = left.chunks(32).any(|s| s == site);
+    (left, named)
+}
+
+fn remove_if_present(path: &Path) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
+        _ => Ok(()),
+    }
+}
 
 fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
     let tmp = path.with_extension("tmp");
@@ -39,10 +56,31 @@ pub fn save(node: &Node, dir: &Path) -> io::Result<()> {
     let flag = dir.join(RESTORING);
     match &node.restore {
         Some(r) => write_atomic(&flag, &r.since.to_le_bytes()),
-        None => match fs::remove_file(flag) {
-            Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
-            _ => Ok(()),
-        },
+        None => remove_if_present(&flag),
+    }
+}
+
+/// Leave the site on this device: drop the replica (site, events, restore flag) but keep the
+/// key, and remember the site so rejoining it waits for our history (see `join_site`).
+pub fn leave(dir: &Path, site: &Id) -> io::Result<()> {
+    let (mut left, named) = left_list(dir, site);
+    if !named {
+        left.extend(site);
+        write_atomic(&dir.join(LEFT), &left)?;
+    }
+    // `site` goes first: without it, load() sees no replica even if a later removal fails
+    ["site", "events.bin", RESTORING]
+        .iter()
+        .try_for_each(|f| remove_if_present(&dir.join(f)))
+}
+
+/// Join `site`: announce ourselves, unless this key left it before, in which case our chain
+/// is already out there and we wait for it like a restore (re-signing seq 0 would fork it).
+pub fn join_site(dir: &Path, key: SigningKey, site: Id, now: u64) -> Node {
+    if left_list(dir, &site).1 {
+        Node::join_restored(key, site, now)
+    } else {
+        Node::join_announced(key, site, now)
     }
 }
 
