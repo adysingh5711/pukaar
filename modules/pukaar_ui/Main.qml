@@ -119,6 +119,12 @@ Item {
         }
         return t + " (" + who(p.by, p.by_name) + ")"
     }
+    // Pick list for "Duplicate of…": every other issue that isn't closed yet.
+    function duplicateTargets(id) {
+        return issues.filter(function (o) {
+            return o.id !== id && ["ConfirmedResolved", "ClosedWontfix", "Duplicate"].indexOf(o.status) < 0
+        }).map(function (o) { return { id: o.id, label: place(o) + " · " + String(o.text).substr(0, 40) } })
+    }
     function groups() {
         var g = []
         info.locations.forEach(function (l) { if (g.indexOf(l.group) < 0) g.push(l.group) })
@@ -437,6 +443,30 @@ Item {
                                 onClicked: detail.act("reopen", 0)
                             }
                             Button { text: "Comment"; onClicked: detail.act("comment", 0) }
+                            Row {   // staff: close this one as a duplicate of another open issue
+                                visible: root.staff && root.isActionable(detail.st)
+                                spacing: 6
+                                ComboBox {
+                                    // The model is rebuilt on every 2 s refresh, which resets currentIndex,
+                                    // so the user's pick is kept in `target`, never read from currentIndex.
+                                    id: dupOf
+                                    property string target: ""
+                                    property string targetLabel: ""
+                                    property string forIssue: detail.issue.id || ""
+                                    onForIssueChanged: target = ""
+                                    width: 260
+                                    textRole: "label"
+                                    valueRole: "id"
+                                    displayText: target ? targetLabel : "Duplicate of…"
+                                    model: root.duplicateTargets(detail.issue.id)
+                                    onActivated: function (index) { target = valueAt(index); targetLabel = textAt(index) }
+                                }
+                                Button {
+                                    text: "Mark duplicate"
+                                    enabled: dupOf.target !== ""
+                                    onClicked: { root.run("act", [detail.issue.id, "mark_duplicate", dupOf.target, "", 0]); dupOf.target = "" }
+                                }
+                            }
                             Button { text: "Close"; flat: true; onClicked: root.selected = null }
                         }
                     }
