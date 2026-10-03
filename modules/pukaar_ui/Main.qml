@@ -17,7 +17,7 @@ Item {
     property var locations: []
     property var members: []
     property var pending: []
-    readonly property var groupNames: groups()
+    property var groupNames: []             // place groups in first-seen order; written only when they change
     property var issues: []
     property var selected: null          // issue_timeline() result
     property var checkpoint: null        // checkpoint_now() result
@@ -30,7 +30,6 @@ Item {
     readonly property bool isAdmin: me.role === "Admin"
     // A restored identity waits for its own history before signing anything (core refuses meanwhile).
     readonly property bool syncing: !!me.syncing_own_history
-    readonly property string otherLabel: "Other (not on the list)"
     // Four board columns (160 each) + the 340 timeline pane + gaps and margins need ~1040 px;
     // below that the pane replaces the board instead of squeezing it.
     readonly property bool narrow: width < 1040
@@ -99,6 +98,7 @@ Item {
         info = i
         keep("categories", i.categories); keep("locations", i.locations)
         keep("members", i.members); keep("pending", i.pending)
+        keep("groupNames", groupsOf(i.locations))
     }
     // Opening a card moves the cursor to the note, so a steward can type straight away.
     function openIssue(id) {
@@ -219,14 +219,28 @@ Item {
             return o.id !== id && ["ConfirmedResolved", "ClosedWontfix", "Duplicate"].indexOf(o.status) < 0
         }).map(function (o) { return { id: o.id, label: place(o) + " · " + String(o.text).substr(0, 40) } })
     }
-    // The Report picker offers only active places; retired ones stay visible on old issues and in Members.
-    function groups() {
+    function groupsOf(ls) {
         var g = []
-        locations.forEach(function (l) { if (!l.retired && g.indexOf(l.group) < 0) g.push(l.group) })
-        g.push(otherLabel)
+        ls.forEach(function (l) { if (g.indexOf(l.group) < 0) g.push(l.group) })
         return g
     }
-    function locationsIn(group) { return locations.filter(function (l) { return l.group === group && !l.retired }) }
+    // THE place filter, shared by the Report picker and the Members list: keeps the places that
+    // match `query` (code, name or group), `group` ("" = any) and the retired switch, ordered so
+    // every group is one run of rows (views print one header per run).
+    function placesView(query, group, withRetired) {
+        var q = query.trim().toLowerCase()
+        var shown = locations.filter(function (l) {
+            return (withRetired || !l.retired) && (group === "" || l.group === group)
+                && (q === "" || (l.code + " " + l.label + " " + l.group).toLowerCase().indexOf(q) >= 0)
+        })
+        var out = []
+        groupNames.forEach(function (g) { shown.forEach(function (l) { if (l.group === g) out.push(l) }) })
+        return out
+    }
+    function placeLabel(code) {
+        var l = locations.filter(function (x) { return x.code === code })[0]
+        return l ? l.code + "  " + l.label : code
+    }
     function openIssuesText(n) { return n + (n === 1 ? " open issue" : " open issues") }
 
     // ---- controls: one frame (border token, blue when focused) shared by every control, so no
@@ -308,13 +322,14 @@ Item {
         required property string placeText
         required property string hintText
         required property bool overdue
+        required property bool current       // the issue open in the timeline pane
         required property color tint
         required property color alertColor
         required property color mutedColor
         signal opened()
         width: ListView.view.width
         padding: 8
-        background: Frame { ring: card.visualFocus; fill: card.down ? Qt.darker(card.palette.window, 1.08) : Qt.darker(card.palette.window, 1.03) }
+        background: Frame { ring: card.visualFocus || card.current; fill: card.down ? Qt.darker(card.palette.window, 1.08) : Qt.darker(card.palette.window, 1.03) }
         Accessible.name: card.placeText + ": " + card.issue.text
         Accessible.description: card.issue.stage + ". " + card.hintText
         contentItem: Column {
@@ -454,22 +469,105 @@ Item {
         property alias fieldEnabled: field.enabled
         property string name: label
         property string caption
+        property color captionColor: palette.windowText
+        property int indent: 0              // side margin, for rows inside a framed list
         property string buttonText: "Go"
         property bool buttonEnabled: true
         signal submitted()
         RowLayout {
             Layout.fillWidth: true
+            Layout.leftMargin: lf.indent
+            Layout.rightMargin: lf.indent
             spacing: 8
-            Label { visible: lf.caption !== ""; Layout.fillWidth: true; elide: Text.ElideRight; text: lf.caption; font.family: "monospace"; textFormat: Text.PlainText }
+            Label { visible: lf.caption !== ""; Layout.fillWidth: true; elide: Text.ElideRight; text: lf.caption; color: lf.captionColor; font.family: "monospace"; textFormat: Text.PlainText }
             FramedField {
                 id: field
                 Layout.fillWidth: lf.caption === ""
-                Layout.preferredWidth: lf.caption === "" ? -1 : 220
+                Layout.preferredWidth: lf.caption === "" ? -1 : 200
                 maximumLength: 500
                 Accessible.name: lf.name
                 onAccepted: go.submit()
             }
-            ActionButton { id: go; text: lf.buttonText; allowed: lf.buttonEnabled; onClicked: lf.submitted() }
+            ActionButton { id: go; Layout.preferredWidth: lf.caption === "" ? -1 : 90; text: lf.buttonText; allowed: lf.buttonEnabled; onClicked: lf.submitted() }
+        }
+    }
+
+    // Group title inside a place list.
+    component SectionHeader: Rectangle {
+        required property string section
+        width: ListView.view.width
+        height: title.implicitHeight + 8
+        color: Qt.darker(palette.window, 1.06)
+        Label { id: title; x: 8; anchors.verticalCenter: parent.verticalCenter; text: parent.section; font.bold: true; color: root.mutedColor }
+    }
+
+    // One selectable row of the Report picker. A retired place is greyed and cannot be picked.
+    component PlaceChoice: ItemDelegate {
+        id: choice
+        property bool picked: false
+        property bool retired: false
+        topPadding: 5; bottomPadding: 5
+        enabled: !retired
+        opacity: enabled ? 1 : 0.55
+        Accessible.role: Accessible.RadioButton
+        Accessible.checked: choice.picked
+        background: Rectangle { color: choice.picked ? Qt.tint(palette.base, Qt.rgba(0.11, 0.44, 0.85, 0.16)) : choice.hovered ? Qt.darker(palette.base, 1.04) : palette.base }
+        contentItem: Label { text: choice.text; elide: Text.ElideRight; font.bold: choice.picked; font.italic: choice.retired }
+    }
+
+    // Filters (search, group, retired) + a count + a framed list of the matching places, grouped
+    // under headers. The caller draws the rows (`rowDelegate`, may be given `listHeader` above them).
+    component PlaceBrowser: ColumnLayout {
+        id: pb
+        property int maxHeight: 260
+        property Component rowDelegate
+        property Component listHeader
+        readonly property var places: root.placesView(search.text, groupFilter.currentIndex > 0 ? groupFilter.currentText : "", showRetired.checked)
+        readonly property int total: root.placesView("", "", showRetired.checked).length
+        Layout.fillWidth: true
+        spacing: 6
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 8
+            FormRow {
+                label: "Search"
+                FramedField { id: search; Layout.fillWidth: true; placeholderText: "code, name or group"; Accessible.name: "Search places" }
+            }
+            FormRow {
+                label: "Group"
+                Layout.fillWidth: false
+                FramedCombo {
+                    id: groupFilter
+                    Layout.preferredWidth: 200
+                    Accessible.name: "Filter by group"
+                    model: ["All groups"].concat(root.groupNames)
+                }
+            }
+            FramedCheck { id: showRetired; text: "Show retired places"; Layout.alignment: Qt.AlignBottom; Layout.bottomMargin: 4 }
+        }
+        Label {
+            font.pointSize: root.smallSize
+            color: root.mutedColor
+            text: pb.places.length === 0 ? "No places match. Clear the search or pick another group."
+                                         : pb.places.length + " of " + pb.total + " places"
+        }
+        Frame {
+            Layout.fillWidth: true
+            Layout.preferredHeight: Math.min(list.contentHeight, pb.maxHeight) + 2
+            ListView {
+                id: list
+                anchors.fill: parent
+                anchors.margins: 1
+                clip: true
+                spacing: 2
+                cacheBuffer: 100000      // keep every row alive: text typed into a row survives scrolling
+                model: pb.places
+                delegate: pb.rowDelegate
+                section.property: "group"
+                section.delegate: SectionHeader {}
+                header: Loader { width: list.width; sourceComponent: pb.listHeader }
+                ScrollBar.vertical: ScrollBar {}
+            }
         }
     }
 
@@ -672,6 +770,7 @@ Item {
                                         placeText: root.place(modelData)
                                         hintText: root.hint(modelData)
                                         overdue: root.flagged(modelData)
+                                        current: !!root.selected && root.selected.issue.id === modelData.id
                                         tint: root.stageColor(modelData.status)
                                         alertColor: root.dangerColor
                                         mutedColor: root.mutedColor
@@ -801,61 +900,87 @@ Item {
                 }
             }
 
-            // Report: pick a group, then a place; or "Other" plus a landmark
+            // Report: two steps, "What's wrong?" and "Where?" (one grouped, filterable place list)
             TabPage {
+                id: reportPage
                 enabled: !root.syncing
-                Label {
+                property string pick: ""          // "" = nothing yet, "other", or a place code
+                // What still blocks the Report button, in words ("" = ready).
+                readonly property string missing: reportText.text.trim() === "" ? "Describe the problem in one line."
+                    : pick === "" ? "Pick where it is."
+                    : pick === "other" && landmark.text.trim() === "" ? "Describe the place." : ""
+                Note {
                     visible: !root.approved
-                    Layout.fillWidth: true; wrapMode: Text.Wrap; font.bold: true
+                    font.bold: true
                     text: "Waiting for the admin to approve you. Read your fingerprint aloud at the kiosk; you can report once you are approved."
                 }
-                Label { text: "What's wrong?" }
-                FramedCombo { id: category; Accessible.name: "What is wrong (category)"; model: root.categories; Layout.preferredWidth: 240 }
-                RowLayout {
-                    FramedCombo { id: group; Accessible.name: "Place group"; model: root.groupNames; Layout.preferredWidth: 220 }
-                    FramedCombo {
-                        id: location
-                        Accessible.name: "Place"
-                        visible: group.currentText !== root.otherLabel
-                        Layout.preferredWidth: 320
-                        model: root.locationsIn(group.currentText).map(function (l) { return l.code + " · " + l.label })
-                    }
-                }
-                FramedField {
-                    id: landmark
-                    Layout.fillWidth: true
-                    maximumLength: 500
-                    placeholderText: group.currentText === root.otherLabel
-                        ? "Required: describe the place (e.g. pipe behind tent 4, by the neem tree)"
-                        : "Optional landmark (e.g. the left tap, behind the water tank)"
+                Heading { text: "What's wrong?"; Layout.topMargin: 0 }
+                FormRow {
+                    label: "Category"
+                    FramedCombo { id: category; Accessible.name: "What is wrong (category)"; model: root.categories; Layout.preferredWidth: 260 }
                 }
                 // maximumLength counts characters; the core's 500 limit is bytes (Hindi is 3 B/char),
                 // so a long non-Latin line comes back as "error: too long" instead.
-                FramedField {
-                    id: reportText; Layout.fillWidth: true; maximumLength: 500
-                    placeholderText: "One line: what's wrong"; onAccepted: reportBtn.submit()
+                FormRow {
+                    label: "In one line"
+                    FramedField {
+                        id: reportText; Layout.fillWidth: true; maximumLength: 500
+                        Accessible.name: "What is wrong, one line"; onAccepted: reportBtn.submit()
+                    }
+                }
+                Heading { text: "Where?" }
+                PlaceBrowser {
+                    maxHeight: 220
+                    listHeader: Component {
+                        PlaceChoice {
+                            text: "Other (describe the place)"
+                            picked: reportPage.pick === "other"
+                            onClicked: reportPage.pick = "other"
+                        }
+                    }
+                    rowDelegate: Component {
+                        PlaceChoice {
+                            required property var modelData
+                            width: ListView.view.width
+                            text: modelData.code + "  " + modelData.label + (modelData.retired ? "  (retired)" : "")
+                            retired: modelData.retired
+                            picked: reportPage.pick === modelData.code
+                            onClicked: reportPage.pick = modelData.code
+                        }
+                    }
+                }
+                Note {
+                    color: root.mutedColor
+                    text: reportPage.pick === "" ? "No place picked yet."
+                        : reportPage.pick === "other" ? "Other place: describe it below."
+                        : "Picked: " + root.placeLabel(reportPage.pick)
+                }
+                FormRow {
+                    visible: reportPage.pick !== ""
+                    label: reportPage.pick === "other" ? "Describe the place (required)" : "Landmark (optional)"
+                    FramedField {
+                        id: landmark; Layout.fillWidth: true; maximumLength: 500
+                        Accessible.name: reportPage.pick === "other" ? "Describe the place" : "Landmark"
+                        placeholderText: reportPage.pick === "other" ? "e.g. pipe behind tent 4, by the neem tree" : "e.g. the left tap, behind the water tank"
+                    }
                 }
                 ActionButton {
                     id: reportBtn
                     text: "Report"
-                    allowed: root.approved && reportText.text.trim().length > 0
-                             && (group.currentText === root.otherLabel ? landmark.text.trim().length > 0 : location.currentIndex >= 0)
-                    onClicked: {
-                        var code = group.currentText === root.otherLabel
-                            ? "other" : root.locationsIn(group.currentText)[location.currentIndex].code
-                        root.run("report", [category.currentText, code, landmark.text, reportText.text],
-                                 function () { reportText.text = ""; landmark.text = ""; tabs.currentIndex = 0 })
-                    }
+                    allowed: root.approved && reportPage.missing === ""
+                    onClicked: root.run("report", [category.currentText, reportPage.pick, landmark.text, reportText.text],
+                                        function () { reportText.text = ""; landmark.text = ""; reportPage.pick = ""; tabs.currentIndex = 0 })
                 }
-                Label {
+                Note { visible: root.approved && reportPage.missing !== ""; color: root.mutedColor; text: reportPage.missing }
+                Heading { visible: !root.staff; text: "Your name" }
+                Note {
                     visible: !root.staff
-                    text: "Your name (leave empty to stay a pseudonym; the admin who granted your role can still link it). Staff are always named."
-                    wrapMode: Text.Wrap; Layout.fillWidth: true
+                    text: "Leave it empty to stay a pseudonym; the admin who granted your role can still link it. Staff are always named."
                 }
                 LabelledField {
                     id: nameField
                     visible: !root.staff
-                    placeholder: "display name"
+                    label: "Display name"
                     buttonText: "Set name"
                     onSubmitted: root.run("set_profile", [nameField.text])
                 }
@@ -864,92 +989,111 @@ Item {
             // Members (admin): grant pending keys after the fingerprint is read aloud
             TabPage {
                 enabled: !root.syncing
-                Label { text: "Pending: grant only after the person reads this fingerprint aloud"; font.bold: true }
+                Heading { text: "Waiting for approval"; Layout.topMargin: 0 }
+                Note { text: "Grant a role only after the person reads this fingerprint aloud." }
+                Note { visible: root.pending.length === 0; color: root.mutedColor; text: "No one is waiting." }
                 Repeater {
                     model: root.pending
-                    delegate: Flow {
+                    delegate: RowLayout {
                         id: pendingRow
                         Layout.fillWidth: true
-                        spacing: 6
+                        spacing: 8
                         required property var modelData
-                        Label { text: pendingRow.modelData.fingerprint + "  " + (pendingRow.modelData.name || "(no name)"); font.family: "monospace" }
+                        Label { Layout.fillWidth: true; elide: Text.ElideRight; text: pendingRow.modelData.fingerprint + "  " + (pendingRow.modelData.name || "(no name)"); font.family: "monospace" }
                         ActionButton { text: "Grant resident"; onClicked: root.run("grant_role", [pendingRow.modelData.key, "resident", ""]) }
-                        FramedField { id: staffName; placeholderText: "steward's real name"; Layout.preferredWidth: 160; onAccepted: grantSteward.submit() }
-                        ActionButton {
-                            id: grantSteward
-                            text: "Grant steward"
-                            allowed: staffName.text.trim().length > 0
-                            onClicked: root.run("grant_role", [pendingRow.modelData.key, "steward", staffName.text])
+                        LabelledField {
+                            id: staffName
+                            Layout.fillWidth: false
+                            Layout.preferredWidth: 300
+                            name: "Steward's real name"
+                            placeholder: "steward's real name"
+                            buttonText: "Grant steward"
+                            buttonEnabled: staffName.text.trim().length > 0
+                            onSubmitted: root.run("grant_role", [pendingRow.modelData.key, "steward", staffName.text])
                         }
                     }
                 }
-                Label { text: "Members"; font.bold: true }
+                Heading { text: "Members" }
                 Repeater {
                     model: root.members
-                    delegate: Flow {
+                    delegate: LabelledField {
                         id: memberRow
-                        Layout.fillWidth: true
-                        spacing: 6
                         required property var modelData
-                        Label {
-                            text: memberRow.modelData.fingerprint + "  " + memberRow.modelData.role + "  " + (memberRow.modelData.name || "pseudonym")
-                            font.family: "monospace"
-                        }
-                        FramedField {
-                            id: revokeReason; visible: memberRow.modelData.key !== root.me.key; maximumLength: 500
-                            placeholderText: "reason for revoking"; Layout.preferredWidth: 200; onAccepted: revoke.submit()
-                        }
-                        ActionButton {
-                            id: revoke
-                            visible: revokeReason.visible
-                            text: "Revoke"
-                            allowed: revokeReason.text.trim().length > 0
-                            onClicked: root.run("revoke_role", [memberRow.modelData.key, revokeReason.text])
-                        }
+                        readonly property bool own: modelData.key === root.me.key
+                        caption: modelData.fingerprint + "  " + modelData.role + "  " + (modelData.name || "pseudonym")
+                        name: "Reason for revoking " + modelData.fingerprint
+                        placeholder: own ? "you can't revoke yourself" : "reason for revoking"
+                        fieldEnabled: !own
+                        buttonText: "Revoke"
+                        buttonEnabled: !own && memberRow.text.trim().length > 0
+                        onSubmitted: root.run("revoke_role", [modelData.key, memberRow.text])
                     }
                 }
-                Label { text: "Add a location (for example, found on the site walk)"; font.bold: true }
+                Heading { text: "Add a location" }
+                Note { text: "For a place found on the site walk. It joins the list straight away." }
                 RowLayout {
-                    FramedCombo { id: locGroup; Accessible.name: "Group for the new location"; editable: true; model: root.groupNames.slice(0, -1); Layout.preferredWidth: 180 }
-                    FramedField { id: locCode; placeholderText: "W-04"; Layout.preferredWidth: 80 }
-                    FramedField { id: locLabel; placeholderText: "Tap behind tent 4"; Layout.fillWidth: true; onAccepted: addLoc.submit() }
-                    ActionButton {
-                        id: addLoc
-                        text: "Add"
-                        allowed: locCode.text.trim() !== "" && locLabel.text.trim() !== "" && locGroup.editText.trim() !== ""
-                        onClicked: root.run("add_location", [locCode.text, locLabel.text, locGroup.editText],
-                                            function () { locCode.text = ""; locLabel.text = "" })
+                    Layout.fillWidth: true
+                    spacing: 8
+                    FormRow {
+                        label: "Group"
+                        Layout.fillWidth: false
+                        FramedCombo {
+                            id: locGroup
+                            Layout.preferredWidth: 240
+                            Accessible.name: "Group for the new location"
+                            model: root.groupNames.concat(["New group…"])
+                        }
+                    }
+                    FormRow {
+                        visible: locGroup.currentIndex === root.groupNames.length
+                        label: "New group name"
+                        FramedField { id: locNewGroup; Layout.fillWidth: true; maximumLength: 500; Accessible.name: "New group name"; placeholderText: "e.g. Kitchens" }
                     }
                 }
-                Label { text: "Locations (a retired place takes no new reports; nothing is deleted)"; font.bold: true }
-                FramedCheck { id: showRetired; text: "Show retired" }
-                Repeater {
-                    model: root.locations.filter(function (l) { return showRetired.checked || !l.retired })
-                    delegate: Flow {
-                        id: locRow
-                        Layout.fillWidth: true
-                        spacing: 6
-                        required property var modelData
-                        // The core refuses a retire while issues are open; disabling the button is only a courtesy.
-                        readonly property bool blocked: !modelData.retired && modelData.open_issues > 0
-                        Label {
-                            text: locRow.modelData.code + "  " + locRow.modelData.label
-                                + (locRow.modelData.retired ? "  (retired: " + locRow.modelData.retired_reason + ")" : "")
-                            font.family: "monospace"
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+                    FormRow {
+                        label: "Code"
+                        Layout.fillWidth: false
+                        FramedField { id: locCode; Layout.preferredWidth: 120; maximumLength: 500; Accessible.name: "Code"; placeholderText: "W-04" }
+                    }
+                    FormRow {
+                        label: "Name"
+                        FramedField { id: locLabel; Layout.fillWidth: true; maximumLength: 500; Accessible.name: "Name"; placeholderText: "Tap behind tent 4"; onAccepted: addLoc.submit() }
+                    }
+                }
+                ActionButton {
+                    id: addLoc
+                    text: "Add location"
+                    readonly property string group: locGroup.currentIndex === root.groupNames.length ? locNewGroup.text.trim() : locGroup.currentText
+                    allowed: locCode.text.trim() !== "" && locLabel.text.trim() !== "" && group !== ""
+                    onClicked: root.run("add_location", [locCode.text, locLabel.text, group],
+                                        function () { locCode.text = ""; locLabel.text = ""; locNewGroup.text = "" })
+                }
+                Heading { text: "Locations" }
+                Note { text: "A retired place takes no new reports; nothing is deleted. A place with open issues can't be retired." }
+                PlaceBrowser {
+                    maxHeight: 420
+                    rowDelegate: Component {
+                        LabelledField {
+                            id: locRow
+                            required property var modelData
+                            // The core refuses a retire while issues are open; disabling the button is only a courtesy.
+                            readonly property bool blocked: !modelData.retired && modelData.open_issues > 0
+                            width: ListView.view.width
+                            indent: 8
+                            caption: modelData.code + "  " + modelData.label
+                                + (modelData.retired ? "  (retired: " + modelData.retired_reason + ")" : "")
+                                + (blocked ? "  · " + root.openIssuesText(modelData.open_issues) : "")
+                            captionColor: modelData.retired ? root.mutedColor : palette.windowText
+                            name: "Reason for " + (modelData.retired ? "restoring " : "retiring ") + modelData.code
+                            placeholder: blocked ? "close its issues first" : modelData.retired ? "reason for restoring" : "reason for retiring"
+                            fieldEnabled: !blocked
+                            buttonText: modelData.retired ? "Restore" : "Retire"
+                            buttonEnabled: locRow.text.trim().length > 0 && !blocked
+                            onSubmitted: root.run(modelData.retired ? "restore_location" : "retire_location", [modelData.code, locRow.text])
                         }
-                        FramedField {
-                            id: locReason; maximumLength: 500; Layout.preferredWidth: 200; onAccepted: locToggle.submit()
-                            Accessible.name: "Reason for " + (locRow.modelData.retired ? "restoring " : "retiring ") + locRow.modelData.code
-                            placeholderText: locRow.modelData.retired ? "reason for restoring" : "reason for retiring"
-                        }
-                        ActionButton {
-                            id: locToggle
-                            text: locRow.modelData.retired ? "Restore" : "Retire"
-                            allowed: locReason.text.trim().length > 0 && !locRow.blocked
-                            onClicked: root.run(locRow.modelData.retired ? "restore_location" : "retire_location",
-                                                [locRow.modelData.code, locReason.text])
-                        }
-                        Label { visible: locRow.blocked; color: root.dangerColor; text: root.openIssuesText(locRow.modelData.open_issues) }
                     }
                 }
             }
