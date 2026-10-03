@@ -497,7 +497,10 @@ Item {
     // precondition; submit() is what Return in a neighbouring field calls (it honours both).
     component ActionButton: FramedButton {
         property bool allowed: true
-        enabled: allowed && !root.busy
+        property bool shown: true   // false hides it but keeps its slot, so a row's columns line up
+        enabled: shown && allowed && !root.busy
+        opacity: shown ? (enabled ? 1 : 0.5) : 0
+        Accessible.ignored: !shown
         function submit() { if (enabled) clicked() }
     }
 
@@ -1299,26 +1302,26 @@ Item {
                                     Accessible.name: "Reason for changing " + locRow.modelData.code
                                 }
                                 RowLayout {   // fixed width, right-aligned: every row's reason box and Edit line up
-                                    Layout.preferredWidth: 3 * 84 + 3 * 8     // three buttons and the spacer, 8 apart
+                                    Layout.preferredWidth: 84 + 108 + 84 + 3 * 8     // three slots and the spacer, 8 apart
                                     Layout.fillWidth: false
                                     spacing: 8
                                     Item { Layout.fillWidth: true }
-                                    ActionButton {
-                                        visible: !locRow.pending
+                                    ActionButton {   // slot 1: Retire / Restore
+                                        shown: !locRow.pending
                                         Layout.preferredWidth: 84
                                         text: locRow.st === "retired" ? "Restore" : "Retire"
                                         allowed: locRow.hasReason && !locRow.blocked
                                         onClicked: locRow.change(locRow.st === "retired" ? "restore_location" : "retire_location")
                                     }
-                                    ActionButton {   // only for a place no report ever named; the core decides
-                                        visible: locRow.pending || !locRow.modelData.ever_used
-                                        Layout.preferredWidth: locRow.pending ? -1 : 84
+                                    ActionButton {   // slot 2: Remove / Undo removal; only for a place no report ever named, the core decides
+                                        shown: locRow.pending || !locRow.modelData.ever_used
+                                        Layout.preferredWidth: 108
                                         text: locRow.pending ? "Undo removal" : "Remove"
                                         allowed: locRow.hasReason
                                         onClicked: locRow.change(locRow.pending ? "undo_remove_location" : "remove_location")
                                     }
-                                    ActionButton {
-                                        visible: !locRow.pending
+                                    ActionButton {   // slot 3: Edit
+                                        shown: !locRow.pending
                                         Layout.preferredWidth: 84
                                         text: locRow.editing ? "Cancel" : "Edit"
                                         Accessible.name: (locRow.editing ? "Cancel editing " : "Edit ") + locRow.modelData.code
