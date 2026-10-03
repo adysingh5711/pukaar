@@ -10,7 +10,7 @@
 |---|---|
 | Demo video | To be added in later version |
 | Screenshots | To be added in later version |
-| Latest release | [v0.1.0-rc.4](https://github.com/adysingh5711/pukaar/releases/tag/v0.1.0-rc.4) (pre-release, signed test packages for Basecamp 0.3.1) |
+| Latest release | [v0.1.0](https://github.com/adysingh5711/pukaar/releases/tag/v0.1.0): signed `.lgx` packages for Logos Basecamp 0.3.1 |
 
 ---
 
@@ -18,6 +18,7 @@
 
 - [Why](#why)
 - [How it works](#how-it-works)
+- [Features](#features)
 - [Project status](#project-status)
 - [Architecture](#architecture)
 - [On-chain component: `pukaar_registry`](#on-chain-component-pukaar_registry)
@@ -62,21 +63,32 @@ Pukaar takes that power away from the operator:
 - **Transport.** Live events go over `delivery_module` Reliable Channels on the content topic `/pukaar/1/site-<site_hex>/proto`. Catch-up is heads-based anti-entropy with a capped resend, not Store queries, so late joiners, restarts and LAN-only sites work without a store node.
 - **Checkpoints.** A Merkle root (RFC 6962 style) over every author's chain head, signed by a member under `logos:pukaar:cp:1\0` and anchored with one SPEL instruction on LEZ. Anyone can recompute the root from their own replica and compare.
 
+## Features
+
+- **Report** what's wrong and where: a category, one line, and a place picked from the site's grouped, searchable location list (or "Other" with a description).
+- **Staff workflow:** acknowledge, post updates with the next step and an ETA, claim a fix (a note is required), close as won't-fix, or mark a duplicate. Overdue and waiting-for-48 h cards are highlighted.
+- **Two-key closure:** only the reporter, or two residents who aren't the claimant, can confirm a fix. The reporter can always reopen.
+- **Members:** join with the site id; the admin approves each person after hearing their fingerprint read aloud. Staff are always named by the admin, and residents choose a name or stay pseudonymous. The admin can revoke a role, with a reason.
+- **Locations:** the admin adds places, and can retire or restore them, never delete. A place with open issues can't be retired, and a retired place offers "Report as Other at this spot".
+- **Identity backup:** export a password-sealed copy of your identity (Argon2id + XChaCha20-Poly1305) and restore it on a new install. A restored identity waits for its own history before it can publish, so it can't fork its own chain.
+- **Anchor:** compute a checkpoint of everyone's history and anchor it on LEZ with the printed `spel` command. Covered events show who recorded the anchor.
+- **Nothing is ever deleted:** rejected actions are kept and shown, and the board flags any forked chain.
+
 ## Project status
 
 | Component | Path | Status |
 |---|---|---|
-| Rules engine (`pukaar_logic`): events, chains, reducer, sync, checkpoints, persistence | `modules/pukaar_core/rust-lib/logic/` | **Done.** 28 tests, clippy `-D warnings` clean, fuzzed in CI |
+| Rules engine (`pukaar_logic`): events, chains, reducer, sync, checkpoints, persistence, identity backup | `modules/pukaar_core/rust-lib/logic/` | **Done.** 69 tests, clippy `-D warnings` clean, fuzzed in CI |
 | Checkpoint registry (`pukaar_registry`), a SPEL program on LEZ | `programs/pukaar_registry/` | **Done.** Deployed and anchored on localnet ([record](programs/pukaar_registry/ANCHOR.md)) |
-| Logos core module (`pukaar_core`), a Rust cdylib plus Delivery glue | `modules/pukaar_core/` | In progress |
-| QML UI module (`pukaar_ui`) | `modules/pukaar_ui/` | To be added in later version |
-| Two-instance demo script and signed `.lgx` packages for Basecamp 0.3.0 | `scripts/`, releases | To be added in later version |
+| Logos core module (`pukaar_core`), a Rust cdylib plus Delivery glue | `modules/pukaar_core/` | **Done.** Runs in the standalone Logos host and inside Basecamp 0.3.1 |
+| QML UI module (`pukaar_ui`) | `modules/pukaar_ui/` | **Done.** Board, Report, Members, Anchor and Identity tabs |
+| Demo scripts and signed `.lgx` packages for Basecamp 0.3.1 | `scripts/`, [releases](https://github.com/adysingh5711/pukaar/releases) | **Done.** Packages signed with `lgx` (see Security) |
 | LAN relay and offline three-laptop dry run | | To be added in later version |
 
 ## Architecture
 
 ```
-┌──────────────────────── Logos Basecamp 0.3.0 ─────────────────────────┐
+┌──────────────────────── Logos Basecamp 0.3.1 ─────────────────────────┐
 │  pukaar_ui (QML only)  ──logos.callModule──▶  pukaar_core (Rust cdylib)│
 │  polls every 2 s, JSON in/out                 │                        │
 │                                               ├─ pukaar_logic (all rules)
@@ -124,13 +136,13 @@ A one-instruction [SPEL](https://github.com/logos-co/spel) program ([source](pro
 
 - Rust 1.96+ (`rustup`)
 - For the chain program: Docker, [`logos-scaffold`](https://github.com/logos-co/scaffold) (`cargo install logos-scaffold`, which provides `lgs`), and the RISC Zero toolchain (`rzup install rust`, `rzup install r0vm`)
-- For the Basecamp modules: Nix with flakes, and [Logos Basecamp 0.3.0](https://github.com/logos-co/logos-basecamp/releases/tag/0.3.0)
+- For the Basecamp modules: Nix with flakes, and [Logos Basecamp 0.3.1](https://github.com/logos-co/logos-basecamp/releases/tag/0.3.1)
 
 ### Run the rules engine tests
 
 ```bash
 cd modules/pukaar_core/rust-lib/logic
-cargo test                                   # 28 tests
+cargo test                                   # 69 tests
 cargo clippy --all-targets -- -D warnings
 cargo +nightly fuzz run decode -- -max_total_time=60   # needs cargo-fuzz
 ```
@@ -147,7 +159,18 @@ spel --idl idl/pukaar_registry.json --program <PROGRAM_ID> -- anchor \
 
 ### Run Pukaar in Basecamp
 
-To be added in later version.
+1. Download `logos-pukaar_core-module-lib.lgx` and `logos-pukaar_ui-module.lgx` from the [latest release](https://github.com/adysingh5711/pukaar/releases/latest), and check them (see Security → Release signing).
+2. In Basecamp 0.3.1: **Package Manager → Install Local Package**. Install the core package first, then the UI package.
+3. Open Pukaar. The site admin types their name and clicks **Create site**. Everyone else pastes the site id and clicks **Join**, then reads their fingerprint aloud at the kiosk so the admin can approve them.
+
+One Basecamp profile holds one Pukaar identity. To run several people on one machine, give each its own Basecamp data directory: `scripts/basecamp.sh <name>` (Pukaar is installed once per profile).
+
+### Try it from source (developers)
+
+```bash
+scripts/demo.sh --clean        # two Pukaar windows, admin and resident, built from source with Nix
+scripts/window.sh <name>       # one more window as a new or existing person; never deletes data
+```
 
 ## Verifying an anchor yourself
 
@@ -180,14 +203,14 @@ The `heads_root` and `n_events` it prints must equal the values that your own re
 | Security audit | To be added in later version |
 | Bug bounty | To be added in later version |
 | Release signing | Packages are signed with `lgx`. Publisher DID: `did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IlpfZkxKcnVWR3UyYnBiR0VNMlhMTElmY2FzdTFycVkycHJZM1Z0cklRR28ifQ`. Verify with `lgx keyring add publisher "<DID>" --dir ./trusted-keys` then `lgx verify <file>.lgx --keyring-dir ./trusted-keys`. The official index ships `trustedSigners: []`, so Basecamp doesn't enforce signatures yet |
-| Key storage at rest (password-sealed key file) | To be added in later version |
+| Key storage at rest | The key file is `0600` in the host's data directory. A password-sealed **backup** is available (Identity tab). Sealing the live key file itself: to be added in later version |
 | Reporting a vulnerability | Open a private [security advisory](https://github.com/adysingh5711/pukaar/security/advisories/new) on this repository |
 
 ## Repository layout
 
 ```
 modules/pukaar_core/
-  rust-lib/               the Logos module crate (in progress)
+  rust-lib/               the Logos module crate
     logic/                pukaar_logic: every rule, tested with plain cargo,
                           nested here so the Nix build's crate-dir staging
                           sees it (single source of truth, no copy)
@@ -197,11 +220,14 @@ modules/pukaar_core/
       src/sync.rs         Wire enum, heads-based anti-entropy
       src/reducer.rs      state machine → State
       src/node.rs         one participant: publish/receive + JSON views
-      src/persist.rs      atomic on-disk replica
-      tests/              event, store, checkpoint, sync, lifecycle, convergence, persist
+      src/persist.rs      atomic on-disk replica, leave/rejoin
+      src/identity.rs     password-sealed identity export/import
+      tests/              event, store, checkpoint, sync, lifecycle, convergence, persist, identity, retire
       fuzz/               cargo-fuzz decode target
     src/lib.rs            Logos glue: PukaarCoreModule trait + delivery_module wiring
+modules/pukaar_ui/Main.qml  the QML UI (one call funnel, shared components, one colour palette)
 programs/pukaar_registry/  SPEL checkpoint registry (LEZ)
+scripts/                   demo.sh, window.sh, basecamp.sh
 .github/workflows/ci.yml   tests, clippy, 60 s fuzz smoke run
 ```
 
@@ -209,16 +235,16 @@ programs/pukaar_registry/  SPEL checkpoint registry (LEZ)
 
 | Layer | Choice |
 |---|---|
-| Logic | Rust (`ed25519-dalek` 2.1, `postcard` 1.1, `sha2` 0.10, `serde`, `serde_json`, `hex`) |
+| Logic | Rust (`ed25519-dalek` 2.1, `postcard` 1.1, `sha2` 0.10, `serde`, `serde_json`, `hex`; `argon2` 0.5 and `chacha20poly1305` 0.10 for the identity backup) |
 | Module packaging | Nix flakes, `logos-module-builder` 0.3.1, portable `.lgx` |
 | Transport | `delivery_module` v0.3.0-rc.2 (Reliable Channels) |
-| UI | Qt 6 QML inside Logos Basecamp 0.3.0 |
+| UI | Qt 6 QML (Controls Basic) inside Logos Basecamp 0.3.1 |
 | Chain | LEZ, SPEL (`lez-framework`), RISC Zero zkVM, `logos-scaffold` |
 | CI | GitHub Actions: `cargo test`, `clippy -D warnings`, `cargo-fuzz` smoke run |
 
 ## Roadmap
 
-- **L1:** the full report → claim → confirm loop between two Basecamp instances, and signed portable `.lgx` packages.
+- **L1 (done in v0.1.0):** the full report → claim → confirm loop between instances over Logos Delivery, running inside Basecamp, with signed portable `.lgx` packages.
 - **L1+:** anchoring from the app's Anchor tab, with a ✓ on each timeline row; a testnet anchor.
 - **L2:** LAN relay for sites without internet, a password-sealed key file, a site-health view (category level only, no per-person ranking), export and verify bundles, evidence photos on Logos Storage (EXIF stripped), UI tests, and a steward guide in Hindi and English.
 - **L3:** an anonymous reporting lane with an RLN rate limit, a phone path, and 2-of-3 admin grants.
