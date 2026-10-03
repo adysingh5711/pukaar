@@ -69,6 +69,8 @@ include!(concat!(
 
 const HEADS_EVERY: Duration = Duration::from_secs(60);
 const ANSWER_EVERY: Duration = Duration::from_secs(10);
+/// Received events reach the disk at most this often (see `Shared::save_due`).
+const SAVE_EVERY: Duration = Duration::from_secs(2);
 
 /// Delivery bring-up, advanced one step per flush(). Not done in on_context_ready: the host
 /// authorises our calls to delivery_module only after that returns, so a createNode/start made
@@ -99,6 +101,27 @@ struct Shared {
     link: Link,
     /// Last Delivery failure, shown as `"delivery": "error: …"` until a later step succeeds.
     link_error: Option<String>,
+    /// Events arrived (on_wire) since the last save.
+    dirty: bool,
+    last_save: Instant,
+}
+
+impl Shared {
+    /// Write the replica now. A failed write leaves `dirty` set, so a later poll retries it.
+    fn persist(&mut self) {
+        self.dirty = !self.node.as_ref().is_none_or(|n| save(n, &self.dir));
+        self.last_save = Instant::now();
+    }
+
+    /// Save what on_wire marked dirty, at most every SAVE_EVERY (or `force`d, at unload).
+    // ponytail: one whole-file rewrite per 2 s window instead of per received event, so a
+    // crash loses at most ~2 s of RECEIVED events, which peers re-send (anti-entropy); our own
+    // events are saved the moment they are signed (`write`). Append-only log if this ever matters.
+    fn save_due(&mut self, force: bool) {
+        if self.dirty && (force || self.last_save.elapsed() >= SAVE_EVERY) {
+            self.persist();
+        }
+    }
 }
 
 static SHARED: Mutex<Option<Shared>> = Mutex::new(None);
@@ -117,10 +140,13 @@ fn err(e: impl std::fmt::Display) -> String {
 const NO_SITE: &str = "no site yet: create or join one";
 
 /// Save the replica; a failure is logged, never fatal (the events are still in memory).
-fn save(node: &Node, dir: &Path) {
-    if let Err(e) = persist::save(node, dir) {
+/// Returns whether it reached the disk.
+fn save(node: &Node, dir: &Path) -> bool {
+    let r = persist::save(node, dir);
+    if let Err(e) = &r {
         eprintln!("pukaar: save failed: {e}");
     }
+    r.is_ok()
 }
 
 /// Delivery methods answer `{"success", "value", "error"}`, so a refusal ("context not
@@ -221,10 +247,10 @@ fn open_channel(site_hex: &str, me_hex: &str) -> Result<(), String> {
 fn on_wire(channel: &str, bytes: &[u8]) {
     let mut g = SHARED.lock().unwrap();
     let Some(Shared {
-        dir,
         node: Some(node),
         outbox,
         last_answer,
+        dirty,
         ..
     }) = g.as_mut()
     else {
@@ -235,14 +261,10 @@ fn on_wire(channel: &str, bytes: &[u8]) {
     }
     match Wire::decode(bytes) {
         Some(Wire::Event(b)) => {
-            if let Ok(Accept::New) = node.receive(&b) {
-                save(node, dir);
-            }
+            *dirty |= matches!(node.receive(&b), Ok(Accept::New));
         }
         Some(Wire::Heads(theirs)) => {
-            if node.observe_heads(&theirs) {
-                save(node, dir); // a restore's wait just ended
-            }
+            *dirty |= node.observe_heads(&theirs); // true: a restore's wait just ended
             if last_answer.is_some_and(|t| t.elapsed() < ANSWER_EVERY) {
                 return; // answered one recently
             }
@@ -299,10 +321,11 @@ fn send_queued(site: &str) -> Result<(), String> {
 /// my_identity every 2 s, so this runs often.
 fn flush() {
     let (link, ids) = {
-        let g = SHARED.lock().unwrap();
-        let Some(sh) = g.as_ref() else {
+        let mut g = SHARED.lock().unwrap();
+        let Some(sh) = g.as_mut() else {
             return;
         };
+        sh.save_due(false); // the poll is the clock for debounced saves
         let ids = sh
             .node
             .as_ref()
@@ -335,7 +358,7 @@ fn write<T>(
     let sh = g.as_mut().ok_or("module not ready")?;
     let node = sh.node.as_mut().ok_or(NO_SITE)?;
     let r = f(node, &mut sh.outbox)?;
-    save(node, &sh.dir);
+    sh.persist(); // our own events are never debounced
     Ok(r)
 }
 
@@ -396,6 +419,16 @@ fn start_site(make: impl FnOnce(SigningKey, &Path) -> Result<Node, String>) -> S
 
 #[derive(Default)]
 struct Pukaar;
+
+/// Unload: flush what the debounce is still holding.
+impl logos_rust_sdk::AboutToUnload for Pukaar {
+    fn about_to_unload(&self) -> logos_rust_sdk::Shutdown {
+        if let Some(sh) = SHARED.lock().unwrap().as_mut() {
+            sh.save_due(true);
+        }
+        logos_rust_sdk::Shutdown::Synchronous
+    }
+}
 
 impl PukaarCoreModule for Pukaar {
     fn site_create(&mut self, genesis_json: String) -> String {
@@ -584,11 +617,13 @@ impl PukaarCoreModule for Pukaar {
             last_answer: None,
             link: Link::Down,
             link_error: None,
+            dirty: false,
+            last_save: Instant::now(),
         });
     }
 }
 
 #[no_mangle]
 pub extern "Rust" fn logos_module_install() {
-    install::<Pukaar>();
+    logos_install!(Pukaar);
 }
