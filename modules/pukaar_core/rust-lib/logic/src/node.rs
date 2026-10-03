@@ -278,6 +278,22 @@ impl Node {
         self.publish(body, ts)
     }
 
+    /// A new place on the site map; a code that was ever used is refused before signing.
+    pub fn add_location(
+        &mut self,
+        code: &str,
+        label: &str,
+        group: &str,
+        ts: u64,
+    ) -> Result<Event, String> {
+        let locations = vec![Location {
+            code: code.trim().into(),
+            label: label.trim().into(),
+            group: group.trim().into(),
+        }];
+        self.publish_location(Body::LocationsAdd { locations }, ts)
+    }
+
     pub fn retire_location(&mut self, code: &str, reason: &str, ts: u64) -> Result<Event, String> {
         self.set_location_retired(code, true, reason, ts)
     }

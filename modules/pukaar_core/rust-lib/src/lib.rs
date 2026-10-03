@@ -5,7 +5,7 @@
 //! rust-lib/Cargo.toml); this file only moves bytes between that crate, the
 //! disk and Delivery.
 
-use pukaar_logic::event::{Body, Event, Location, Role, SigningKey};
+use pukaar_logic::event::{Body, Event, Role, SigningKey};
 use pukaar_logic::identity;
 use pukaar_logic::node::{action_body, genesis_from_json, parse_id, Node};
 use pukaar_logic::persist;
@@ -556,14 +556,7 @@ impl PukaarCoreModule for Pukaar {
     }
 
     fn add_location(&mut self, code: String, label: String, group: String) -> String {
-        let loc = Location {
-            code: code.trim().into(),
-            label: label.trim().into(),
-            group: group.trim().into(),
-        };
-        publish(Body::LocationsAdd {
-            locations: vec![loc],
-        })
+        publish_with(|n| n.add_location(&code, &label, &group, now()))
     }
 
     fn retire_location(&mut self, code: String, reason: String) -> String {

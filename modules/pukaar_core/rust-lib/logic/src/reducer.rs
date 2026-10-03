@@ -184,10 +184,33 @@ impl State {
         )
     }
 
+    /// THE add rule: every code is new (retired, pending and removed ones are still in
+    /// `locations`), not `other`, and unique within the event; code, name and group are set.
+    fn check_locations_add(&self, by: &Key, locations: &[Location]) -> Result<(), String> {
+        require(
+            self.roles.get(by) == Some(&Role::Admin),
+            "only admin edits the site map",
+        )?;
+        for (i, l) in locations.iter().enumerate() {
+            require(
+                [&l.code, &l.label, &l.group]
+                    .iter()
+                    .all(|f| !f.trim().is_empty()),
+                "a location needs a code, a name and a group",
+            )?;
+            let taken = l.code == OTHER_LOCATION
+                || self.locations.iter().any(|x| x.code == l.code)
+                || locations[..i].iter().any(|x| x.code == l.code);
+            require(!taken, format!("{} is already used", l.code))?;
+        }
+        Ok(())
+    }
+
     /// THE rule for every location-changing body (`ts` is the event's): the reducer applies it
     /// on every replica and `Node` checks it before signing. Other bodies pass.
     pub fn check_location_body(&self, by: &Key, body: &Body, ts: u64) -> Result<(), String> {
         match body {
+            Body::LocationsAdd { locations } => self.check_locations_add(by, locations),
             Body::LocationRetire {
                 code,
                 retired,
@@ -256,6 +279,7 @@ impl State {
                     },
                 );
             }
+            Body::LocationsAdd { locations } => self.locations.extend_from_slice(locations),
             Body::LocationEdit { code, label, group } => {
                 if let Some(l) = self.locations.iter_mut().find(|l| &l.code == code) {
                     if &l.label != label {
@@ -401,16 +425,10 @@ fn apply(s: &mut State, e: &Event) -> Result<(), String> {
             s.roles.remove(subject);
             Ok(())
         }
-        LocationsAdd { locations } => {
-            require(admin, "only admin edits the site map")?;
-            for l in locations {
-                if !s.locations.iter().any(|x| x.code == l.code) {
-                    s.locations.push(l.clone());
-                }
-            }
-            Ok(())
-        }
-        b @ (LocationRetire { .. } | LocationEdit { .. } | LocationRemove { .. }) => {
+        b @ (LocationsAdd { .. }
+        | LocationRetire { .. }
+        | LocationEdit { .. }
+        | LocationRemove { .. }) => {
             s.check_location_body(&a, b, e.u.ts)?;
             s.apply_location_body(a, b, e.u.ts);
             Ok(())

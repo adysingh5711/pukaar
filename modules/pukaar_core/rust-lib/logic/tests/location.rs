@@ -4,7 +4,7 @@
 mod common;
 mod util;
 use common::*;
-use pukaar_logic::event::{Body, Event};
+use pukaar_logic::event::{Body, Event, Location};
 use pukaar_logic::node::Node;
 use pukaar_logic::reducer::REMOVAL_COOLDOWN;
 use serde_json::Value;
@@ -42,6 +42,104 @@ fn refused_quietly(n: &mut Node, f: impl FnOnce(&mut Node) -> Result<Event, Stri
     let err = f(n).unwrap_err();
     assert_eq!(n.store.events.len(), events, "nothing was published");
     err
+}
+
+// ---------- add ----------
+
+#[test]
+fn a_new_location_is_added_and_listed() {
+    let mut s = Site::new();
+    s.admin
+        .add_location(" W-04 ", " Tap east ", " Taps ", T)
+        .unwrap();
+    let l = location(&s.admin, T, "W-04").unwrap();
+    assert_eq!(
+        (l["label"].as_str(), l["group"].as_str()),
+        (Some("Tap east"), Some("Taps"))
+    );
+}
+
+#[test]
+fn a_code_that_was_ever_used_cannot_be_added_again() {
+    let mut s = Site::new();
+    s.admin.add_location("W-04", "Tap east", "Taps", T).unwrap();
+    s.admin.retire_location("W-03", "dry", T).unwrap();
+    s.admin.remove_location("B-07", "typo", T).unwrap();
+    s.admin.add_location("W-05", "Tap", "Taps", T).unwrap();
+    s.admin.remove_location("W-05", "typo", T).unwrap();
+    // removed for good (past the undo window): the code is still taken
+    let late = T + REMOVAL_COOLDOWN;
+    for code in ["W-04", "W-03", "B-07", "W-05"] {
+        let e = refused_quietly(&mut s.admin, |n| n.add_location(code, "Tap", "Taps", late));
+        assert_eq!(e, format!("{code} is already used"));
+    }
+}
+
+#[test]
+fn an_added_location_needs_a_real_code_name_and_group() {
+    let mut s = Site::new();
+    let mut add = |code: &str, label: &str, group: &str| {
+        refused_quietly(&mut s.admin, |n| n.add_location(code, label, group, T))
+    };
+    assert_eq!(add("other", "Tap", "Taps"), "other is already used");
+    assert_eq!(
+        add(" ", "Tap", "Taps"),
+        "a location needs a code, a name and a group"
+    );
+    assert_eq!(
+        add("W-09", " ", "Taps"),
+        "a location needs a code, a name and a group"
+    );
+    assert_eq!(
+        add("W-09", "Tap", ""),
+        "a location needs a code, a name and a group"
+    );
+    assert!(add("W-09", &"x".repeat(501), "Taps").starts_with("too long"));
+}
+
+#[test]
+fn only_the_admin_adds_a_location() {
+    let mut s = Site::new();
+    let e = refused_quietly(&mut s.steward, |n| n.add_location("W-09", "Tap", "Taps", T));
+    assert_eq!(e, "only admin edits the site map");
+}
+
+fn loc(code: &str) -> Location {
+    Location {
+        code: code.into(),
+        label: "Tap".into(),
+        group: "Taps".into(),
+    }
+}
+
+#[test]
+fn a_violating_add_event_is_rejected_whole_and_visibly() {
+    let mut s = Site::new();
+    let before = s.admin.state().locations.len();
+    for (locations, why) in [
+        (vec![loc("W-09"), loc("W-03")], "W-03 is already used"),
+        (vec![loc("W-09"), loc("W-09")], "W-09 is already used"),
+        (vec![loc("W-09"), loc("other")], "other is already used"),
+        (
+            vec![Location {
+                label: String::new(),
+                ..loc("W-09")
+            }],
+            "a location needs a code, a name and a group",
+        ),
+    ] {
+        let e = s
+            .admin
+            .publish(Body::LocationsAdd { locations }, T)
+            .unwrap();
+        let st = s.admin.state();
+        assert_eq!(st.rejected[&e.id], why);
+        assert_eq!(
+            st.locations.len(),
+            before,
+            "nothing was added, not even the valid code"
+        );
+    }
 }
 
 // ---------- edit ----------
