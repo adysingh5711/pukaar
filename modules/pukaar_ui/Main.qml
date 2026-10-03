@@ -38,6 +38,8 @@ Item {
     // ---- design tokens: the only place a colour or the stage->colour map is spelled out ----
     readonly property color dangerColor: "#d73a49"
     readonly property color mutedColor: "#57606a"     // 6:1 on white (plain "gray" was 3.95:1)
+    readonly property color borderColor: "#8c959f"    // 3:1 on white: the box edge is a UI boundary
+    readonly property color focusBorderColor: "#1d6fd8"
     // Sizes follow the user's system font instead of fixed pixels.
     FontMetrics { id: systemFont }       // default font = the application's
     readonly property real baseSize: systemFont.font.pointSize > 0 ? systemFont.font.pointSize : 10
@@ -164,6 +166,9 @@ Item {
             return statuses.indexOf(i.status) >= 0 && (!onlyMine || i.reporter === me.key)
         })
     }
+    // Clipboard via a hidden TextEdit (QML has no direct clipboard API); header Copy and FramedTextArea share it.
+    TextEdit { id: clip; visible: false }
+    function copyText(t) { clip.text = t; clip.selectAll(); clip.copy() }
     function shortId(hex) { return String(hex).substr(0, 8) + "…" + String(hex).substr(-4) }
     function who(key, name) { return name ? name : "pseudonym " + String(key).substr(0, 6) }
     function when(ts) { return new Date(ts * 1000).toLocaleString(Qt.locale(), "d MMM HH:mm") }
@@ -311,6 +316,52 @@ Item {
         }
     }
 
+    // A wrapped paragraph. Plain text on purpose: "<YOUR_PUBLIC_ACCOUNT>" must not be read as a tag.
+    component Note: Label {
+        Layout.fillWidth: true
+        wrapMode: Text.Wrap
+        textFormat: Text.PlainText
+    }
+
+    // The one multi-line text box: visible frame (border token, brighter when focused), scrolls,
+    // optional placeholder. Read-only boxes are selectable and get a Copy button.
+    component FramedTextArea: ColumnLayout {
+        id: fta
+        property alias text: area.text
+        property alias placeholder: area.placeholderText
+        property bool readOnly: false
+        property string name              // what a screen reader says for the box
+        property int boxHeight: 70
+        Layout.fillWidth: true
+        spacing: 4
+        ScrollView {
+            Layout.fillWidth: true
+            Layout.preferredHeight: fta.boxHeight
+            clip: true
+            background: Rectangle {
+                color: area.palette.base
+                radius: 4
+                border.width: area.activeFocus ? 2 : 1
+                border.color: area.activeFocus ? root.focusBorderColor : root.borderColor
+            }
+            TextArea {
+                id: area
+                readOnly: fta.readOnly
+                selectByMouse: true
+                wrapMode: TextEdit.WrapAnywhere
+                padding: 8
+                background: null
+                Accessible.name: fta.name
+            }
+        }
+        Button {
+            visible: fta.readOnly && area.text !== ""
+            text: "Copy"; flat: true
+            Accessible.name: "Copy " + fta.name
+            onClicked: root.copyText(area.text)
+        }
+    }
+
     // A button that also waits while a call is running. `allowed` is the caller's own
     // precondition; submit() is what Return in a neighbouring field calls (it honours both).
     component ActionButton: Button {
@@ -352,9 +403,8 @@ Item {
                 Button {
                     text: "Copy"; flat: true
                     Accessible.name: "Copy the full site id"
-                    onClicked: { clip.text = root.me.site; clip.selectAll(); clip.copy() }
+                    onClicked: root.copyText(root.me.site)
                 }
-                TextEdit { id: clip; visible: false }
             }
             Label {   // Delivery bring-up status from pukaar_core; errors stay visible until it recovers
                 text: "delivery: " + root.deliveryLabel(root.me.delivery)
@@ -405,11 +455,10 @@ Item {
                 onSubmitted: root.run("site_join", [joinField.text])
             }
             Label { text: "Or create one (site admin only). Edit the location list, then give your name." }
-            TextArea {
+            FramedTextArea {
                 id: genesis
-                Layout.fillWidth: true
-                Layout.preferredHeight: 160
-                wrapMode: TextEdit.Wrap
+                name: "Site settings, JSON"
+                boxHeight: 160
                 text: '{"Genesis":{"name":"Dhun",'
                     + '"categories":["water","waste","power","access","rooms","kitchen","safety"],'
                     + '"locations":['
@@ -444,12 +493,10 @@ Item {
             visible: !root.inSite
             Layout.fillWidth: true
             Label { text: "Or restore your identity from a backup (Identity tab, on your other device or before you reinstalled)" }
-            TextArea {
+            FramedTextArea {
                 id: importBlob
-                Layout.fillWidth: true
-                Layout.preferredHeight: 70
-                wrapMode: TextEdit.WrapAnywhere
-                placeholderText: "pukaar-id-1:…"
+                name: "Identity backup"
+                placeholder: "pukaar-id-1:…"
             }
             LabelledField {
                 id: importPassword
@@ -754,19 +801,26 @@ Item {
             // Anchor: compute, run the printed spel command in a terminal, record the reference
             TabPage {
                 enabled: !root.syncing
+                Note {
+                    text: "An anchor writes a fingerprint of everyone's history to the Logos blockchain (LEZ), so no one, "
+                        + "not even the admin, can quietly rewrite or delete past events. Anyone can recompute it from their own copy and compare."
+                }
+                Note { text: "1. Compute the checkpoint"; font.bold: true }
                 ActionButton { text: "Compute checkpoint"; onClicked: root.run("checkpoint_now", [], function (r) { if (r && r.heads_root) root.checkpoint = r }) }
                 Label { visible: !!root.checkpoint; text: root.checkpoint ? root.checkpoint.n_events + " events, root " + root.checkpoint.heads_root.substr(0, 16) + "…" : "" }
-                TextArea {
-                    visible: !!root.checkpoint
-                    readOnly: true; selectByMouse: true; wrapMode: TextEdit.WrapAnywhere
-                    Layout.fillWidth: true
+                Note { text: "2. Copy this command and run it from programs/pukaar_registry/ in a terminal. Replace <YOUR_PUBLIC_ACCOUNT> with your LEZ account."; font.bold: true }
+                FramedTextArea {
+                    readOnly: true
+                    name: "spel anchor command"
+                    placeholder: "Compute the checkpoint first"
                     text: root.checkpoint ? root.checkpoint.spel : ""
                 }
+                Note { text: "3. Paste the tx hash or pda:<id> that spel prints, then record it"; font.bold: true }
                 LabelledField {
                     id: anchorField
-                    visible: !!root.checkpoint
                     placeholder: "tx hash or pda:<account id> printed by spel"
                     buttonText: "Record anchor"
+                    buttonEnabled: !!root.checkpoint && anchorField.text.trim() !== ""
                     onSubmitted: {
                         root.run("record_anchor", [JSON.stringify(root.checkpoint.heads), anchorField.text],
                                  function () { anchorField.text = ""; root.checkpoint = null })
@@ -798,11 +852,11 @@ Item {
                                  function (r) { exportOut.text = r; exportPassword.text = ""; exportConfirm.text = "" })
                     }
                 }
-                TextArea {
+                FramedTextArea {
                     id: exportOut
                     visible: text !== ""
-                    readOnly: true; selectByMouse: true; wrapMode: TextEdit.WrapAnywhere
-                    Layout.fillWidth: true
+                    readOnly: true
+                    name: "identity backup"
                 }
                 Button { visible: exportOut.text !== ""; text: "Hide"; flat: true; onClicked: exportOut.text = "" }
             }
