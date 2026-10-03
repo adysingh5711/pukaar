@@ -36,6 +36,11 @@ pub trait PukaarCoreModule: Send + 'static {
     /// Admin only (the rules reject anyone else's); `reason` is required.
     fn revoke_role(&mut self, subject_hex: String, reason: String) -> String;
     fn add_location(&mut self, code: String, label: String, group: String) -> String;
+    /// Admin only. Never a delete: refused with `error: W-01 has 2 open issues` while any
+    /// issue there is still open. Retired locations take no new reports. `reason` is required.
+    fn retire_location(&mut self, code: String, reason: String) -> String;
+    /// Admin only; makes a retired location reportable again. `reason` is required.
+    fn restore_location(&mut self, code: String, reason: String) -> String;
     /// `location` is a site-list code, or "other" with a `landmark` note.
     fn report(
         &mut self,
@@ -542,6 +547,14 @@ impl PukaarCoreModule for Pukaar {
         publish(Body::LocationsAdd {
             locations: vec![loc],
         })
+    }
+
+    fn retire_location(&mut self, code: String, reason: String) -> String {
+        publish_with(|n| n.retire_location(&code, &reason, now()))
+    }
+
+    fn restore_location(&mut self, code: String, reason: String) -> String {
+        publish_with(|n| n.restore_location(&code, &reason, now()))
     }
 
     fn report(
