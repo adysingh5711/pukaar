@@ -23,6 +23,7 @@ Item {
     property var checkpoint: null        // checkpoint_now() result
     property string message: ""
     property bool onlyMine: false
+    property bool busy: false            // a call is running: every action button waits (no double submit)
     readonly property bool inSite: !!(me && me.site)
     readonly property bool staff: me.role === "Steward" || me.role === "Admin"
     readonly property bool isAdmin: me.role === "Admin"
@@ -84,16 +85,21 @@ Item {
     function failed(v) {
         return typeof v === "string" && (v.indexOf("error:") === 0 || v.indexOf("rejected:") === 0)
     }
-    function run(method, args) {
+    // Every action goes through here. `onOk(reply)` runs only when the core accepted it, so
+    // typed text survives a refusal and the user can fix it and retry.
+    function run(method, args, onOk) {
+        busy = true
         var r = call(method, args)
+        busy = false
         message = failed(r) ? r : ""
         refresh()
-        return r
+        if (!failed(r) && onOk) onOk(r)
     }
     // Drop this device's copy of the site (the key stays); back to the first-run screen.
     function leave() {
-        if (failed(run("leave_site", []))) return
-        closeIssue(); checkpoint = null; issues = []; setInfo(noInfo); seen = ({})
+        run("leave_site", [], function () {
+            closeIssue(); checkpoint = null; issues = []; setInfo(noInfo); seen = ({})
+        })
     }
     function refresh() {
         poll("my_identity", [], function (m) { me = (m && typeof m === "object") ? m : {} })
@@ -222,6 +228,14 @@ Item {
         text: row.lineText
     }
 
+    // A button that also waits while a call is running. `allowed` is the caller's own
+    // precondition; submit() is what Return in a neighbouring field calls (it honours both).
+    component ActionButton: Button {
+        property bool allowed: true
+        enabled: allowed && !root.busy
+        function submit() { if (enabled) clicked() }
+    }
+
     // A text field with its submit button glued on — the "paste id / type name, then act" row.
     component LabelledField: RowLayout {
         id: lf
@@ -231,8 +245,8 @@ Item {
         property string buttonText: "Go"
         property bool buttonEnabled: true
         signal submitted()
-        TextField { id: field; Layout.fillWidth: true }
-        Button { text: lf.buttonText; enabled: lf.buttonEnabled; onClicked: lf.submitted() }
+        TextField { id: field; Layout.fillWidth: true; onAccepted: go.submit() }
+        ActionButton { id: go; text: lf.buttonText; allowed: lf.buttonEnabled; onClicked: lf.submitted() }
     }
 
     Timer { interval: 2000; running: true; repeat: true; triggeredOnStart: true; onTriggered: root.refresh() }
@@ -273,7 +287,7 @@ Item {
                 Layout.fillWidth: true; wrapMode: Text.Wrap
                 text: "Waiting for site data… If this lasts, check the site id, or wait for a member to come online."
             }
-            Button { text: "Leave this site"; onClicked: root.leave() }
+            ActionButton { text: "Leave this site"; onClicked: root.leave() }
         }
         RowLayout {
             visible: root.inSite && root.syncing
@@ -282,7 +296,7 @@ Item {
                 Layout.fillWidth: true; wrapMode: Text.Wrap; color: root.dangerColor
                 text: "Restoring your earlier reports from the network. Actions are paused until they arrive, so your new ones can't conflict with them."
             }
-            Button { text: "Skip waiting (history lost)"; onClicked: root.run("skip_history_sync", []) }
+            ActionButton { text: "Skip waiting (history lost)"; onClicked: root.run("skip_history_sync", []) }
         }
 
         // ---------- first run: create or join ----------
@@ -350,8 +364,8 @@ Item {
                 buttonText: "Import identity"
                 buttonEnabled: importBlob.text.trim() !== "" && importPassword.text !== ""
                 onSubmitted: {
-                    var r = root.run("import_identity", [importBlob.text, importPassword.text])
-                    if (!root.failed(r)) { importBlob.text = ""; importPassword.text = "" }
+                    root.run("import_identity", [importBlob.text, importPassword.text],
+                             function () { importBlob.text = ""; importPassword.text = "" })
                 }
             }
         }
@@ -424,9 +438,10 @@ Item {
                         property string st: issue.status || ""
                         property bool mine: issue.reporter === root.me.key
                         property bool claimant: issue.claimant === root.me.key
+                        property bool hasNote: note.text.trim() !== ""   // the core rejects these without one
                         function act(a, eta) {
-                            root.run("act", [issue.id, a, note.text, nextStep.text, eta | 0])
-                            note.text = ""; nextStep.text = ""
+                            root.run("act", [issue.id, a, note.text, nextStep.text, eta | 0],
+                                     function () { note.text = ""; nextStep.text = "" })
                         }
                         Label { text: detail.issue.category + " · " + root.place(detail.issue) + " · " + detail.issue.stage; font.bold: true; wrapMode: Text.Wrap; Layout.fillWidth: true }
                         Label { text: detail.issue.text; wrapMode: Text.Wrap; Layout.fillWidth: true }
@@ -446,7 +461,7 @@ Item {
                                              + "… recorded by " + root.who(modelData.anchored_by, modelData.anchored_by_name) : "")
                             }
                         }
-                        TextField { id: note; Layout.fillWidth: true; maximumLength: 500; placeholderText: "note: what was seen / done / why" }
+                        TextField { id: note; Layout.fillWidth: true; maximumLength: 500; placeholderText: "note: what was seen / done / why"; onAccepted: comment.submit() }
                         RowLayout {
                             visible: root.staff && root.isActionable(detail.st)
                             TextField { id: nextStep; Layout.fillWidth: true; maximumLength: 500; placeholderText: "next step (for updates)" }
@@ -457,21 +472,22 @@ Item {
                             Layout.fillWidth: true
                             enabled: !root.syncing
                             spacing: 6
-                            Button { visible: root.staff && detail.st === "Open"; text: "Acknowledge"; onClicked: detail.act("acknowledge", eta.value) }
-                            Button { visible: root.staff && root.isActionable(detail.st); text: "Post update"; onClicked: detail.act("update", eta.value) }
-                            Button { visible: root.staff && root.isActionable(detail.st); text: "Claim fixed (say what was done)"; onClicked: detail.act("claim_resolved", 0) }
-                            Button { visible: root.staff && root.isActionable(detail.st); text: "Won't fix (reason)"; onClicked: detail.act("close_wontfix", 0) }
-                            Button {
+                            ActionButton { visible: root.staff && detail.st === "Open"; text: "Acknowledge"; onClicked: detail.act("acknowledge", eta.value) }
+                            ActionButton { visible: root.staff && root.isActionable(detail.st); allowed: detail.hasNote; text: "Post update"; onClicked: detail.act("update", eta.value) }
+                            ActionButton { visible: root.staff && root.isActionable(detail.st); allowed: detail.hasNote; text: "Claim fixed (say what was done)"; onClicked: detail.act("claim_resolved", 0) }
+                            ActionButton { visible: root.staff && root.isActionable(detail.st); allowed: detail.hasNote; text: "Won't fix (reason)"; onClicked: detail.act("close_wontfix", 0) }
+                            ActionButton {
                                 visible: detail.st === "AwaitingConfirmation" && !detail.claimant && (detail.mine || root.me.role === "Resident")
                                 text: detail.mine ? "Confirm it's fixed" : "Confirm (1 of 2 residents)"
                                 onClicked: detail.act("confirm", 0)
                             }
-                            Button {
+                            ActionButton {
                                 visible: ["AwaitingConfirmation", "ConfirmedResolved", "ClosedWontfix", "Duplicate"].indexOf(detail.st) >= 0 && (detail.mine || root.me.role === "Resident")
+                                allowed: detail.hasNote
                                 text: "Reopen (reason)"
                                 onClicked: detail.act("reopen", 0)
                             }
-                            Button { text: "Comment"; onClicked: detail.act("comment", 0) }
+                            ActionButton { id: comment; allowed: detail.hasNote; text: "Comment"; onClicked: detail.act("comment", 0) }
                             Row {   // staff: close this one as a duplicate of another open issue
                                 visible: root.staff && root.isActionable(detail.st)
                                 spacing: 6
@@ -490,10 +506,11 @@ Item {
                                     model: root.duplicateTargets(detail.issue.id)
                                     onActivated: function (index) { target = valueAt(index); targetLabel = textAt(index) }
                                 }
-                                Button {
+                                ActionButton {
                                     text: "Mark duplicate"
-                                    enabled: dupOf.target !== ""
-                                    onClicked: { root.run("act", [detail.issue.id, "mark_duplicate", dupOf.target, "", 0]); dupOf.target = "" }
+                                    allowed: dupOf.target !== ""
+                                    onClicked: root.run("act", [detail.issue.id, "mark_duplicate", dupOf.target, "", 0],
+                                                        function () { dupOf.target = "" })
                                 }
                             }
                             Button { text: "Close"; flat: true; onClicked: root.closeIssue() }
@@ -526,16 +543,20 @@ Item {
                 }
                 // maximumLength counts characters; the core's 500 limit is bytes (Hindi is 3 B/char),
                 // so a long non-Latin line comes back as "error: too long" instead.
-                TextField { id: reportText; Layout.fillWidth: true; maximumLength: 500; placeholderText: "One line: what's wrong" }
-                Button {
+                TextField {
+                    id: reportText; Layout.fillWidth: true; maximumLength: 500
+                    placeholderText: "One line: what's wrong"; onAccepted: reportBtn.submit()
+                }
+                ActionButton {
+                    id: reportBtn
                     text: "Report"
-                    enabled: reportText.text.length > 0
+                    allowed: reportText.text.trim().length > 0
                              && (group.currentText === root.otherLabel ? landmark.text.trim().length > 0 : location.currentIndex >= 0)
                     onClicked: {
                         var code = group.currentText === root.otherLabel
                             ? "other" : root.locationsIn(group.currentText)[location.currentIndex].code
-                        var r = root.run("report", [category.currentText, code, landmark.text, reportText.text])
-                        if (!root.failed(r)) { reportText.text = ""; landmark.text = ""; tabs.currentIndex = 0 }
+                        root.run("report", [category.currentText, code, landmark.text, reportText.text],
+                                 function () { reportText.text = ""; landmark.text = ""; tabs.currentIndex = 0 })
                     }
                 }
                 Label {
@@ -563,11 +584,12 @@ Item {
                         id: pendingRow
                         required property var modelData
                         Label { text: pendingRow.modelData.fingerprint + "  " + (pendingRow.modelData.name || "(no name)"); font.family: "monospace" }
-                        Button { text: "Grant resident"; onClicked: root.run("grant_role", [pendingRow.modelData.key, "resident", ""]) }
-                        TextField { id: staffName; placeholderText: "steward's real name"; Layout.preferredWidth: 160 }
-                        Button {
+                        ActionButton { text: "Grant resident"; onClicked: root.run("grant_role", [pendingRow.modelData.key, "resident", ""]) }
+                        TextField { id: staffName; placeholderText: "steward's real name"; Layout.preferredWidth: 160; onAccepted: grantSteward.submit() }
+                        ActionButton {
+                            id: grantSteward
                             text: "Grant steward"
-                            enabled: staffName.text.trim().length > 0
+                            allowed: staffName.text.trim().length > 0
                             onClicked: root.run("grant_role", [pendingRow.modelData.key, "steward", staffName.text])
                         }
                     }
@@ -582,11 +604,15 @@ Item {
                             text: memberRow.modelData.fingerprint + "  " + memberRow.modelData.role + "  " + (memberRow.modelData.name || "pseudonym")
                             font.family: "monospace"
                         }
-                        TextField { id: revokeReason; visible: memberRow.modelData.key !== root.me.key; maximumLength: 500; placeholderText: "reason for revoking"; Layout.preferredWidth: 200 }
-                        Button {
+                        TextField {
+                            id: revokeReason; visible: memberRow.modelData.key !== root.me.key; maximumLength: 500
+                            placeholderText: "reason for revoking"; Layout.preferredWidth: 200; onAccepted: revoke.submit()
+                        }
+                        ActionButton {
+                            id: revoke
                             visible: revokeReason.visible
                             text: "Revoke"
-                            enabled: revokeReason.text.trim().length > 0
+                            allowed: revokeReason.text.trim().length > 0
                             onClicked: root.run("revoke_role", [memberRow.modelData.key, revokeReason.text])
                         }
                     }
@@ -595,13 +621,13 @@ Item {
                 RowLayout {
                     ComboBox { id: locGroup; editable: true; model: root.groupNames.slice(0, -1); Layout.preferredWidth: 180 }
                     TextField { id: locCode; placeholderText: "W-04"; Layout.preferredWidth: 80 }
-                    TextField { id: locLabel; placeholderText: "Tap behind tent 4"; Layout.fillWidth: true }
-                    Button {
+                    TextField { id: locLabel; placeholderText: "Tap behind tent 4"; Layout.fillWidth: true; onAccepted: addLoc.submit() }
+                    ActionButton {
+                        id: addLoc
                         text: "Add"
-                        onClicked: {
-                            root.run("add_location", [locCode.text, locLabel.text, locGroup.editText])
-                            locCode.text = ""; locLabel.text = ""
-                        }
+                        allowed: locCode.text.trim() !== "" && locLabel.text.trim() !== "" && locGroup.editText.trim() !== ""
+                        onClicked: root.run("add_location", [locCode.text, locLabel.text, locGroup.editText],
+                                            function () { locCode.text = ""; locLabel.text = "" })
                     }
                 }
                 Item { Layout.fillHeight: true }
@@ -610,7 +636,7 @@ Item {
             // Anchor: compute, run the printed spel command in a terminal, record the reference
             ColumnLayout {
                 enabled: !root.syncing
-                Button { text: "Compute checkpoint"; onClicked: root.checkpoint = root.call("checkpoint_now", []) }
+                ActionButton { text: "Compute checkpoint"; onClicked: root.checkpoint = root.call("checkpoint_now", []) }
                 Label { visible: !!root.checkpoint; text: root.checkpoint ? root.checkpoint.n_events + " events, root " + root.checkpoint.heads_root.substr(0, 16) + "…" : "" }
                 TextArea {
                     visible: !!root.checkpoint
@@ -624,8 +650,8 @@ Item {
                     placeholder: "tx hash or pda:<account id> printed by spel"
                     buttonText: "Record anchor"
                     onSubmitted: {
-                        var r = root.run("record_anchor", [JSON.stringify(root.checkpoint.heads), anchorField.text])
-                        if (!root.failed(r)) { anchorField.text = ""; root.checkpoint = null }
+                        root.run("record_anchor", [JSON.stringify(root.checkpoint.heads), anchorField.text],
+                                 function () { anchorField.text = ""; root.checkpoint = null })
                     }
                 }
                 Item { Layout.fillHeight: true }
@@ -651,8 +677,8 @@ Item {
                     buttonText: "Export identity"
                     buttonEnabled: exportPassword.text.length >= 8 && exportConfirm.text === exportPassword.text
                     onSubmitted: {
-                        var r = root.run("export_identity", [exportPassword.text])
-                        if (!root.failed(r)) { exportOut.text = r; exportPassword.text = ""; exportConfirm.text = "" }
+                        root.run("export_identity", [exportPassword.text],
+                                 function (r) { exportOut.text = r; exportPassword.text = ""; exportConfirm.text = "" })
                     }
                 }
                 TextArea {
