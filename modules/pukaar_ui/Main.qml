@@ -424,6 +424,53 @@ Item {
         font.pointSize: root.baseSize * 1.15
     }
 
+    // A section the reader opens on demand: a full-width header (chevron + title) that is one
+    // button (Space or Enter toggles it), then whatever is put inside. `open` lives only as long
+    // as the page, so it is remembered for the session and nothing more.
+    component CollapsibleSection: ColumnLayout {
+        id: section
+        property string title
+        property bool open: false
+        default property alias content: body.data
+        signal toggled()
+        Layout.fillWidth: true
+        spacing: 8
+        ItemDelegate {
+            id: header
+            Layout.fillWidth: true
+            Layout.topMargin: 8
+            text: section.title
+            Accessible.role: Accessible.Button
+            Accessible.name: section.title + (section.open ? ", expanded" : ", collapsed")
+            onClicked: { section.open = !section.open; section.toggled() }
+            Keys.onReturnPressed: clicked()
+            Keys.onEnterPressed: clicked()
+            background: Frame { ring: header.visualFocus; fill: header.hovered ? root.hoverColor : root.surfaceAltColor }
+            contentItem: RowLayout {
+                spacing: 8
+                Label { text: section.open ? "\u25be" : "\u25b8"; font.pointSize: root.baseSize * 1.15 }
+                Label { Layout.fillWidth: true; text: header.text; elide: Text.ElideRight; font.bold: true; font.pointSize: root.baseSize * 1.15 }
+            }
+        }
+        ColumnLayout { id: body; visible: section.open; Layout.fillWidth: true; spacing: 8 }
+    }
+
+    // A whole-number field with its one-line explanation underneath.
+    component RuleField: FormRow {
+        id: rule
+        property alias text: field.text
+        property string hint
+        FramedField {
+            id: field
+            Layout.preferredWidth: 120
+            maximumLength: 6
+            inputMethodHints: Qt.ImhDigitsOnly
+            validator: RegularExpressionValidator { regularExpression: /[0-9]*/ }
+            Accessible.name: rule.label
+        }
+        Note { text: rule.hint; color: root.mutedColor; font.pointSize: root.smallSize }
+    }
+
     // A visible label above whatever is put inside (every field has one, not only a placeholder).
     component FormRow: ColumnLayout {
         id: form
@@ -710,169 +757,182 @@ Item {
                 buttonText: "Join"
                 onSubmitted: root.run("site_join", [joinField.text])
             }
-            Heading { text: "Create a site (site admin only)" }
-            Note { text: "Nothing is published until you press Create site. Places can be added later too, in Members." }
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-                FormRow {
-                    label: "Site name"
-                    FramedField { id: siteName; Layout.fillWidth: true; maximumLength: 500; Accessible.name: "Site name"; placeholderText: "e.g. Dhun relief camp" }
-                }
-                FormRow {   // staff are always named: this goes into the genesis as the admin's name
-                    label: "Your name, as residents will see it"
-                    FramedField { id: adminName; Layout.fillWidth: true; maximumLength: 500; Accessible.name: "Your name" }
-                }
-            }
-            FormRow {
-                label: "Categories (what can go wrong)"
-                Flow {
+            CollapsibleSection {
+                title: "Create a site (site admin only)"
+                Note { text: "Nothing is published until you press Create site. Places can be added later too, in Members." }
+                RowLayout {
                     Layout.fillWidth: true
-                    spacing: 6
-                    Repeater {
-                        model: setup.categories
-                        delegate: FramedButton {
-                            required property string modelData
-                            required property int index
-                            text: modelData + "  \u00d7"
-                            Accessible.name: "Remove category " + modelData
-                            onClicked: setup.categories = setup.categories.filter(function (c, i) { return i !== index })
+                    spacing: 8
+                    FormRow {
+                        label: "Site name"
+                        FramedField { id: siteName; Layout.fillWidth: true; maximumLength: 500; Accessible.name: "Site name"; placeholderText: "e.g. Dhun relief camp" }
+                    }
+                    FormRow {   // staff are always named: this goes into the genesis as the admin's name
+                        label: "Your name, as residents will see it"
+                        FramedField { id: adminName; Layout.fillWidth: true; maximumLength: 500; Accessible.name: "Your name" }
+                    }
+                }
+                FormRow {
+                    label: "Categories (what can go wrong)"
+                    Flow {
+                        Layout.fillWidth: true
+                        spacing: 6
+                        Repeater {
+                            model: setup.categories
+                            delegate: FramedButton {
+                                required property string modelData
+                                required property int index
+                                text: modelData + "  \u00d7"
+                                Accessible.name: "Remove category " + modelData
+                                onClicked: setup.categories = setup.categories.filter(function (c, i) { return i !== index })
+                            }
                         }
                     }
                 }
-            }
-            LabelledField {
-                id: newCategory
-                label: "Add a category"
-                placeholder: "e.g. electricity"
-                buttonText: "Add"
-                buttonEnabled: setup.canAddCategory
-                onSubmitted: { setup.categories = setup.categories.concat([newCategory.text.trim()]); newCategory.text = "" }
-            }
-            FormRow {
-                label: "Places (" + setup.places.count + ")"
-                Note {
-                    color: root.mutedColor
-                    text: "Each place has a group (for the picker), a short code people can say aloud, and a name. Codes can't change later."
+                LabelledField {
+                    id: newCategory
+                    label: "Add a category"
+                    placeholder: "e.g. electricity"
+                    buttonText: "Add"
+                    buttonEnabled: setup.canAddCategory
+                    onSubmitted: { setup.categories = setup.categories.concat([newCategory.text.trim()]); newCategory.text = "" }
                 }
-                RowLayout {   // column titles: the placeholders vanish once a row is filled
-                    visible: setup.places.count > 0
-                    spacing: 6
-                    Label { Layout.preferredWidth: 170; text: "Group"; font.pointSize: root.smallSize; color: root.mutedColor }
-                    Label { Layout.preferredWidth: 90; text: "Code"; font.pointSize: root.smallSize; color: root.mutedColor }
-                    Label { text: "Name"; font.pointSize: root.smallSize; color: root.mutedColor }
-                }
-                Repeater {
-                    model: setup.places
-                    delegate: RowLayout {
-                        id: draftRow
-                        required property int index
-                        required property string group
-                        required property string code
-                        required property string label
+                FormRow {
+                    label: "Places (" + setup.places.count + ")"
+                    Note {
+                        color: root.mutedColor
+                        text: "Each place has a group (for the picker), a short code people can say aloud, and a name. Codes can't change later."
+                    }
+                    RowLayout {   // column titles: the placeholders vanish once a row is filled
+                        visible: setup.places.count > 0
+                        spacing: 6
+                        Label { Layout.preferredWidth: 170; text: "Group"; font.pointSize: root.smallSize; color: root.mutedColor }
+                        Label { Layout.preferredWidth: 90; text: "Code"; font.pointSize: root.smallSize; color: root.mutedColor }
+                        Label { text: "Name"; font.pointSize: root.smallSize; color: root.mutedColor }
+                    }
+                    Repeater {
+                        model: setup.places
+                        delegate: RowLayout {
+                            id: draftRow
+                            required property int index
+                            required property string group
+                            required property string code
+                            required property string label
+                            Layout.fillWidth: true
+                            spacing: 6
+                            // Writes straight into the ListModel, so other rows keep their typed text.
+                            FramedField { Layout.preferredWidth: 170; maximumLength: 500; text: draftRow.group; placeholderText: "e.g. Water points"; Accessible.name: "Place " + (draftRow.index + 1) + " group"; onTextEdited: setup.edit(draftRow.index, "group", text) }
+                            FramedField { Layout.preferredWidth: 90; maximumLength: 500; text: draftRow.code; placeholderText: "code"; Accessible.name: "Place " + (draftRow.index + 1) + " code"; onTextEdited: setup.edit(draftRow.index, "code", text) }
+                            FramedField { Layout.fillWidth: true; maximumLength: 500; text: draftRow.label; placeholderText: "name"; Accessible.name: "Place " + (draftRow.index + 1) + " name"; onTextEdited: setup.edit(draftRow.index, "label", text) }
+                            FramedButton { text: "\u00d7"; Accessible.name: "Remove place " + (draftRow.index + 1); onClicked: setup.places.remove(draftRow.index) }
+                        }
+                    }
+                    Flow {
                         Layout.fillWidth: true
                         spacing: 6
-                        // Writes straight into the ListModel, so other rows keep their typed text.
-                        FramedField { Layout.preferredWidth: 170; maximumLength: 500; text: draftRow.group; placeholderText: "group"; Accessible.name: "Place " + (draftRow.index + 1) + " group"; onTextEdited: setup.edit(draftRow.index, "group", text) }
-                        FramedField { Layout.preferredWidth: 90; maximumLength: 500; text: draftRow.code; placeholderText: "code"; Accessible.name: "Place " + (draftRow.index + 1) + " code"; onTextEdited: setup.edit(draftRow.index, "code", text) }
-                        FramedField { Layout.fillWidth: true; maximumLength: 500; text: draftRow.label; placeholderText: "name"; Accessible.name: "Place " + (draftRow.index + 1) + " name"; onTextEdited: setup.edit(draftRow.index, "label", text) }
-                        FramedButton { text: "\u00d7"; Accessible.name: "Remove place " + (draftRow.index + 1); onClicked: setup.places.remove(draftRow.index) }
+                        FramedButton { text: "Add a place"; onClicked: setup.places.append({ group: "", code: "", label: "" }) }
+                        FramedButton { text: "Start from the Dhun sample"; onClicked: setup.fillSample() }
+                        FramedButton { visible: setup.places.count > 0; text: "Clear places"; onClicked: setup.places.clear() }
                     }
                 }
-                Flow {
-                    Layout.fillWidth: true
-                    spacing: 6
-                    FramedButton { text: "Add a place"; onClicked: setup.places.append({ group: setup.lastGroup(), code: "", label: "" }) }
-                    FramedButton { text: "Start from the Dhun sample"; onClicked: setup.fillSample() }
-                    FramedButton { visible: setup.places.count > 0; text: "Clear places"; onClicked: setup.places.clear() }
+                CollapsibleSection {
+                    title: "Service rules (optional)"
+                    RuleField { id: ruleAck; label: "Acknowledge within (hours)"; text: "12"; hint: "After this, an unacknowledged report is flagged red." }
+                    RuleField { id: ruleFix; label: "Fix within (hours, after acknowledging)"; text: "48"; hint: "After this, the issue shows as overdue." }
+                    RuleField { id: ruleMax; label: "Open reports per person (max)"; text: "10"; hint: "Stops one person flooding the board; more can be filed once some are resolved." }
                 }
-            }
-            FramedCheck { id: advanced; text: "Advanced: edit the settings as JSON"; onToggled: if (checked) advancedJson.text = setup.genesisJson() }
-            FramedTextArea {
-                id: advancedJson
-                visible: advanced.checked
-                name: "Site settings, JSON"
-                boxHeight: 160
-            }
-            ActionButton {
-                text: "Create site"
-                allowed: advanced.checked ? adminName.text.trim() !== "" : setup.problem === ""
-                onClicked: root.run("site_create", [advanced.checked ? setup.withAdmin(advancedJson.text) : setup.genesisJson()], null,
-                                    "Start with fewer places, then add the rest after creating, via Members \u2192 Add a location.")
-            }
-            Note { visible: !advanced.checked && setup.problem !== ""; color: root.mutedColor; text: setup.problem }
-            // The draft and its checks. The core repeats every check (it is the authority); these
-            // only say what's missing before anyone presses the button.
-            QtObject {
-                id: setup
-                property var categories: ["water", "waste", "power", "access", "rooms", "kitchen", "safety"]
-                property ListModel places: ListModel {}
+                CollapsibleSection {
+                    id: advanced
+                    title: "Advanced: edit the settings as JSON"
+                    onToggled: if (open) advancedJson.text = setup.genesisJson()
+                    Note { color: root.mutedColor; text: "Starts from the form above and replaces it while this section is open. Close it to go back to the form." }
+                    FramedTextArea { id: advancedJson; name: "Site settings, JSON"; boxHeight: 160 }
+                }
+                ActionButton {
+                    text: "Create site"
+                    allowed: advanced.open ? adminName.text.trim() !== "" : setup.problem === ""
+                    onClicked: root.run("site_create", [advanced.open ? setup.withAdmin(advancedJson.text) : setup.genesisJson()], null,
+                                        "Start with fewer places, then add the rest after creating, via Members \u2192 Add a location.")
+                }
+                Note { visible: !advanced.open && setup.problem !== ""; color: root.mutedColor; text: setup.problem }
+                // The draft and its checks. The core repeats every check (it is the authority); these
+                // only say what's missing before anyone presses the button.
+                QtObject {
+                    id: setup
+                    property var categories: ["water", "waste", "power", "access", "rooms", "kitchen", "safety"]
+                    property ListModel places: ListModel {}
+                    readonly property var rules: [ruleAck, ruleFix, ruleMax]
                 property int edits: 0          // bumped on every change: ListModel.get() alone is not watched
-                function edit(i, role, text) { places.setProperty(i, role, text); edits++ }
-                readonly property bool canAddCategory: newCategory.text.trim() !== "" && categories.indexOf(newCategory.text.trim()) < 0
-                function lastGroup() { return places.count > 0 ? places.get(places.count - 1).group : "" }
-                function fillSample() {
-                    var sample = [["Water points", "W-01", "Tap, dining hall"], ["Water points", "W-02", "Tap, tent row A"],
-                                  ["Bins", "B-01", "Bin, main path"], ["Paths", "P-01", "Gate to the farm path"],
-                                  ["Rooms and tents", "R-01", "Tent 1"]]
-                    places.clear()
-                    sample.forEach(function (p) { places.append({ group: p[0], code: p[1], label: p[2] }) })
-                    edits++
-                }
-                function draft() {
-                    var out = []
-                    for (var i = 0; i < places.count; i++) {
-                        var p = places.get(i)
-                        out.push({ code: p.code.trim(), label: p.label.trim(), group: p.group.trim() })
+                    function edit(i, role, text) { places.setProperty(i, role, text); edits++ }
+                    readonly property bool canAddCategory: newCategory.text.trim() !== "" && categories.indexOf(newCategory.text.trim()) < 0
+                    function fillSample() {
+                        var sample = [["Water points", "W-01", "Tap, dining hall"], ["Water points", "W-02", "Tap, tent row A"],
+                                      ["Bins", "B-01", "Bin, main path"], ["Paths", "P-01", "Gate to the farm path"],
+                                      ["Rooms and tents", "R-01", "Tent 1"]]
+                        places.clear()
+                        sample.forEach(function (p) { places.append({ group: p[0], code: p[1], label: p[2] }) })
+                        edits++
                     }
-                    return out
-                }
-                // What still blocks Create site, in words ("" = ready). Recomputed on every edit.
-                readonly property string problem: {
-                    if (siteName.text.trim() === "") return "Give the site a name."
-                    if (adminName.text.trim() === "") return "Give your name: staff are always named."
-                    if (categories.length === 0) return "Add at least one category."
-                    var seen = {}
-                    var ps = edits >= 0 && places.count >= 0 ? draft() : []      // reads both, so any change re-runs this
-                    for (var i = 0; i < ps.length; i++) {
-                        var p = ps[i], n = "Place " + (i + 1)
-                        if (p.code === "") return n + " needs a code."
-                        if (p.code.toLowerCase() === "other") return n + ": the code \u201cother\u201d is reserved for places not on the list."
-                        if (seen[p.code]) return n + ": code " + p.code + " is already used by place " + seen[p.code] + "."
-                        if (p.label === "" || p.group === "") return n + " (" + p.code + ") needs a group and a name."
-                        seen[p.code] = i + 1
+                    function draft() {
+                        var out = []
+                        for (var i = 0; i < places.count; i++) {
+                            var p = places.get(i)
+                            out.push({ code: p.code.trim(), label: p.label.trim(), group: p.group.trim() })
+                        }
+                        return out
                     }
-                    return ""
-                }
-                function genesisJson() {
-                    return JSON.stringify({ Genesis: { name: siteName.text.trim(), admin_name: adminName.text.trim(), categories: categories,
-                                                       locations: draft(), sla_ack_h: 12, sla_fix_h: 48, max_open_per_author: 10 } }, null, 1)
-                }
-                // The admin's name always comes from the field, never the JSON.
-                function withAdmin(json) {
-                    try { var g = JSON.parse(json); g.Genesis.admin_name = adminName.text.trim(); return JSON.stringify(g) }
-                    catch (e) { return json }      // the core reports the parse error
+                    // What still blocks Create site, in words ("" = ready). Recomputed on every edit.
+                    readonly property string problem: {
+                        if (siteName.text.trim() === "") return "Give the site a name."
+                        if (adminName.text.trim() === "") return "Give your name: staff are always named."
+                        if (categories.length === 0) return "Add at least one category."
+                    for (var r = 0; r < rules.length; r++)
+                        if (!/^[1-9][0-9]*$/.test(rules[r].text)) return "Service rules: " + rules[r].label.toLowerCase() + " needs a whole number, 1 or more."
+                        var seen = {}
+                        var ps = edits >= 0 && places.count >= 0 ? draft() : []      // reads both, so any change re-runs this
+                        for (var i = 0; i < ps.length; i++) {
+                            var p = ps[i], n = "Place " + (i + 1)
+                            if (p.code === "") return n + " needs a code."
+                            if (p.code.toLowerCase() === "other") return n + ": the code \u201cother\u201d is reserved for places not on the list."
+                            if (seen[p.code]) return n + ": code " + p.code + " is already used by place " + seen[p.code] + "."
+                            if (p.label === "" || p.group === "") return n + " (" + p.code + ") needs a group and a name."
+                            seen[p.code] = i + 1
+                        }
+                        return ""
+                    }
+                    function genesisJson() {
+                        return JSON.stringify({ Genesis: { name: siteName.text.trim(), admin_name: adminName.text.trim(), categories: categories,
+                                                           locations: draft(), sla_ack_h: parseInt(ruleAck.text, 10),
+                                                       sla_fix_h: parseInt(ruleFix.text, 10), max_open_per_author: parseInt(ruleMax.text, 10) } }, null, 1)
+                    }
+                    // The admin's name always comes from the field, never the JSON.
+                    function withAdmin(json) {
+                        try { var g = JSON.parse(json); g.Genesis.admin_name = adminName.text.trim(); return JSON.stringify(g) }
+                        catch (e) { return json }      // the core reports the parse error
+                    }
                 }
             }
-            Heading { text: "Restore your identity" }
-            Note { text: "Paste the backup made in the Identity tab, on your other device or before you reinstalled." }
-            FormRow {
-                label: "Identity backup"
-                FramedTextArea {
-                    id: importBlob
-                    name: "Identity backup"
-                    placeholder: "pukaar-id-1:…"
+            CollapsibleSection {
+                title: "Restore your identity"
+                Note { text: "Paste the backup made in the Identity tab, on your other device or before you reinstalled." }
+                FormRow {
+                    label: "Identity backup"
+                    FramedTextArea {
+                        id: importBlob
+                        name: "Identity backup"
+                        placeholder: "pukaar-id-1:…"
+                    }
                 }
-            }
-            LabelledField {
-                id: importPassword
-                label: "Backup password"
-                echoMode: TextInput.Password
-                buttonText: "Import identity"
-                buttonEnabled: importBlob.text.trim() !== "" && importPassword.text !== ""
-                onSubmitted: {
-                    root.run("import_identity", [importBlob.text, importPassword.text],
-                             function () { importBlob.text = ""; importPassword.text = "" })
+                LabelledField {
+                    id: importPassword
+                    label: "Backup password"
+                    echoMode: TextInput.Password
+                    buttonText: "Import identity"
+                    buttonEnabled: importBlob.text.trim() !== "" && importPassword.text !== ""
+                    onSubmitted: {
+                        root.run("import_identity", [importBlob.text, importPassword.text],
+                                 function () { importBlob.text = ""; importPassword.text = "" })
+                    }
                 }
             }
         }
@@ -1229,6 +1289,7 @@ Item {
                             Layout.preferredWidth: 240
                             Accessible.name: "Group for the new location"
                             model: root.groupNames.concat(["New group…"])
+                            onActivated: locNewGroup.text = ""     // each "New group…" starts blank
                         }
                     }
                     FormRow {
