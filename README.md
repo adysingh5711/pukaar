@@ -10,7 +10,7 @@
 |---|---|
 | Demo video | To be added in later version |
 | Screenshots | To be added in later version |
-| Latest release | [v0.1.0-rc.2](https://github.com/adysingh5711/pukaar/releases/tag/v0.1.0-rc.2) (pre-release, signed test packages for Basecamp 0.3.1) |
+| Latest release | [v0.1.0-rc.3](https://github.com/adysingh5711/pukaar/releases/tag/v0.1.0-rc.3) (pre-release, signed test packages for Basecamp 0.3.1) |
 
 ---
 
