@@ -72,8 +72,8 @@ pub struct Config {
     pub max_open_per_author: u32,
 }
 
-/// (checkpoint event id, heads it covers, LEZ tx)
-pub type CheckpointRecord = (Id, Vec<(Key, u64)>, String);
+/// (who recorded it, heads it covers, LEZ tx)
+pub type CheckpointRecord = (Key, Vec<(Key, u64)>, String);
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct State {
@@ -281,7 +281,7 @@ fn apply(s: &mut State, e: &Event) -> Result<(), String> {
             Ok(())
         }
         Checkpoint { heads, lez_tx } => {
-            s.checkpoints.push((e.id, heads.clone(), lez_tx.clone()));
+            s.checkpoints.push((a, heads.clone(), lez_tx.clone()));
             Ok(())
         }
         MarkDuplicate { issue, of } => {

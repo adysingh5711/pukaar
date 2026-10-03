@@ -226,6 +226,11 @@ Item {
             }
         }
         Label { visible: root.message !== ""; text: root.message; color: root.dangerColor; wrapMode: Text.Wrap; Layout.fillWidth: true }
+        Label {   // forks: someone signed two versions of their log (the threat model says: flag it)
+            visible: root.inSite && root.info.forks > 0
+            Layout.fillWidth: true; wrapMode: Text.Wrap; color: root.dangerColor; font.bold: true
+            text: "Integrity warning: " + root.info.forks + " conflicting history pair(s) found. Someone signed two versions of their log, so devices may show different boards."
+        }
         RowLayout {   // joined, but the genesis hasn't arrived: wrong id, or nobody online yet
             visible: root.inSite && !root.info.name
             Layout.fillWidth: true
@@ -402,7 +407,8 @@ Item {
                                 lineText: root.when(modelData.ts) + "  " + modelData.kind + " by " + root.who(modelData.author, modelData.author_name)
                                           + (modelData.body ? ": " + modelData.body : "")
                                           + (modelData.rejected ? "  [rejected: " + modelData.rejected + "]" : "")
-                                          + (modelData.anchored_tx ? "  ✓ anchored" : "")
+                                          + (modelData.anchored_tx ? "  anchor ref " + String(modelData.anchored_tx).substr(0, 16)
+                                             + "… recorded by " + root.who(modelData.anchored_by, modelData.anchored_by_name) : "")
                             }
                         }
                         TextField { id: note; Layout.fillWidth: true; maximumLength: 500; placeholderText: "note: what was seen / done / why" }

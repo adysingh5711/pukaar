@@ -179,11 +179,13 @@ impl Node {
     }
 
     /// Is (author, seq) inside a reproducible checkpoint that names a LEZ tx?
+    /// Gives the tx and who recorded it (any member can; only the root is checked here).
     #[must_use]
-    pub fn anchored(&self, s: &State, author: &Key, seq: u64) -> Option<String> {
-        s.checkpoints.iter().find_map(|(_, heads, tx)| {
+    pub fn anchored<'s>(&self, s: &'s State, author: &Key, seq: u64) -> Option<(&'s str, Key)> {
+        s.checkpoints.iter().find_map(|(by, heads, tx)| {
             let covers = heads.iter().any(|(a, h)| a == author && *h >= seq);
-            (covers && !tx.is_empty() && root_for(&self.store, heads).is_some()).then(|| tx.clone())
+            (covers && !tx.is_empty() && root_for(&self.store, heads).is_some())
+                .then_some((tx.as_str(), *by))
         })
     }
 
@@ -304,6 +306,7 @@ impl Node {
             .iter()
             .filter_map(|id| self.store.events.values().find(|e| &e.id == id))
             .map(|e| {
+                let anchor = self.anchored(&s, &e.u.author, e.u.seq);
                 json!({
                     "id": hex::encode(e.id),
                     "kind": kind_name(&e.u.body),
@@ -312,7 +315,9 @@ impl Node {
                     "ts": e.u.ts,
                     "body": body_text(&e.u.body),
                     "rejected": s.rejected.get(&e.id),
-                    "anchored_tx": self.anchored(&s, &e.u.author, e.u.seq),
+                    "anchored_tx": anchor.map(|(tx, _)| tx),
+                    "anchored_by": anchor.map(|(_, by)| hex::encode(by)),
+                    "anchored_by_name": anchor.and_then(|(_, by)| s.names.get(&by)),
                 })
             })
             .collect();
@@ -461,7 +466,8 @@ fn issue_json(s: &State, i: &Issue, now: u64) -> Value {
         "reopen_count": i.reopen_count,
         "reported_ts": i.reported_ts,
         "ack_overdue": i.status == Status::Open && past(now, i.reported_ts, s.config.sla_ack_h),
-        "fix_overdue": i.status.awaits_staff() && past(now, i.reported_ts, s.config.sla_fix_h),
+        "fix_overdue": i.status.awaits_staff()
+            && past(now, i.reported_ts, s.config.sla_fix_h),
         "awaiting_48h": i.status == Status::AwaitingConfirmation
             && i.progress.as_ref().is_some_and(|p| past(now, p.ts, CONFIRM_WAIT_H)),
     })

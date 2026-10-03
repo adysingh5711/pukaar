@@ -284,6 +284,12 @@ fn anchored_checkpoint_shows_in_timeline() {
     let tl: serde_json::Value =
         serde_json::from_str(&s.steward.timeline_json(&hex::encode(i), 0)).unwrap();
     assert_eq!(tl["events"][0]["anchored_tx"], "pda:Public/abc");
+    // the UI says who recorded it: any member can, only the root is checked
+    assert_eq!(tl["events"][0]["anchored_by"], hex::encode(s.ravi.me()));
+    assert!(
+        tl["events"][0]["anchored_by_name"].is_null(),
+        "ravi is a pseudonym"
+    );
     let later = s
         .steward
         .publish(
