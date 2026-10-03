@@ -174,6 +174,7 @@ Item {
     function when(ts) { return new Date(ts * 1000).toLocaleString(Qt.locale(), "d MMM HH:mm") }
     function place(i) {
         var p = i.location === "other" ? "Other" : (i.location + " " + (i.location_label || ""))
+        if (i.location_retired) p += " (retired)"
         return i.landmark ? p + " (" + i.landmark + ")" : p
     }
     function dueHours(p) { return Math.round((p.due_ts - Date.now() / 1000) / 3600) }
@@ -217,13 +218,15 @@ Item {
             return o.id !== id && ["ConfirmedResolved", "ClosedWontfix", "Duplicate"].indexOf(o.status) < 0
         }).map(function (o) { return { id: o.id, label: place(o) + " · " + String(o.text).substr(0, 40) } })
     }
+    // The Report picker offers only active places; retired ones stay visible on old issues and in Members.
     function groups() {
         var g = []
-        locations.forEach(function (l) { if (g.indexOf(l.group) < 0) g.push(l.group) })
+        locations.forEach(function (l) { if (!l.retired && g.indexOf(l.group) < 0) g.push(l.group) })
         g.push(otherLabel)
         return g
     }
-    function locationsIn(group) { return locations.filter(function (l) { return l.group === group }) }
+    function locationsIn(group) { return locations.filter(function (l) { return l.group === group && !l.retired }) }
+    function openIssuesText(n) { return n + (n === 1 ? " open issue" : " open issues") }
 
     // ---- reusable pieces (props in, signals out; no reach into the enclosing scope) ----
 
@@ -794,6 +797,37 @@ Item {
                         allowed: locCode.text.trim() !== "" && locLabel.text.trim() !== "" && locGroup.editText.trim() !== ""
                         onClicked: root.run("add_location", [locCode.text, locLabel.text, locGroup.editText],
                                             function () { locCode.text = ""; locLabel.text = "" })
+                    }
+                }
+                Label { text: "Locations (a retired place takes no new reports; nothing is deleted)"; font.bold: true }
+                CheckBox { id: showRetired; text: "Show retired" }
+                Repeater {
+                    model: root.locations.filter(function (l) { return showRetired.checked || !l.retired })
+                    delegate: Flow {
+                        id: locRow
+                        Layout.fillWidth: true
+                        spacing: 6
+                        required property var modelData
+                        // The core refuses a retire while issues are open; disabling the button is only a courtesy.
+                        readonly property bool blocked: !modelData.retired && modelData.open_issues > 0
+                        Label {
+                            text: locRow.modelData.code + "  " + locRow.modelData.label
+                                + (locRow.modelData.retired ? "  (retired: " + locRow.modelData.retired_reason + ")" : "")
+                            font.family: "monospace"
+                        }
+                        TextField {
+                            id: locReason; maximumLength: 500; Layout.preferredWidth: 200; onAccepted: locToggle.submit()
+                            Accessible.name: "Reason for " + (locRow.modelData.retired ? "restoring " : "retiring ") + locRow.modelData.code
+                            placeholderText: locRow.modelData.retired ? "reason for restoring" : "reason for retiring"
+                        }
+                        ActionButton {
+                            id: locToggle
+                            text: locRow.modelData.retired ? "Restore" : "Retire"
+                            allowed: locReason.text.trim().length > 0 && !locRow.blocked
+                            onClicked: root.run(locRow.modelData.retired ? "restore_location" : "retire_location",
+                                                [locRow.modelData.code, locReason.text])
+                        }
+                        Label { visible: locRow.blocked; color: root.dangerColor; text: root.openIssuesText(locRow.modelData.open_issues) }
                     }
                 }
             }
