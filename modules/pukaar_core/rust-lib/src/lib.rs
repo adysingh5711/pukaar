@@ -41,6 +41,14 @@ pub trait PukaarCoreModule: Send + 'static {
     fn retire_location(&mut self, code: String, reason: String) -> String;
     /// Admin only; makes a retired location reportable again. `reason` is required.
     fn restore_location(&mut self, code: String, reason: String) -> String;
+    /// Admin only. New name and group; the code never changes. Both are required.
+    fn edit_location(&mut self, code: String, label: String, group: String) -> String;
+    /// Admin only, and only for a location no report ever named (`error: W-01 has had reports:
+    /// retire it instead`). It stays pending removal for 30 days, then is hidden for good
+    /// (the signed events stay). `reason` is required.
+    fn remove_location(&mut self, code: String, reason: String) -> String;
+    /// Admin only; brings back a location pending removal, within the 30 days. `reason` is required.
+    fn undo_remove_location(&mut self, code: String, reason: String) -> String;
     /// `location` is a site-list code, or "other" with a `landmark` note.
     fn report(
         &mut self,
@@ -566,6 +574,18 @@ impl PukaarCoreModule for Pukaar {
         publish_with(|n| n.restore_location(&code, &reason, now()))
     }
 
+    fn edit_location(&mut self, code: String, label: String, group: String) -> String {
+        publish_with(|n| n.edit_location(&code, &label, &group, now()))
+    }
+
+    fn remove_location(&mut self, code: String, reason: String) -> String {
+        publish_with(|n| n.remove_location(&code, &reason, now()))
+    }
+
+    fn undo_remove_location(&mut self, code: String, reason: String) -> String {
+        publish_with(|n| n.undo_remove_location(&code, &reason, now()))
+    }
+
     fn report(
         &mut self,
         category: String,
@@ -613,7 +633,7 @@ impl PukaarCoreModule for Pukaar {
     }
 
     fn site_info(&mut self) -> String {
-        read(|n| n.site_info_json()).unwrap_or_else(err)
+        read(|n| n.site_info_json(now())).unwrap_or_else(err)
     }
 
     fn checkpoint_now(&mut self) -> String {
