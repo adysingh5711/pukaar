@@ -312,7 +312,7 @@ fn anchored_checkpoint_shows_in_timeline() {
 #[test]
 fn site_info_lists_members_and_map() {
     let s = Site::new();
-    let info: serde_json::Value = serde_json::from_str(&s.admin.site_info_json()).unwrap();
+    let info: serde_json::Value = serde_json::from_str(&s.admin.site_info_json(0)).unwrap();
     assert_eq!(info["members"].as_array().unwrap().len(), 5);
     assert_eq!(info["locations"][0]["code"], "W-03");
     let me: serde_json::Value = serde_json::from_str(&s.asha.identity_json()).unwrap();
@@ -469,7 +469,7 @@ fn unlisted_place_needs_a_landmark() {
     let st = s.asha.state();
     assert!(st.rejected[&bare.id].contains("landmark"));
     assert_eq!(st.issues[&ok.id].landmark, "pipe behind tent 4");
-    let info: serde_json::Value = serde_json::from_str(&s.asha.site_info_json()).unwrap();
+    let info: serde_json::Value = serde_json::from_str(&s.asha.site_info_json(0)).unwrap();
     assert_eq!(info["locations"][0]["group"], "Water points");
 }
 
@@ -743,7 +743,7 @@ fn sla_flags_follow_the_site_settings() {
         (f.clone(), f.clone(), f.clone())
     );
     assert_eq!(flags(&s.asha, claim + 48 * H + 1), (f.clone(), f, t));
-    let info: serde_json::Value = serde_json::from_str(&s.asha.site_info_json()).unwrap();
+    let info: serde_json::Value = serde_json::from_str(&s.asha.site_info_json(0)).unwrap();
     assert_eq!(
         (info["sla_ack_h"].as_u64(), info["sla_fix_h"].as_u64()),
         (Some(12), Some(48))

@@ -61,7 +61,7 @@ fn is_retired(n: &Node, code: &str) -> bool {
 }
 
 fn location_json(n: &Node, code: &str) -> serde_json::Value {
-    let info: serde_json::Value = serde_json::from_str(&n.site_info_json()).unwrap();
+    let info: serde_json::Value = serde_json::from_str(&n.site_info_json(0)).unwrap();
     info["locations"]
         .as_array()
         .unwrap()

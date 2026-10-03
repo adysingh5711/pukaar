@@ -82,12 +82,43 @@ pub struct State {
     pub locations: Vec<Location>,
     /// code -> why it was retired. Retired locations stay in `locations`.
     pub retired: BTreeMap<String, String>,
+    /// code -> its removal. Stays in `locations`; never also in `retired`.
+    pub pending_removal: BTreeMap<String, Removal>,
+    /// code -> the name it had before its latest rename.
+    pub renamed_from: BTreeMap<String, String>,
     pub roles: BTreeMap<Key, Role>,
     pub names: BTreeMap<Key, String>,
     pub pending_members: BTreeSet<Key>,
     pub issues: BTreeMap<Id, Issue>,
     pub rejected: BTreeMap<Id, String>,
     pub checkpoints: Vec<CheckpointRecord>,
+}
+
+/// How long a removed location can be brought back, in seconds of event time.
+// ponytail: judged by the events' `ts` (the author's clock), never a local clock, so every
+// replica agrees; a skewed admin clock can shift the window. Anchor-backed time if that matters.
+pub const REMOVAL_COOLDOWN: u64 = 30 * 24 * 3600;
+const DAY: u64 = 24 * 3600;
+
+/// A location on its way out: who started it, when (event ts) and why.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Removal {
+    pub by: Key,
+    pub since: u64,
+    pub reason: String,
+}
+
+impl Removal {
+    #[must_use]
+    pub fn removes_at(&self) -> u64 {
+        self.since.saturating_add(REMOVAL_COOLDOWN)
+    }
+
+    /// "Removed" is a view, not a state: pending and the window is over at `now`.
+    #[must_use]
+    pub fn is_done(&self, now: u64) -> bool {
+        now >= self.removes_at()
+    }
 }
 
 impl State {
@@ -100,6 +131,32 @@ impl State {
             .count()
     }
 
+    /// Has any accepted report ever named `code`? Issues are never dropped from state, so
+    /// this covers every status, terminal ones included.
+    #[must_use]
+    pub fn ever_used(&self, code: &str) -> bool {
+        self.issues.values().any(|i| i.location == code)
+    }
+
+    /// The start of every location change: an admin, and a listed code (never `other`).
+    fn admin_on_location(&self, by: &Key, code: &str, verb: &str) -> Result<(), String> {
+        require(
+            self.roles.get(by) == Some(&Role::Admin),
+            format!("only admin {verb} locations"),
+        )?;
+        require(
+            code != OTHER_LOCATION && self.locations.iter().any(|l| l.code == code),
+            format!("unknown location {code}"),
+        )
+    }
+
+    fn not_pending_removal(&self, code: &str) -> Result<(), String> {
+        require(
+            !self.pending_removal.contains_key(code),
+            format!("location {code} is pending removal"),
+        )
+    }
+
     /// THE retire/restore rule. The reducer enforces it on every replica and `Node` runs the
     /// same check before signing, so a refusal never reaches the network.
     pub fn check_location_change(
@@ -109,14 +166,7 @@ impl State {
         retire: bool,
         reason: &str,
     ) -> Result<(), String> {
-        require(
-            self.roles.get(by) == Some(&Role::Admin),
-            "only admin retires locations",
-        )?;
-        require(
-            code != OTHER_LOCATION && self.locations.iter().any(|l| l.code == code),
-            format!("unknown location {code}"),
-        )?;
+        self.admin_on_location(by, code, "retires")?;
         require(
             !reason.trim().is_empty(),
             "a retire or restore needs a reason",
@@ -126,11 +176,97 @@ impl State {
             return require(retired, format!("{code} is not retired"));
         }
         require(!retired, format!("{code} is already retired"))?;
+        self.not_pending_removal(code)?;
         let n = self.open_issues_at(code);
         require(
             n == 0,
             format!("{code} has {n} open issue{}", if n == 1 { "" } else { "s" }),
         )
+    }
+
+    /// THE rule for every location-changing body (`ts` is the event's): the reducer applies it
+    /// on every replica and `Node` checks it before signing. Other bodies pass.
+    pub fn check_location_body(&self, by: &Key, body: &Body, ts: u64) -> Result<(), String> {
+        match body {
+            Body::LocationRetire {
+                code,
+                retired,
+                reason,
+            } => self.check_location_change(by, code, *retired, reason),
+            Body::LocationEdit { code, label, group } => {
+                self.admin_on_location(by, code, "edits")?;
+                self.not_pending_removal(code)?;
+                require(
+                    !label.trim().is_empty() && !group.trim().is_empty(),
+                    "a location needs a name and a group",
+                )
+            }
+            Body::LocationRemove { code, undo, reason } => {
+                self.admin_on_location(by, code, "removes")?;
+                require(!reason.trim().is_empty(), "a remove or undo needs a reason")?;
+                if !*undo {
+                    self.not_pending_removal(code)?;
+                    return require(
+                        !self.ever_used(code),
+                        format!("{code} has had reports: retire it instead"),
+                    );
+                }
+                let r = self
+                    .pending_removal
+                    .get(code)
+                    .ok_or_else(|| format!("{code} is not pending removal"))?;
+                require(
+                    ts < r.removes_at(),
+                    format!(
+                        "{code} is removed: the {}-day undo window has ended",
+                        REMOVAL_COOLDOWN / DAY
+                    ),
+                )
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Apply a location change `check_location_body` accepted.
+    fn apply_location_body(&mut self, by: Key, body: &Body, ts: u64) {
+        match body {
+            Body::LocationRetire {
+                code,
+                retired: true,
+                reason,
+            } => {
+                self.retired.insert(code.clone(), reason.clone());
+            }
+            Body::LocationRetire { code, .. }
+            | Body::LocationRemove {
+                code, undo: true, ..
+            } => {
+                self.retired.remove(code);
+                self.pending_removal.remove(code);
+            }
+            Body::LocationRemove { code, reason, .. } => {
+                // never both: a retired place that leaves the list stops being "retired"
+                self.retired.remove(code);
+                self.pending_removal.insert(
+                    code.clone(),
+                    Removal {
+                        by,
+                        since: ts,
+                        reason: reason.clone(),
+                    },
+                );
+            }
+            Body::LocationEdit { code, label, group } => {
+                if let Some(l) = self.locations.iter_mut().find(|l| &l.code == code) {
+                    if &l.label != label {
+                        let old = std::mem::replace(&mut l.label, label.clone());
+                        self.renamed_from.insert(code.clone(), old);
+                    }
+                    l.group.clone_from(group);
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -158,7 +294,7 @@ fn progress_by(by: Key, ts: u64, note: &str, next_step: &str, eta_h: u32) -> Opt
     })
 }
 
-fn require(cond: bool, msg: impl Into<String>) -> Result<(), String> {
+pub(crate) fn require(cond: bool, msg: impl Into<String>) -> Result<(), String> {
     if cond {
         Ok(())
     } else {
@@ -274,17 +410,9 @@ fn apply(s: &mut State, e: &Event) -> Result<(), String> {
             }
             Ok(())
         }
-        LocationRetire {
-            code,
-            retired,
-            reason,
-        } => {
-            s.check_location_change(&a, code, *retired, reason)?;
-            if *retired {
-                s.retired.insert(code.clone(), reason.clone());
-            } else {
-                s.retired.remove(code);
-            }
+        b @ (LocationRetire { .. } | LocationEdit { .. } | LocationRemove { .. }) => {
+            s.check_location_body(&a, b, e.u.ts)?;
+            s.apply_location_body(a, b, e.u.ts);
             Ok(())
         }
         Report {
@@ -311,6 +439,7 @@ fn apply(s: &mut State, e: &Event) -> Result<(), String> {
                     !s.retired.contains_key(location),
                     format!("location {location} is retired"),
                 )?;
+                s.not_pending_removal(location)?;
             }
             let open = s
                 .issues

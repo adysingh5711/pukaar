@@ -117,3 +117,56 @@ fn location_retire_reason_over_the_text_cap_is_dropped() {
 fn location_retire_texts_include_the_reason() {
     assert_eq!(retire("dry").texts(), vec!["W-03", "dry"]);
 }
+
+fn edit(label: &str) -> Body {
+    Body::LocationEdit {
+        code: "W-03".into(),
+        label: label.into(),
+        group: "Water points".into(),
+    }
+}
+
+fn remove(reason: &str) -> Body {
+    Body::LocationRemove {
+        code: "W-03".into(),
+        undo: false,
+        reason: reason.into(),
+    }
+}
+
+/// v0.1.1 variants come after LocationRetire (15), so every v0.1.0 event keeps its tag.
+#[test]
+fn location_edit_and_remove_are_appended_after_location_retire() {
+    let tag = |b: &Body| postcard::to_allocvec(b).unwrap()[0];
+    assert_eq!(tag(&retire("dry")), 15);
+    assert_eq!(tag(&edit("Tap")), 16);
+    assert_eq!(tag(&remove("never used")), 17);
+}
+
+#[test]
+fn location_edit_and_remove_round_trip() {
+    let k = new_key();
+    for body in [edit("Tap, dining hall"), remove("typo")] {
+        let mut u = report(&k, "x");
+        u.body = body;
+        let e = sign(&k, u);
+        assert_eq!(decode(&e.bytes).unwrap(), e);
+    }
+}
+
+#[test]
+fn location_edit_and_remove_texts_over_the_cap_are_dropped() {
+    let k = new_key();
+    let long = "r".repeat(MAX_TEXT + 1);
+    for body in [edit(&long), remove(&long)] {
+        let mut u = report(&k, "x");
+        u.body = body;
+        assert_eq!(decode(&sign(&k, u).bytes), Err(DecodeError::TextTooLong));
+    }
+}
+
+#[test]
+fn location_edit_and_remove_texts_cover_every_field() {
+    assert_eq!(edit("Tap").texts(), vec!["W-03", "Tap", "Water points"]);
+    assert_eq!(remove("typo").texts(), vec!["W-03", "typo"]);
+}

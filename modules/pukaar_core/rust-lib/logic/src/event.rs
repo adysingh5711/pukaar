@@ -123,6 +123,21 @@ pub enum Body {
         retired: bool,
         reason: String,
     },
+    /// Admin only. New name and group for an existing location; the code is its identity and
+    /// never changes. Old issues show the new name.
+    LocationEdit {
+        code: String,
+        label: String,
+        group: String,
+    },
+    /// Admin only, and only for a location no report has ever named. Starts a 30-day undo
+    /// window (`undo: true` ends it early); after that the location is hidden for good. Never a
+    /// delete: this event and the location's history stay in everyone's log.
+    LocationRemove {
+        code: String,
+        undo: bool,
+        reason: String,
+    },
 }
 
 fn location_texts(ls: &[Location]) -> impl Iterator<Item = &str> {
@@ -168,7 +183,10 @@ impl Body {
             | Confirm { note: t, .. }
             | Comment { text: t, .. }
             | Checkpoint { lez_tx: t, .. } => vec![t],
-            LocationRetire { code, reason, .. } => vec![code, reason],
+            LocationRetire { code, reason, .. } | LocationRemove { code, reason, .. } => {
+                vec![code, reason]
+            }
+            LocationEdit { code, label, group } => vec![code, label, group],
             MarkDuplicate { .. } => vec![],
         }
     }
@@ -251,9 +269,9 @@ pub fn decode(bytes: &[u8]) -> Result<Event, DecodeError> {
     // capping the rest would retroactively reject already-shared events.
     let over = match &u.body {
         Body::Report { text, landmark, .. } => [text, landmark].iter().any(|t| t.len() > MAX_TEXT),
-        Body::LocationRetire { code, reason, .. } => {
-            [code, reason].iter().any(|t| t.len() > MAX_TEXT)
-        }
+        b @ (Body::LocationRetire { .. }
+        | Body::LocationEdit { .. }
+        | Body::LocationRemove { .. }) => b.texts().iter().any(|t| t.len() > MAX_TEXT),
         _ => false,
     };
     if over {

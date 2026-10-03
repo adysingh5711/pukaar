@@ -4,12 +4,13 @@
 use crate::checkpoint::{checkpoint_now, root_for};
 use crate::event::{
     decode, sign, Body, DecodeError, Event, Id, Key, Location, Unsigned, MAX_EVENT_BYTES, MAX_TEXT,
-    VERSION, ZERO,
+    OTHER_LOCATION, VERSION, ZERO,
 };
-use crate::reducer::{reduce, Issue, State, Status};
+use crate::reducer::{reduce, require, Issue, State, Status};
 use crate::store::{Accept, Store};
 use ed25519_dalek::SigningKey;
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
 
 /// Heads messages to hear after a restore before trusting that our history is back.
 pub const HEADS_TO_SETTLE: u32 = 3;
@@ -204,15 +205,24 @@ impl Node {
         .to_string()
     }
 
+    /// `now` (unix seconds) decides which removals are over: those leave `locations` for
+    /// `removed_locations`, the admin's change log.
     #[must_use]
-    pub fn site_info_json(&self) -> String {
+    pub fn site_info_json(&self, now: u64) -> String {
         let s = self.state();
+        let (removed, listed): (Vec<&Location>, Vec<&Location>) =
+            s.locations.iter().partition(|l| {
+                s.pending_removal
+                    .get(&l.code)
+                    .is_some_and(|r| r.is_done(now))
+            });
         let member = |k: &Key| json!({ "key": hex::encode(k), "fingerprint": fingerprint(k), "name": s.names.get(k) });
         json!({
             "site": hex::encode(self.store.site),
             "name": s.config.name,
             "categories": s.config.categories,
-            "locations": s.locations.iter().map(|l| location_json(&s, l)).collect::<Vec<_>>(),
+            "locations": listed.into_iter().map(|l| location_json(&s, l, now)).collect::<Vec<_>>(),
+            "removed_locations": removed.into_iter().map(|l| removed_json(&s, l)).collect::<Vec<_>>(),
             "members": s.roles.iter().map(|(k, r)| { let mut m = member(k); m["role"] = json!(format!("{r:?}")); m }).collect::<Vec<_>>(),
             "pending": s.pending_members.iter().map(member).collect::<Vec<_>>(),
             "sla_ack_h": s.config.sla_ack_h,
@@ -261,8 +271,13 @@ impl Node {
         )
     }
 
-    /// Retire a location. Same rule as the reducer (`State::check_location_change`), checked
-    /// first so a refusal like "W-03 has 2 open issues" publishes nothing.
+    /// Sign a location change only if the rules (`State::check_location_body`) accept it, so a
+    /// refusal like "W-03 has 2 open issues" publishes nothing.
+    fn publish_location(&mut self, body: Body, ts: u64) -> Result<Event, String> {
+        self.state().check_location_body(&self.me(), &body, ts)?;
+        self.publish(body, ts)
+    }
+
     pub fn retire_location(&mut self, code: &str, reason: &str, ts: u64) -> Result<Event, String> {
         self.set_location_retired(code, true, reason, ts)
     }
@@ -278,17 +293,57 @@ impl Node {
         reason: &str,
         ts: u64,
     ) -> Result<Event, String> {
-        let (code, reason) = (code.trim(), reason.trim());
-        self.state()
-            .check_location_change(&self.me(), code, retired, reason)?;
-        self.publish(
-            Body::LocationRetire {
-                code: code.into(),
-                retired,
-                reason: reason.into(),
-            },
-            ts,
-        )
+        let body = Body::LocationRetire {
+            code: code.trim().into(),
+            retired,
+            reason: reason.trim().into(),
+        };
+        self.publish_location(body, ts)
+    }
+
+    /// New name and group; the code never changes (it is the location's identity).
+    pub fn edit_location(
+        &mut self,
+        code: &str,
+        label: &str,
+        group: &str,
+        ts: u64,
+    ) -> Result<Event, String> {
+        let body = Body::LocationEdit {
+            code: code.trim().into(),
+            label: label.trim().into(),
+            group: group.trim().into(),
+        };
+        self.publish_location(body, ts)
+    }
+
+    /// Start removing a never-used location (see `REMOVAL_COOLDOWN`).
+    pub fn remove_location(&mut self, code: &str, reason: &str, ts: u64) -> Result<Event, String> {
+        self.set_location_removed(code, false, reason, ts)
+    }
+
+    pub fn undo_remove_location(
+        &mut self,
+        code: &str,
+        reason: &str,
+        ts: u64,
+    ) -> Result<Event, String> {
+        self.set_location_removed(code, true, reason, ts)
+    }
+
+    fn set_location_removed(
+        &mut self,
+        code: &str,
+        undo: bool,
+        reason: &str,
+        ts: u64,
+    ) -> Result<Event, String> {
+        let body = Body::LocationRemove {
+            code: code.trim().into(),
+            undo,
+            reason: reason.trim().into(),
+        };
+        self.publish_location(body, ts)
     }
 
     /// After `spel anchor` succeeds: publish the checkpoint so every client can check it.
@@ -406,23 +461,60 @@ pub fn action_body(
     })
 }
 
-/// `{"Genesis": {...}}`, the serde shape of `Body::Genesis`.
 /// The create form's placeholder: a genesis still carrying it names nobody.
 const NAME_PLACEHOLDER: &str = "<your name>";
 
-/// Staff are always named, so a new site's admin must be too. Checked here, at creation,
-/// not in the reducer: replaying an already-shared genesis must never change its outcome.
+/// The first value listed twice.
+fn twice<'a>(mut it: impl Iterator<Item = &'a str>) -> Option<&'a str> {
+    let mut seen = BTreeSet::new();
+    it.find(|x| !seen.insert(*x))
+}
+
+/// `{"Genesis": {...}}` (the serde shape of `Body::Genesis`) -> the body, if it passes the
+/// site-setup rules. They are checked here, at creation, not in the reducer: replaying an
+/// already-shared genesis must never change its outcome. Staff are always named, so a new
+/// site's admin must be too. Size limits are `create_site`'s (it signs within them).
 pub fn genesis_from_json(json: &str) -> Result<Body, String> {
-    match serde_json::from_str::<Body>(json) {
-        Ok(Body::Genesis { ref admin_name, .. })
-            if matches!(admin_name.trim(), "" | NAME_PLACEHOLDER) =>
-        {
-            Err("the admin must be named".into())
-        }
-        Ok(b @ Body::Genesis { .. }) => Ok(b),
-        Ok(_) => Err("not a genesis body".into()),
-        Err(e) => Err(e.to_string()),
+    let body: Body = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    let Body::Genesis {
+        name,
+        admin_name,
+        categories,
+        locations,
+        ..
+    } = &body
+    else {
+        return Err("not a genesis body".into());
+    };
+    require(
+        !matches!(admin_name.trim(), "" | NAME_PLACEHOLDER),
+        "the admin must be named",
+    )?;
+    require(!name.trim().is_empty(), "the site needs a name")?;
+    require(!categories.is_empty(), "add at least one category")?;
+    require(
+        categories.iter().all(|c| !c.trim().is_empty()),
+        "a category can't be empty",
+    )?;
+    if let Some(c) = twice(categories.iter().map(|c| c.trim())) {
+        return Err(format!("category {c} is listed twice"));
     }
+    for l in locations {
+        let code = l.code.trim();
+        require(!code.is_empty(), "every location needs a code")?;
+        require(
+            code != OTHER_LOCATION,
+            format!("the code {OTHER_LOCATION} is reserved for places not on the list"),
+        )?;
+        require(
+            !l.label.trim().is_empty() && !l.group.trim().is_empty(),
+            format!("location {code} needs a name and a group"),
+        )?;
+    }
+    if let Some(c) = twice(locations.iter().map(|l| l.code.trim())) {
+        return Err(format!("location code {c} is used twice"));
+    }
+    Ok(body)
 }
 
 /// 6 hex chars, read aloud at check-in to match a pending member.
@@ -461,13 +553,36 @@ fn past(now: u64, ts: u64, h: u32) -> bool {
     deadline(ts, h).is_some_and(|d| now > d)
 }
 
-/// A location plus whether it is retired (and why) and how many issues still block retiring it.
-fn location_json(s: &State, l: &Location) -> Value {
+/// A location plus its state (active, retired, pending_removal or removed at `now`), why, when a
+/// removal completes (0 = none), whether any report ever named it, and its open issues.
+fn location_json(s: &State, l: &Location, now: u64) -> Value {
+    let removal = s.pending_removal.get(&l.code);
+    let retired = s.retired.get(&l.code);
     let mut v = json!(l);
-    v["retired"] = json!(s.retired.contains_key(&l.code));
-    v["retired_reason"] = json!(s.retired.get(&l.code).map_or("", String::as_str));
+    v["state"] = json!(match (removal, retired) {
+        (Some(r), _) if r.is_done(now) => "removed",
+        (Some(_), _) => "pending_removal",
+        (None, Some(_)) => "retired",
+        (None, None) => "active",
+    });
+    v["retired"] = json!(retired.is_some());
+    v["retired_reason"] = json!(retired.map_or("", String::as_str));
+    v["removal_reason"] = json!(removal.map_or("", |r| r.reason.as_str()));
+    v["removes_at"] = json!(removal.map_or(0, |r| r.removes_at()));
+    v["renamed_from"] = json!(s.renamed_from.get(&l.code));
+    v["ever_used"] = json!(s.ever_used(&l.code));
     v["open_issues"] = json!(s.open_issues_at(&l.code));
     v
+}
+
+/// A change-log row for a location whose removal is over.
+fn removed_json(s: &State, l: &Location) -> Value {
+    let r = &s.pending_removal[&l.code];
+    json!({
+        "code": l.code, "label": l.label, "group": l.group,
+        "by": hex::encode(r.by), "by_name": s.names.get(&r.by),
+        "reason": r.reason, "since": r.since, "removed_at": r.removes_at(),
+    })
 }
 
 fn issue_json(s: &State, i: &Issue, now: u64) -> Value {
@@ -495,6 +610,7 @@ fn issue_json(s: &State, i: &Issue, now: u64) -> Value {
         "category": i.category,
         "location": i.location,
         "location_label": location_label,
+        "location_renamed_from": s.renamed_from.get(&i.location),
         "location_retired": s.retired.contains_key(&i.location),
         "landmark": i.landmark,
         "text": i.text,
@@ -533,6 +649,8 @@ pub fn kind_name(b: &Body) -> &'static str {
         Comment { .. } => "comment",
         Checkpoint { .. } => "checkpoint",
         LocationRetire { .. } => "location_retire",
+        LocationEdit { .. } => "location_edit",
+        LocationRemove { .. } => "location_remove",
     }
 }
 
