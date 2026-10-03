@@ -30,6 +30,9 @@ Item {
     // A restored identity waits for its own history before signing anything (core refuses meanwhile).
     readonly property bool syncing: !!me.syncing_own_history
     readonly property string otherLabel: "Other (not on the list)"
+    // Four board columns (160 each) + the 340 timeline pane + gaps and margins need ~1040 px;
+    // below that the pane replaces the board instead of squeezing it.
+    readonly property bool narrow: width < 1040
 
     // ---- design tokens: the only place a colour or the stage->colour map is spelled out ----
     readonly property color dangerColor: "#d73a49"
@@ -113,6 +116,7 @@ Item {
             return statuses.indexOf(i.status) >= 0 && (!onlyMine || i.reporter === me.key)
         })
     }
+    function shortId(hex) { return String(hex).substr(0, 8) + "…" + String(hex).substr(-4) }
     function who(key, name) { return name ? name : "pseudonym " + String(key).substr(0, 6) }
     function when(ts) { return new Date(ts * 1000).toLocaleString(Qt.locale(), "d MMM HH:mm") }
     function place(i) {
@@ -266,13 +270,22 @@ Item {
         anchors.margins: 12
         spacing: 8
 
-        RowLayout {
+        Flow {   // wraps onto a second row instead of overflowing a narrow window
+            id: header
+            Layout.fillWidth: true
+            spacing: 12
             Label { text: "Pukaar"; font.pixelSize: 20; font.bold: true }
             Label { text: root.inSite ? (root.info.name || "") : "not in a site yet"; opacity: 0.7 }
-            Item { Layout.fillWidth: true }
-            TextEdit {   // selectable, so the admin can copy the site id to share
-                visible: root.inSite; readOnly: true; selectByMouse: true
-                text: "site " + (root.me.site || ""); font.pixelSize: 10; color: root.mutedColor
+            Row {   // the 64-hex id is long: show the short form, Copy puts the full one on the clipboard
+                visible: root.inSite
+                spacing: 4
+                Label { anchors.verticalCenter: parent.verticalCenter; text: "site " + root.shortId(root.me.site); font.pixelSize: 10; color: root.mutedColor }
+                Button {
+                    text: "Copy"; flat: true
+                    Accessible.name: "Copy the full site id"
+                    onClicked: { clip.text = root.me.site; clip.selectAll(); clip.copy() }
+                }
+                TextEdit { id: clip; visible: false }
             }
             Label {   // Delivery bring-up status from pukaar_core; errors stay visible until it recovers
                 text: "delivery " + (root.me.delivery || "…")
@@ -280,6 +293,8 @@ Item {
             }
             Label {
                 visible: root.inSite
+                width: Math.min(implicitWidth, header.width)
+                elide: Text.ElideRight
                 text: "you: " + (root.me.name || "pseudonym") + " · " + (root.me.fingerprint || "") + " · "
                       + (root.me.role || "pending: read your fingerprint at the kiosk")
             }
@@ -403,36 +418,45 @@ Item {
                 CheckBox { text: "Only my reports"; checked: root.onlyMine; onToggled: root.onlyMine = checked }
                 RowLayout {
                     spacing: 8
+                    Layout.fillWidth: true
                     Layout.fillHeight: true
-                    Repeater {
-                        model: [
-                            { title: "Reported", statuses: ["Open", "Acknowledged"] },
-                            { title: "In progress", statuses: ["InProgress", "AwaitingConfirmation"] },
-                            { title: "Resolved", statuses: ["ConfirmedResolved"] },
-                            { title: "Closed without fix", statuses: ["ClosedWontfix", "Duplicate"] }
-                        ]
-                        delegate: ColumnLayout {
-                            id: col
-                            required property var modelData
-                            Layout.fillHeight: true
-                            Layout.preferredWidth: 200
-                            Label { text: col.modelData.title + " (" + root.inColumn(col.modelData.statuses).length + ")"; font.bold: true }
-                            ListView {
+                    RowLayout {   // the four columns; hidden behind the pane on a narrow window
+                        visible: !(root.narrow && root.selected)
+                        spacing: 8
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Repeater {
+                            model: [
+                                { title: "Reported", statuses: ["Open", "Acknowledged"] },
+                                { title: "In progress", statuses: ["InProgress", "AwaitingConfirmation"] },
+                                { title: "Resolved", statuses: ["ConfirmedResolved"] },
+                                { title: "Closed without fix", statuses: ["ClosedWontfix", "Duplicate"] }
+                            ]
+                            delegate: ColumnLayout {
+                                id: col
+                                required property var modelData
                                 Layout.fillWidth: true
                                 Layout.fillHeight: true
-                                clip: true
-                                spacing: 4
-                                model: root.inColumn(col.modelData.statuses)
-                                delegate: IssueCard {
-                                    required property var modelData
-                                    issue: modelData
-                                    placeText: root.place(modelData)
-                                    hintText: root.hint(modelData)
-                                    overdue: root.flagged(modelData)
-                                    tint: root.stageColor(modelData.status)
-                                    alertColor: root.dangerColor
-                                    mutedColor: root.mutedColor
-                                    onOpened: root.openIssue(modelData.id)
+                                Layout.preferredWidth: 1   // equal shares of the width...
+                                Layout.minimumWidth: 160   // ...but never thinner than this
+                                Label { text: col.modelData.title + " (" + root.inColumn(col.modelData.statuses).length + ")"; font.bold: true }
+                                ListView {
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
+                                    clip: true
+                                    spacing: 4
+                                    model: root.inColumn(col.modelData.statuses)
+                                    delegate: IssueCard {
+                                        required property var modelData
+                                        issue: modelData
+                                        placeText: root.place(modelData)
+                                        hintText: root.hint(modelData)
+                                        overdue: root.flagged(modelData)
+                                        tint: root.stageColor(modelData.status)
+                                        alertColor: root.dangerColor
+                                        mutedColor: root.mutedColor
+                                        onOpened: root.openIssue(modelData.id)
+                                    }
                                 }
                             }
                         }
@@ -442,7 +466,9 @@ Item {
                     ColumnLayout {
                         id: detail
                         visible: root.selected !== null
-                        Layout.fillWidth: true
+                        Layout.fillWidth: root.narrow   // wide: a fixed pane beside the board; narrow: it takes over
+                        Layout.preferredWidth: root.narrow ? -1 : 340
+                        Layout.minimumWidth: 260
                         Layout.fillHeight: true
                         property var issue: root.selected ? root.selected.issue : ({})
                         property string st: issue.status || ""
@@ -453,8 +479,12 @@ Item {
                             root.run("act", [issue.id, a, note.text, nextStep.text, eta | 0],
                                      function () { note.text = ""; nextStep.text = "" })
                         }
-                        Label { text: detail.issue.category + " · " + root.place(detail.issue) + " · " + detail.issue.stage; font.bold: true; wrapMode: Text.Wrap; Layout.fillWidth: true }
-                        Label { text: detail.issue.text; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Label { text: detail.issue.category + " · " + root.place(detail.issue) + " · " + detail.issue.stage; font.bold: true; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                            Button { text: root.narrow ? "← Board" : "Close"; flat: true; onClicked: root.closeIssue() }
+                        }
+                        Label { text: detail.issue.text || ""; wrapMode: Text.Wrap; Layout.fillWidth: true }
                         ListView {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
@@ -523,7 +553,6 @@ Item {
                                                         function () { dupOf.target = "" })
                                 }
                             }
-                            Button { text: "Close"; flat: true; onClicked: root.closeIssue() }
                         }
                     }
                 }
