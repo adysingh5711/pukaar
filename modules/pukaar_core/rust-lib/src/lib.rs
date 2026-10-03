@@ -283,7 +283,11 @@ fn on_wire(channel: &str, bytes: &[u8]) {
     }
     match Wire::decode(bytes) {
         Some(Wire::Event(b)) => {
-            *dirty |= matches!(node.receive(&b), Ok(Accept::New));
+            // fork evidence is held and saved too, and a winning twin changes the board
+            *dirty |= matches!(
+                node.receive(&b),
+                Ok(Accept::New | Accept::Fork | Accept::Rejected(_))
+            );
         }
         Some(Wire::Heads(theirs)) => {
             *dirty |= node.observe_heads(&theirs); // true: a restore's wait just ended
