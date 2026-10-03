@@ -8,13 +8,14 @@ import QtQuick.Layouts
 Item {
     id: root
     property var me: ({})
-    readonly property var noInfo: ({ categories: [], locations: [], members: [], pending: [] })
+    readonly property var noInfo: ({ categories: [], locations: [], removed_locations: [], members: [], pending: [] })
     property var info: noInfo
     // The lists of site_info live in properties of their own, written only when their content
     // changed: info itself changes on every received event (it carries an event count), and a
     // rebuilt model would wipe typed text in the Members rows and reset the Report combos.
     property var categories: []
     property var locations: []
+    property var removedLocations: []    // the admin's change log: places whose 30-day removal is over
     property var members: []
     property var pending: []
     property var groupNames: []             // place groups in first-seen order; written only when they change
@@ -117,7 +118,7 @@ Item {
     function keep(name, value) { if (JSON.stringify(value) !== JSON.stringify(root[name])) root[name] = value }
     function setInfo(i) {
         info = i
-        keep("categories", i.categories); keep("locations", i.locations)
+        keep("categories", i.categories); keep("locations", i.locations); keep("removedLocations", i.removed_locations || [])
         keep("members", i.members); keep("pending", i.pending)
         keep("groupNames", groupsOf(i.locations))
     }
@@ -139,13 +140,14 @@ Item {
         return typeof v === "string" && (v.indexOf("error:") === 0 || v.indexOf("rejected:") === 0)
     }
     // Every action goes through here. `onOk(reply)` runs only when the core accepted it, so
-    // typed text survives a refusal and the user can fix it and retry.
-    function run(method, args, onOk) {
+    // typed text survives a refusal and the user can fix it and retry. `hint`, if given, is
+    // added to a refusal that is about size ("too long"), saying what to do instead.
+    function run(method, args, onOk, hint) {
         if (busy) return
         busy = true
         call(method, args, function (r) {
             busy = false
-            message = failed(r) ? r : ""
+            message = !failed(r) ? "" : hint && r.indexOf("too long") >= 0 ? r + ". " + hint : r
             refresh()
             if (!failed(r) && onOk) onOk(r)
         })
@@ -199,6 +201,13 @@ Item {
         if (i.location_retired) p += " (retired)"
         return i.landmark ? p + " (" + i.landmark + ")" : p
     }
+    function plural(n, word) { return n + " " + word + (n === 1 ? "" : "s") }
+    // A place that takes no reports, in words: "retired" or "removes in 12 days" ("" = active).
+    function placeState(l) {
+        if (l.state === "pending_removal")
+            return "removes in " + plural(Math.max(0, Math.ceil((l.removes_at - Date.now() / 1000) / 86400)), "day")
+        return l.state === "retired" ? "retired" : ""
+    }
     function dueHours(p) { return Math.round((p.due_ts - Date.now() / 1000) / 3600) }
     function isOverdue(i) {
         var p = i.progress
@@ -251,7 +260,7 @@ Item {
     function placesView(query, group, withRetired) {
         var q = query.trim().toLowerCase()
         var shown = locations.filter(function (l) {
-            return (withRetired || !l.retired) && (group === "" || l.group === group)
+            return (withRetired || l.state === "active") && (group === "" || l.group === group)
                 && (q === "" || (l.code + " " + l.label + " " + l.group).toLowerCase().indexOf(q) >= 0)
         })
         var out = []
@@ -262,7 +271,7 @@ Item {
         var l = locations.filter(function (x) { return x.code === code })[0]
         return l ? l.code + "  " + l.label : code
     }
-    function openIssuesText(n) { return n + (n === 1 ? " open issue" : " open issues") }
+    function openIssuesText(n) { return plural(n, "open issue") }
 
     // ---- controls: one frame (border token, blue when focused) shared by every control, so no
     // field, button, combo or box is ever borderless whatever style the host uses ----
@@ -610,9 +619,12 @@ Item {
         }
         Banner {
             visible: pb.retiredPlace !== null && showRetired.checked
-            text: pb.retiredPlace ? pb.retiredPlace.code + " " + pb.retiredPlace.label + " is retired"
-                + (pb.retiredPlace.retired_reason ? " (reason: " + pb.retiredPlace.retired_reason + ")" : "")
-                + ". If the problem is real, report it as Other and describe the place, or ask the admin to restore it." : ""
+            readonly property bool removing: !!pb.retiredPlace && pb.retiredPlace.state === "pending_removal"
+            text: !pb.retiredPlace ? "" : pb.retiredPlace.code + " " + pb.retiredPlace.label
+                + (removing ? " is being removed (" + root.placeState(pb.retiredPlace) + ")" : " is retired")
+                + (pb.retiredPlace.retired_reason || pb.retiredPlace.removal_reason ? " (reason: " + (pb.retiredPlace.retired_reason || pb.retiredPlace.removal_reason) + ")" : "")
+                + ". If the problem is real, report it as Other and describe the place, or ask the admin to "
+                + (removing ? "undo the removal." : "restore it.")
             buttonText: "Report as Other at this spot"
             onActivated: pb.reportOther()
         }
@@ -696,39 +708,147 @@ Item {
                 onSubmitted: root.run("site_join", [joinField.text])
             }
             Heading { text: "Create a site (site admin only)" }
-            Note { text: "Edit the categories and places below, then give your name." }
-            FormRow {
-                label: "Site settings (JSON)"
-                FramedTextArea {
-                    id: genesis
-                    name: "Site settings, JSON"
-                    boxHeight: 160
-                    text: '{"Genesis":{"name":"Dhun",'
-                        + '"categories":["water","waste","power","access","rooms","kitchen","safety"],'
-                        + '"locations":['
-                        + '{"code":"W-01","label":"Tap, dining hall","group":"Water points"},'
-                        + '{"code":"W-02","label":"Tap, tent row A","group":"Water points"},'
-                        + '{"code":"B-01","label":"Bin, main path","group":"Bins"},'
-                        + '{"code":"P-01","label":"Gate to the farm path","group":"Paths"},'
-                        + '{"code":"R-01","label":"Tent 1","group":"Rooms and tents"}],'
-                        + '"sla_ack_h":12,"sla_fix_h":48,"max_open_per_author":10}}'
+            Note { text: "Nothing is published until you press Create site. Places can be added later too, in Members." }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                FormRow {
+                    label: "Site name"
+                    FramedField { id: siteName; Layout.fillWidth: true; maximumLength: 500; Accessible.name: "Site name"; placeholderText: "e.g. Dhun relief camp" }
+                }
+                FormRow {   // staff are always named: this goes into the genesis as the admin's name
+                    label: "Your name, as residents will see it"
+                    FramedField { id: adminName; Layout.fillWidth: true; maximumLength: 500; Accessible.name: "Your name" }
                 }
             }
-            LabelledField {   // staff are always named: the name goes into the genesis, not the JSON above
-                id: adminField
-                label: "Your name, as residents will see it"
-                buttonText: "Create site"
-                buttonEnabled: adminField.text.trim() !== ""
-                onSubmitted: {
-                    var g
-                    try {
-                        g = JSON.parse(genesis.text)
-                        g.Genesis.admin_name = adminField.text.trim()
-                    } catch (e) {
-                        root.message = "error: site settings: " + e
-                        return
+            FormRow {
+                label: "Categories (what can go wrong)"
+                Flow {
+                    Layout.fillWidth: true
+                    spacing: 6
+                    Repeater {
+                        model: setup.categories
+                        delegate: FramedButton {
+                            required property string modelData
+                            required property int index
+                            text: modelData + "  \u00d7"
+                            Accessible.name: "Remove category " + modelData
+                            onClicked: setup.categories = setup.categories.filter(function (c, i) { return i !== index })
+                        }
                     }
-                    root.run("site_create", [JSON.stringify(g)])
+                }
+            }
+            LabelledField {
+                id: newCategory
+                label: "Add a category"
+                placeholder: "e.g. electricity"
+                buttonText: "Add"
+                buttonEnabled: setup.canAddCategory
+                onSubmitted: { setup.categories = setup.categories.concat([newCategory.text.trim()]); newCategory.text = "" }
+            }
+            FormRow {
+                label: "Places (" + setup.places.count + ")"
+                Note {
+                    color: root.mutedColor
+                    text: "Each place has a group (for the picker), a short code people can say aloud, and a name. Codes can't change later."
+                }
+                RowLayout {   // column titles: the placeholders vanish once a row is filled
+                    visible: setup.places.count > 0
+                    spacing: 6
+                    Label { Layout.preferredWidth: 170; text: "Group"; font.pointSize: root.smallSize; color: root.mutedColor }
+                    Label { Layout.preferredWidth: 90; text: "Code"; font.pointSize: root.smallSize; color: root.mutedColor }
+                    Label { text: "Name"; font.pointSize: root.smallSize; color: root.mutedColor }
+                }
+                Repeater {
+                    model: setup.places
+                    delegate: RowLayout {
+                        id: draftRow
+                        required property int index
+                        required property string group
+                        required property string code
+                        required property string label
+                        Layout.fillWidth: true
+                        spacing: 6
+                        // Writes straight into the ListModel, so other rows keep their typed text.
+                        FramedField { Layout.preferredWidth: 170; maximumLength: 500; text: draftRow.group; placeholderText: "group"; Accessible.name: "Place " + (draftRow.index + 1) + " group"; onTextEdited: setup.edit(draftRow.index, "group", text) }
+                        FramedField { Layout.preferredWidth: 90; maximumLength: 500; text: draftRow.code; placeholderText: "code"; Accessible.name: "Place " + (draftRow.index + 1) + " code"; onTextEdited: setup.edit(draftRow.index, "code", text) }
+                        FramedField { Layout.fillWidth: true; maximumLength: 500; text: draftRow.label; placeholderText: "name"; Accessible.name: "Place " + (draftRow.index + 1) + " name"; onTextEdited: setup.edit(draftRow.index, "label", text) }
+                        FramedButton { text: "\u00d7"; Accessible.name: "Remove place " + (draftRow.index + 1); onClicked: setup.places.remove(draftRow.index) }
+                    }
+                }
+                Flow {
+                    Layout.fillWidth: true
+                    spacing: 6
+                    FramedButton { text: "Add a place"; onClicked: setup.places.append({ group: setup.lastGroup(), code: "", label: "" }) }
+                    FramedButton { text: "Start from the Dhun sample"; onClicked: setup.fillSample() }
+                    FramedButton { visible: setup.places.count > 0; text: "Clear places"; onClicked: setup.places.clear() }
+                }
+            }
+            FramedCheck { id: advanced; text: "Advanced: edit the settings as JSON"; onToggled: if (checked) advancedJson.text = setup.genesisJson() }
+            FramedTextArea {
+                id: advancedJson
+                visible: advanced.checked
+                name: "Site settings, JSON"
+                boxHeight: 160
+            }
+            ActionButton {
+                text: "Create site"
+                allowed: advanced.checked ? adminName.text.trim() !== "" : setup.problem === ""
+                onClicked: root.run("site_create", [advanced.checked ? setup.withAdmin(advancedJson.text) : setup.genesisJson()], null,
+                                    "Start with fewer places, then add the rest after creating, via Members \u2192 Add a location.")
+            }
+            Note { visible: !advanced.checked && setup.problem !== ""; color: root.mutedColor; text: setup.problem }
+            // The draft and its checks. The core repeats every check (it is the authority); these
+            // only say what's missing before anyone presses the button.
+            QtObject {
+                id: setup
+                property var categories: ["water", "waste", "power", "access", "rooms", "kitchen", "safety"]
+                property ListModel places: ListModel {}
+                property int edits: 0          // bumped on every change: ListModel.get() alone is not watched
+                function edit(i, role, text) { places.setProperty(i, role, text); edits++ }
+                readonly property bool canAddCategory: newCategory.text.trim() !== "" && categories.indexOf(newCategory.text.trim()) < 0
+                function lastGroup() { return places.count > 0 ? places.get(places.count - 1).group : "" }
+                function fillSample() {
+                    var sample = [["Water points", "W-01", "Tap, dining hall"], ["Water points", "W-02", "Tap, tent row A"],
+                                  ["Bins", "B-01", "Bin, main path"], ["Paths", "P-01", "Gate to the farm path"],
+                                  ["Rooms and tents", "R-01", "Tent 1"]]
+                    places.clear()
+                    sample.forEach(function (p) { places.append({ group: p[0], code: p[1], label: p[2] }) })
+                    edits++
+                }
+                function draft() {
+                    var out = []
+                    for (var i = 0; i < places.count; i++) {
+                        var p = places.get(i)
+                        out.push({ code: p.code.trim(), label: p.label.trim(), group: p.group.trim() })
+                    }
+                    return out
+                }
+                // What still blocks Create site, in words ("" = ready). Recomputed on every edit.
+                readonly property string problem: {
+                    if (siteName.text.trim() === "") return "Give the site a name."
+                    if (adminName.text.trim() === "") return "Give your name: staff are always named."
+                    if (categories.length === 0) return "Add at least one category."
+                    var seen = {}
+                    var ps = edits >= 0 && places.count >= 0 ? draft() : []      // reads both, so any change re-runs this
+                    for (var i = 0; i < ps.length; i++) {
+                        var p = ps[i], n = "Place " + (i + 1)
+                        if (p.code === "") return n + " needs a code."
+                        if (p.code.toLowerCase() === "other") return n + ": the code \u201cother\u201d is reserved for places not on the list."
+                        if (seen[p.code]) return n + ": code " + p.code + " is already used by place " + seen[p.code] + "."
+                        if (p.label === "" || p.group === "") return n + " (" + p.code + ") needs a group and a name."
+                        seen[p.code] = i + 1
+                    }
+                    return ""
+                }
+                function genesisJson() {
+                    return JSON.stringify({ Genesis: { name: siteName.text.trim(), admin_name: adminName.text.trim(), categories: categories,
+                                                       locations: draft(), sla_ack_h: 12, sla_fix_h: 48, max_open_per_author: 10 } }, null, 1)
+                }
+                // The admin's name always comes from the field, never the JSON.
+                function withAdmin(json) {
+                    try { var g = JSON.parse(json); g.Genesis.admin_name = adminName.text.trim(); return JSON.stringify(g) }
+                    catch (e) { return json }      // the core reports the parse error
                 }
             }
             Heading { text: "Restore your identity" }
@@ -851,7 +971,11 @@ Item {
                         }
                         RowLayout {
                             Layout.fillWidth: true
-                            Label { text: detail.issue.category + " · " + root.place(detail.issue) + " · " + detail.issue.stage; font.bold: true; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                            Label {
+                                text: detail.issue.category + " · " + root.place(detail.issue) + " · " + detail.issue.stage
+                                    + (detail.issue.location_renamed_from ? " (place renamed from " + detail.issue.location_renamed_from + ")" : "")
+                                font.bold: true; wrapMode: Text.Wrap; Layout.fillWidth: true
+                            }
                             FramedButton { text: root.narrow ? "← Board" : "Close"; onClicked: root.closeIssue() }
                         }
                         Label { text: detail.issue.text || ""; wrapMode: Text.Wrap; Layout.fillWidth: true }
@@ -999,11 +1123,11 @@ Item {
                         PlaceChoice {
                             required property var modelData
                             width: ListView.view.width
-                            text: modelData.code + "  " + modelData.label + (modelData.retired ? "  (retired)" : "")
-                            retired: modelData.retired
+                            text: modelData.code + "  " + modelData.label + (modelData.state !== "active" ? "  (" + root.placeState(modelData) + ")" : "")
+                            retired: modelData.state !== "active"
                             explains: true
                             picked: reportPage.pick === modelData.code
-                            onClicked: modelData.retired ? reportPage.retired = modelData : reportPage.choose(modelData.code)
+                            onClicked: modelData.state !== "active" ? reportPage.retired = modelData : reportPage.choose(modelData.code)
                         }
                     }
                 }
@@ -1046,7 +1170,9 @@ Item {
 
             // Members (admin): grant pending keys after the fingerprint is read aloud
             TabPage {
+                id: membersPage
                 enabled: !root.syncing
+                readonly property var renamed: root.locations.filter(function (l) { return !!l.renamed_from })
                 Heading { text: "Waiting for approval"; Layout.topMargin: 0 }
                 Note { text: "Grant a role only after the person reads this fingerprint aloud." }
                 Note { visible: root.pending.length === 0; color: root.mutedColor; text: "No one is waiting." }
@@ -1130,28 +1256,126 @@ Item {
                                         function () { locCode.text = ""; locLabel.text = ""; locNewGroup.text = "" })
                 }
                 Heading { text: "Locations" }
-                Note { text: "A retired place takes no new reports; nothing is deleted. A place with open issues can't be retired." }
+                Note {
+                    text: "Nothing is deleted. A retired place takes no new reports; one with open issues can't be retired. "
+                        + "A place nobody ever reported can be removed: it is hidden after 30 days (undo until then), and its signed events stay in everyone's log. "
+                        + "Edit changes a place's name and group; its code never changes."
+                }
                 PlaceBrowser {
                     maxHeight: 420
                     rowDelegate: Component {
-                        LabelledField {
+                        ColumnLayout {
                             id: locRow
                             required property var modelData
-                            // The core refuses a retire while issues are open; disabling the button is only a courtesy.
-                            readonly property bool blocked: !modelData.retired && modelData.open_issues > 0
+                            readonly property string st: modelData.state
+                            readonly property bool pending: st === "pending_removal"
+                            // The core refuses a retire while issues are open; disabling is only a courtesy.
+                            readonly property bool blocked: st === "active" && modelData.open_issues > 0
+                            readonly property bool hasReason: reason.text.trim() !== ""
+                            property bool editing: false
+                            function change(method) { root.run(method, [modelData.code, reason.text], function () { reason.text = "" }) }
                             width: ListView.view.width
-                            indent: 8
-                            caption: modelData.code + "  " + modelData.label
-                                + (modelData.retired ? "  (retired: " + modelData.retired_reason + ")" : "")
-                                + (blocked ? "  · " + root.openIssuesText(modelData.open_issues) : "")
-                            captionColor: modelData.retired ? root.mutedColor : root.textColor
-                            name: "Reason for " + (modelData.retired ? "restoring " : "retiring ") + modelData.code
-                            placeholder: blocked ? "close its issues first" : modelData.retired ? "reason for restoring" : "reason for retiring"
-                            fieldEnabled: !blocked
-                            buttonText: modelData.retired ? "Restore" : "Retire"
-                            buttonEnabled: locRow.text.trim().length > 0 && !blocked
-                            onSubmitted: root.run(modelData.retired ? "restore_location" : "retire_location", [modelData.code, locRow.text])
+                            spacing: 4
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Layout.leftMargin: 8; Layout.rightMargin: 8
+                                spacing: 8
+                                Label {
+                                    Layout.fillWidth: true
+                                    elide: Text.ElideRight
+                                    font.family: "monospace"; textFormat: Text.PlainText
+                                    color: locRow.st === "active" ? root.textColor : root.mutedColor
+                                    text: locRow.modelData.code + "  " + locRow.modelData.label
+                                        + (locRow.st === "retired" ? "  (retired: " + locRow.modelData.retired_reason + ")" : "")
+                                        + (locRow.pending ? "  (" + root.placeState(locRow.modelData) + ": " + locRow.modelData.removal_reason + ")" : "")
+                                        + (locRow.blocked ? "  · " + root.openIssuesText(locRow.modelData.open_issues) : "")
+                                }
+                                FramedField {
+                                    id: reason
+                                    Layout.preferredWidth: 170
+                                    maximumLength: 500
+                                    enabled: !locRow.blocked
+                                    placeholderText: locRow.blocked ? "close its issues first" : "reason"
+                                    Accessible.name: "Reason for changing " + locRow.modelData.code
+                                }
+                                RowLayout {   // fixed width, right-aligned: every row's reason box and Edit line up
+                                    Layout.preferredWidth: 3 * 84 + 3 * 8     // three buttons and the spacer, 8 apart
+                                    Layout.fillWidth: false
+                                    spacing: 8
+                                    Item { Layout.fillWidth: true }
+                                    ActionButton {
+                                        visible: !locRow.pending
+                                        Layout.preferredWidth: 84
+                                        text: locRow.st === "retired" ? "Restore" : "Retire"
+                                        allowed: locRow.hasReason && !locRow.blocked
+                                        onClicked: locRow.change(locRow.st === "retired" ? "restore_location" : "retire_location")
+                                    }
+                                    ActionButton {   // only for a place no report ever named; the core decides
+                                        visible: locRow.pending || !locRow.modelData.ever_used
+                                        Layout.preferredWidth: locRow.pending ? -1 : 84
+                                        text: locRow.pending ? "Undo removal" : "Remove"
+                                        allowed: locRow.hasReason
+                                        onClicked: locRow.change(locRow.pending ? "undo_remove_location" : "remove_location")
+                                    }
+                                    ActionButton {
+                                        visible: !locRow.pending
+                                        Layout.preferredWidth: 84
+                                        text: locRow.editing ? "Cancel" : "Edit"
+                                        Accessible.name: (locRow.editing ? "Cancel editing " : "Edit ") + locRow.modelData.code
+                                        onClicked: locRow.editing = !locRow.editing
+                                    }
+                                }
+                            }
+                            RowLayout {   // the code is the place's identity: only name and group change
+                                visible: locRow.editing
+                                Layout.fillWidth: true
+                                Layout.leftMargin: 8; Layout.rightMargin: 8; Layout.bottomMargin: 6
+                                spacing: 8
+                                FormRow {
+                                    label: "Name of " + locRow.modelData.code
+                                    FramedField { id: editLabel; Layout.fillWidth: true; maximumLength: 500; text: locRow.modelData.label; Accessible.name: "New name for " + locRow.modelData.code; onAccepted: save.submit() }
+                                }
+                                FormRow {
+                                    label: "Group"
+                                    Layout.fillWidth: false
+                                    FramedField { id: editGroup; Layout.preferredWidth: 200; maximumLength: 500; text: locRow.modelData.group; Accessible.name: "New group for " + locRow.modelData.code; onAccepted: save.submit() }
+                                }
+                                ActionButton {
+                                    id: save
+                                    Layout.alignment: Qt.AlignBottom
+                                    text: "Save"
+                                    allowed: editLabel.text.trim() !== "" && editGroup.text.trim() !== ""
+                                    onClicked: root.run("edit_location", [locRow.modelData.code, editLabel.text, editGroup.text],
+                                                        function () { locRow.editing = false })
+                                }
+                            }
                         }
+                    }
+                }
+                Heading { text: "Change log" }
+                Note {
+                    color: root.mutedColor
+                    text: "Removed places are hidden from every list, retired ones included. Removed means hidden: the signed events stay in everyone's log."
+                }
+                Note {
+                    visible: root.removedLocations.length === 0 && membersPage.renamed.length === 0
+                    color: root.mutedColor
+                    text: "Nothing removed or renamed yet."
+                }
+                Repeater {
+                    model: root.removedLocations
+                    delegate: Note {
+                        required property var modelData
+                        text: modelData.code + "  " + modelData.label + " (" + modelData.group + "): removed " + root.when(modelData.removed_at)
+                            + ". " + root.who(modelData.by, modelData.by_name) + " started the removal " + root.when(modelData.since)
+                            + ", reason: " + modelData.reason
+                    }
+                }
+                Repeater {
+                    model: membersPage.renamed
+                    delegate: Note {
+                        required property var modelData
+                        text: modelData.code + "  renamed from \u201c" + modelData.renamed_from + "\u201d to \u201c" + modelData.label + "\u201d"
                     }
                 }
             }
