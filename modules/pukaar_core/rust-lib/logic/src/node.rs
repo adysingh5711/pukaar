@@ -228,7 +228,8 @@ impl Node {
             "sla_ack_h": s.config.sla_ack_h,
             "sla_fix_h": s.config.sla_fix_h,
             "events": self.store.events.len(),
-            "forks": self.store.forks.len(),
+            "forks": self.store.fork_count(),
+            "forked_authors": self.store.forked_authors().iter().map(hex::encode).collect::<Vec<_>>(),
         })
         .to_string()
     }

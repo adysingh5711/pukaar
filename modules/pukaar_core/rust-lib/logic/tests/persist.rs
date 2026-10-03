@@ -1,6 +1,7 @@
 mod common;
 mod util;
 use common::*;
+use pukaar_logic::node::Node;
 use pukaar_logic::node::{action_body, genesis_from_json};
 use pukaar_logic::persist::{join_site, leave, load, load_or_create_key, save};
 
@@ -62,5 +63,50 @@ fn leaving_drops_the_replica_but_keeps_the_key() {
     let other = join_site(&dir, key, [9; 32], 7);
     assert!(other.restore.is_none());
     assert_eq!(other.store.events.len(), 1, "a new site gets the announce");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Canonical ids, every held id (sorted), and the fork count: what a restart must reproduce.
+fn view(
+    n: &Node,
+) -> (
+    Vec<pukaar_logic::event::Id>,
+    Vec<pukaar_logic::event::Id>,
+    usize,
+) {
+    let mut held: Vec<_> = n.store.held().map(|e| e.id).collect();
+    held.sort();
+    (canonical(n), held, n.store.fork_count())
+}
+
+#[test]
+fn fork_evidence_survives_a_restart_whatever_the_file_order() {
+    let mut s = Site::new();
+    let mut laptop = second_device(&s.asha);
+    s.asha.publish(profile("phone"), 5).unwrap();
+    laptop.publish(profile("laptop"), 5).unwrap();
+    copy_all(&s.asha, &mut s.admin);
+    copy_all(&laptop, &mut s.admin);
+    assert_eq!(s.admin.store.fork_count(), 1);
+    let dir = std::env::temp_dir().join(format!("pukaar-forks-{}", std::process::id()));
+    save(&s.admin, &dir).unwrap();
+    let back = load(&dir).unwrap().unwrap();
+    assert_eq!(view(&back), view(&s.admin));
+    assert_eq!(back.state(), s.admin.state());
+    // same file format (u32-LE length-prefixed events), records reversed: same view
+    let path = dir.join("events.bin");
+    let buf = std::fs::read(&path).unwrap();
+    let mut records = Vec::new();
+    let mut rest = &buf[..];
+    while !rest.is_empty() {
+        let n = 4 + u32::from_le_bytes(rest[..4].try_into().unwrap()) as usize;
+        records.push(&rest[..n]);
+        rest = &rest[n..];
+    }
+    records.reverse();
+    std::fs::write(&path, records.concat()).unwrap();
+    let reversed = load(&dir).unwrap().unwrap();
+    assert_eq!(view(&reversed), view(&s.admin));
+    assert_eq!(reversed.state(), s.admin.state());
     std::fs::remove_dir_all(dir).unwrap();
 }

@@ -118,3 +118,99 @@ fn any_delivery_order_gives_the_same_state() {
         }
     }
 }
+
+/// A fresh replica fed `all` in a shuffled order.
+fn replay(r: &mut Rng, site: Id, all: &[Vec<u8>]) -> Node {
+    let mut order: Vec<&Vec<u8>> = all.iter().collect();
+    for i in (1..order.len()).rev() {
+        order.swap(i, r.pick(i + 1));
+    }
+    let mut fresh = Node::join(pukaar_logic::event::new_key(), site);
+    for b in order {
+        fresh.receive(b).unwrap();
+    }
+    fresh
+}
+
+/// One identity on two devices double-signs every round (both publish before syncing), on top
+/// of random activity: every replica, and a fresh one fed any order, keeps the same branch.
+#[test]
+fn a_forked_author_converges_to_one_branch_in_any_delivery_order() {
+    for seed in 1..=30u64 {
+        let mut r = Rng(seed);
+        let mut s = Site::new();
+        let mut laptop = second_device(&s.asha);
+        for round in 0..4u64 {
+            let mut nodes = with(&mut s, &mut laptop);
+            nodes[2].publish(profile("phone"), round).unwrap();
+            nodes[5].publish(profile("laptop"), round).unwrap();
+            for _ in 0..4 {
+                let who = r.pick(6);
+                let issues: Vec<Id> = nodes[who].state().issues.keys().copied().collect();
+                let body = random_action(&mut r, &issues);
+                nodes[who].publish(body, r.next() % 1000).unwrap();
+            }
+            if r.pick(2) == 0 {
+                gossip(&mut nodes);
+            }
+        }
+        let mut nodes = with(&mut s, &mut laptop);
+        gossip(&mut nodes);
+        let (expected, canon) = (nodes[0].state(), canonical(nodes[0]));
+        let forks = nodes[0].store.fork_count();
+        assert!(forks > 0, "seed {seed}: the double-signing was caught");
+        for n in &nodes {
+            assert_eq!(n.state(), expected, "seed {seed}: replicas diverged");
+            assert_eq!(canonical(n), canon, "seed {seed}: different branches kept");
+            assert_eq!(n.store.fork_count(), forks, "seed {seed}");
+        }
+        let all: Vec<Vec<u8>> = nodes[0].store.held().map(|e| e.bytes.clone()).collect();
+        for _ in 0..10 {
+            let fresh = replay(&mut r, s.admin.store.site, &all);
+            assert!(fresh.store.pending.is_empty(), "seed {seed}: gaps filled");
+            assert_eq!(fresh.state(), expected, "seed {seed}: state diverged");
+            assert_eq!(canonical(&fresh), canon, "seed {seed}: branch diverged");
+            assert_eq!(fresh.store.fork_count(), forks, "seed {seed}");
+        }
+    }
+}
+
+#[test]
+fn after_losing_a_fork_our_next_event_builds_on_the_winner() {
+    let mut s = Site::new();
+    let mut laptop = second_device(&s.asha);
+    // both devices sign two events offline: seq n and n+1 on each, conflicting
+    let phone: Vec<_> = (0..2)
+        .map(|i| s.asha.publish(profile("phone"), i).unwrap())
+        .collect();
+    let lap: Vec<_> = (0..2)
+        .map(|i| laptop.publish(profile("laptop"), i).unwrap())
+        .collect();
+    assert_eq!(phone[0].u.seq, lap[0].u.seq);
+    gossip(&mut with(&mut s, &mut laptop));
+    let phone_wins = phone[0].id < lap[0].id;
+    let head = if phone_wins { &phone[1] } else { &lap[1] };
+    assert_eq!(
+        s.admin.store.fork_count(),
+        2,
+        "the losing seq and its child"
+    );
+    let loser = if phone_wins { &mut laptop } else { &mut s.asha };
+    let next = loser.publish(profile("again"), 9).unwrap();
+    assert_eq!((next.u.seq, next.u.prev), (head.u.seq + 1, head.id));
+    let mut nodes = with(&mut s, &mut laptop);
+    gossip(&mut nodes);
+    let expected = nodes[0].state();
+    for n in &nodes {
+        assert_eq!(n.store.fork_count(), 2, "no new fork");
+        assert_eq!(
+            n.store
+                .events
+                .values()
+                .find(|e| e.id == next.id)
+                .map(|e| e.id),
+            Some(next.id)
+        );
+        assert_eq!(n.state(), expected);
+    }
+}

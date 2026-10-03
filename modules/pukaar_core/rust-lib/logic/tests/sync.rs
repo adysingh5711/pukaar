@@ -108,3 +108,29 @@ fn an_author_always_resends_their_own_events() {
         "both authors when elected (the peer already has genesis)"
     );
 }
+
+#[test]
+fn a_peer_on_the_losing_branch_gets_the_winner_even_when_ahead() {
+    let g = genesis_event(&new_key());
+    let k = new_key();
+    let a = branch(&k, g.id, None, 1, "a").remove(0);
+    let b = branch(&k, g.id, None, 1, "b").remove(0);
+    let (low, high) = if a.id < b.id { (a, b) } else { (b, a) };
+    let high_kids = branch(&k, g.id, Some(&high), 2, "h");
+    let (mut knows_fork, mut on_loser) = (Store::new(g.id), Store::new(g.id));
+    for e in [&g, &low, &high] {
+        knows_fork.insert(e.clone());
+    }
+    for e in [&g, &high, &high_kids[0], &high_kids[1]] {
+        on_loser.insert(e.clone());
+    }
+    // the loser's heads name seq 2, past everything the other holds, yet the fork still flows
+    let Wire::Heads(theirs) = heads_msg(&on_loser) else {
+        unreachable!()
+    };
+    for b in to_resend(&knows_fork, &theirs) {
+        on_loser.insert(pukaar_logic::event::decode(&b).unwrap());
+    }
+    assert_eq!(on_loser.heads(), knows_fork.heads());
+    assert_eq!(on_loser.fork_count(), 3);
+}

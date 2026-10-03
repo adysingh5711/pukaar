@@ -1,5 +1,6 @@
 //! On-disk replica: `key` (32-byte seed, 0600), `site` (32 bytes), `events.bin`
-//! (u32-LE length-prefixed event bytes), `restoring` while a restore syncs, and `left`
+//! (u32-LE length-prefixed event bytes: every held event, canonical and fork evidence, in any
+//! order, since loading re-picks the canonical chains the same way), `restoring` while a restore syncs, and `left`
 //! (sites this key left). Every write goes to a temp file and is
 //! renamed into place, so a crash never leaves a half-written log.
 
@@ -46,9 +47,9 @@ pub fn save(node: &Node, dir: &Path) -> io::Result<()> {
     fs::create_dir_all(dir)?;
     write_atomic(&dir.join("key"), &node.key.to_bytes())?;
     write_atomic(&dir.join("site"), &node.store.site)?;
-    let total: usize = node.store.events.values().map(|e| 4 + e.bytes.len()).sum();
+    let total: usize = node.store.held().map(|e| 4 + e.bytes.len()).sum();
     let mut buf = Vec::with_capacity(total);
-    for e in node.store.events.values() {
+    for e in node.store.held() {
         buf.extend((e.bytes.len() as u32).to_le_bytes());
         buf.extend(&e.bytes);
     }

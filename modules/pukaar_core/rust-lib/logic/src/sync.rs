@@ -49,7 +49,7 @@ pub fn should_answer(me: &Key, members: &[Key], heads_msg: &[u8], minute: u64) -
         < ANSWERERS
 }
 
-/// Events we hold that a peer with `theirs` heads is missing, oldest first, capped.
+/// Events we hold that a peer with `theirs` heads is missing (see `resend`).
 #[must_use]
 pub fn to_resend(store: &Store, theirs: &[(Key, u64)]) -> Vec<Vec<u8>> {
     resend(store, theirs, None)
@@ -62,22 +62,23 @@ pub fn to_resend_own(store: &Store, theirs: &[(Key, u64)], me: &Key) -> Vec<Vec<
     resend(store, theirs, Some(me))
 }
 
+/// Held events a peer with `theirs` heads may lack, canonical first, capped. Heads name only a
+/// seq, so a peer on the losing branch of a fork can look up to date: for an author with fork
+/// evidence we send everything we hold of theirs, and the peer re-picks the same branch.
+// ponytail: a forked author's whole held chain goes out with every answer (deduped on arrival);
+// send from the fork point once Heads carry ids (an appended Wire variant).
 fn resend(store: &Store, theirs: &[(Key, u64)], only: Option<&Key>) -> Vec<Vec<u8>> {
-    let mut out = Vec::new();
-    for ((author, seq), e) in &store.events {
-        if only.is_some_and(|me| me != author) {
-            continue;
-        }
-        let behind = match theirs.iter().find(|(a, _)| a == author) {
-            Some((_, their_seq)) => seq > their_seq,
-            None => true,
-        };
-        if behind {
-            out.push(e.bytes.clone());
-            if out.len() == MAX_RESEND {
-                break;
-            }
-        }
-    }
-    out
+    store
+        .held()
+        .filter(|e| only.is_none_or(|me| *me == e.u.author))
+        .filter(|e| {
+            store.is_forked(&e.u.author)
+                || theirs
+                    .iter()
+                    .find(|(a, _)| *a == e.u.author)
+                    .is_none_or(|(_, their_seq)| e.u.seq > *their_seq)
+        })
+        .take(MAX_RESEND)
+        .map(|e| e.bytes.clone())
+        .collect()
 }

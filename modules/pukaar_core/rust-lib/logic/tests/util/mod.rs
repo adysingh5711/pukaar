@@ -42,19 +42,28 @@ pub fn genesis_event(admin: &SigningKey) -> Event {
 
 /// `n` chained profile events by `key` on `site`.
 pub fn chain(key: &SigningKey, site: Id, n: u64) -> Vec<Event> {
-    let mut out: Vec<Event> = Vec::new();
-    for seq in 0..n {
-        let prev = out.last().map(|e| e.id).unwrap_or(ZERO);
+    branch(key, site, None, n, "v")
+}
+
+/// `n` profile events by `key` continuing `parent` (or starting at seq 0). Two branches with
+/// different `tag`s differ in bytes, so they fork wherever they share a seq.
+pub fn branch(key: &SigningKey, site: Id, parent: Option<&Event>, n: u64, tag: &str) -> Vec<Event> {
+    let mut out: Vec<Event> = Vec::with_capacity(n as usize);
+    for _ in 0..n {
+        let (seq, prev, lamport) = match out.last().or(parent) {
+            Some(p) => (p.u.seq + 1, p.id, p.u.lamport + 1),
+            None => (0, ZERO, 2),
+        };
         let u = Unsigned {
             v: VERSION,
             site,
             author: key.verifying_key().to_bytes(),
             seq,
             prev,
-            lamport: seq + 2,
+            lamport,
             ts: seq,
             body: Body::Profile {
-                display_name: Some(format!("v{seq}")),
+                display_name: Some(format!("{tag}{seq}")),
             },
         };
         out.push(sign(key, u));

@@ -6,6 +6,13 @@ pub fn genesis() -> Body {
     crate::util::genesis_body()
 }
 
+/// The same identity on another device: same key, a copy of `n`'s replica.
+pub fn second_device(n: &Node) -> Node {
+    let mut d = Node::join(n.key.clone(), n.store.site);
+    copy_all(n, &mut d);
+    d
+}
+
 /// Everyone shares one replica through `copy_all`, like a perfectly connected LAN.
 pub struct Site {
     pub admin: Node,
@@ -16,7 +23,7 @@ pub struct Site {
 }
 
 pub fn copy_all(from: &Node, to: &mut Node) {
-    for e in from.store.events.values() {
+    for e in from.store.held() {
         to.receive(&e.bytes).unwrap();
     }
 }
@@ -78,13 +85,7 @@ impl Site {
             let all: Vec<Vec<u8>> = self
                 .nodes()
                 .iter()
-                .flat_map(|n| {
-                    n.store
-                        .events
-                        .values()
-                        .map(|e| e.bytes.clone())
-                        .collect::<Vec<_>>()
-                })
+                .flat_map(|n| n.store.held().map(|e| e.bytes.clone()).collect::<Vec<_>>())
                 .collect();
             for n in self.nodes() {
                 for b in &all {
@@ -92,5 +93,36 @@ impl Site {
                 }
             }
         }
+    }
+}
+
+/// The site's five nodes plus `extra` (say, a second device).
+pub fn with<'a>(s: &'a mut Site, extra: &'a mut Node) -> [&'a mut Node; 6] {
+    let [a, b, c, d, e] = s.nodes();
+    [a, b, c, d, e, extra]
+}
+
+/// One round of full gossip: every node receives every event any of them holds,
+/// canonical and fork evidence alike.
+pub fn gossip(nodes: &mut [&mut Node]) {
+    let all: Vec<Vec<u8>> = nodes
+        .iter()
+        .flat_map(|n| n.store.held().map(|e| e.bytes.clone()))
+        .collect();
+    for n in nodes.iter_mut() {
+        for b in &all {
+            n.receive(b).unwrap();
+        }
+    }
+}
+
+/// A node's canonical chain ids (the events its reducer applies), in key order.
+pub fn canonical(n: &Node) -> Vec<pukaar_logic::event::Id> {
+    n.store.events.values().map(|e| e.id).collect()
+}
+
+pub fn profile(name: &str) -> Body {
+    Body::Profile {
+        display_name: Some(name.into()),
     }
 }
