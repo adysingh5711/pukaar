@@ -287,6 +287,7 @@ Item {
         id: field
         selectByMouse: true
         leftPadding: 8; rightPadding: 8
+        placeholderTextColor: root.mutedColor
         opacity: enabled ? 1 : 0.5
         background: Frame { ring: field.activeFocus }
     }
@@ -527,6 +528,7 @@ Item {
                 readOnly: fta.readOnly
                 selectByMouse: true
                 wrapMode: TextEdit.WrapAnywhere
+                placeholderTextColor: root.mutedColor
                 padding: 8
                 background: null
                 Accessible.name: fta.name
@@ -753,7 +755,7 @@ Item {
             LabelledField {
                 id: joinField
                 label: "Site id (shown on the kiosk)"
-                placeholder: "64 hex characters"
+                placeholder: "64 hex characters, e.g. 45f1dbbf…a050"
                 buttonText: "Join"
                 onSubmitted: root.run("site_join", [joinField.text])
             }
@@ -769,7 +771,7 @@ Item {
                     }
                     FormRow {   // staff are always named: this goes into the genesis as the admin's name
                         label: "Your name, as residents will see it"
-                        FramedField { id: adminName; Layout.fillWidth: true; maximumLength: 500; Accessible.name: "Your name" }
+                        FramedField { id: adminName; Layout.fillWidth: true; maximumLength: 500; Accessible.name: "Your name"; placeholderText: "e.g. Aditya Singh" }
                     }
                 }
                 FormRow {
@@ -822,8 +824,8 @@ Item {
                             spacing: 6
                             // Writes straight into the ListModel, so other rows keep their typed text.
                             FramedField { Layout.preferredWidth: 170; maximumLength: 500; text: draftRow.group; placeholderText: "e.g. Water points"; Accessible.name: "Place " + (draftRow.index + 1) + " group"; onTextEdited: setup.edit(draftRow.index, "group", text) }
-                            FramedField { Layout.preferredWidth: 90; maximumLength: 500; text: draftRow.code; placeholderText: "code"; Accessible.name: "Place " + (draftRow.index + 1) + " code"; onTextEdited: setup.edit(draftRow.index, "code", text) }
-                            FramedField { Layout.fillWidth: true; maximumLength: 500; text: draftRow.label; placeholderText: "name"; Accessible.name: "Place " + (draftRow.index + 1) + " name"; onTextEdited: setup.edit(draftRow.index, "label", text) }
+                            FramedField { Layout.preferredWidth: 90; maximumLength: 500; text: draftRow.code; placeholderText: "e.g. W-01"; Accessible.name: "Place " + (draftRow.index + 1) + " code"; onTextEdited: setup.edit(draftRow.index, "code", text) }
+                            FramedField { Layout.fillWidth: true; maximumLength: 500; text: draftRow.label; placeholderText: "e.g. Tap, dining hall"; Accessible.name: "Place " + (draftRow.index + 1) + " name"; onTextEdited: setup.edit(draftRow.index, "label", text) }
                             FramedButton { text: "\u00d7"; Accessible.name: "Remove place " + (draftRow.index + 1); onClicked: setup.places.remove(draftRow.index) }
                         }
                     }
@@ -920,12 +922,13 @@ Item {
                     FramedTextArea {
                         id: importBlob
                         name: "Identity backup"
-                        placeholder: "pukaar-id-1:…"
+                        placeholder: "e.g. pukaar-id-1:…"
                     }
                 }
                 LabelledField {
                     id: importPassword
                     label: "Backup password"
+                    placeholder: "the password you set when exporting"
                     echoMode: TextInput.Password
                     buttonText: "Import identity"
                     buttonEnabled: importBlob.text.trim() !== "" && importPassword.text !== ""
@@ -1061,14 +1064,14 @@ Item {
                         }
                         FormRow {
                             label: "Note (what was seen, done or why)"
-                            FramedField { id: note; Layout.fillWidth: true; maximumLength: 500; Accessible.name: "Note"; onAccepted: comment.submit() }
+                            FramedField { id: note; Layout.fillWidth: true; maximumLength: 500; Accessible.name: "Note"; placeholderText: "e.g. Pump checked, handle is loose"; onAccepted: comment.submit() }
                         }
                         RowLayout {
                             visible: root.staff && root.isActionable(detail.st)
                             spacing: 8
                             FormRow {
                                 label: "Next step (for updates)"
-                                FramedField { id: nextStep; Layout.fillWidth: true; maximumLength: 500; Accessible.name: "Next step" }
+                                FramedField { id: nextStep; Layout.fillWidth: true; maximumLength: 500; Accessible.name: "Next step"; placeholderText: "e.g. Plumber visits tomorrow" }
                             }
                             FormRow {
                                 label: "ETA (hours)"
@@ -1077,6 +1080,7 @@ Item {
                                     id: eta
                                     Layout.preferredWidth: 80
                                     text: "4"
+                                    placeholderText: "e.g. 4"
                                     inputMethodHints: Qt.ImhDigitsOnly
                                     validator: IntValidator { bottom: 0; top: 168 }
                                     Accessible.name: "ETA in hours"
@@ -1163,6 +1167,7 @@ Item {
                     label: "In one line"
                     FramedField {
                         id: reportText; Layout.fillWidth: true; maximumLength: 500
+                        placeholderText: "e.g. Tap near tent 4 gives no water"
                         Accessible.name: "What is wrong, one line"; onAccepted: reportBtn.submit()
                     }
                 }
@@ -1226,6 +1231,7 @@ Item {
                     id: nameField
                     visible: !root.staff
                     label: "Display name"
+                    placeholder: "e.g. Asha (or leave empty to stay pseudonymous)"
                     buttonText: "Set name"
                     onSubmitted: root.run("set_profile", [nameField.text])
                 }
@@ -1253,7 +1259,7 @@ Item {
                             Layout.fillWidth: false
                             Layout.preferredWidth: 300
                             name: "Steward's real name"
-                            placeholder: "steward's real name"
+                            placeholder: "e.g. Ravi Kumar"
                             buttonText: "Grant steward"
                             buttonEnabled: staffName.text.trim().length > 0
                             onSubmitted: root.run("grant_role", [pendingRow.modelData.key, "steward", staffName.text])
@@ -1269,7 +1275,7 @@ Item {
                         readonly property bool own: modelData.key === root.me.key
                         caption: modelData.fingerprint + "  " + modelData.role + "  " + (modelData.name || "pseudonym")
                         name: "Reason for revoking " + modelData.fingerprint
-                        placeholder: own ? "you can't revoke yourself" : "reason for revoking"
+                        placeholder: own ? "you can't revoke yourself" : "e.g. left the camp"
                         fieldEnabled: !own
                         buttonText: "Revoke"
                         buttonEnabled: !own && memberRow.text.trim().length > 0
@@ -1304,11 +1310,11 @@ Item {
                     FormRow {
                         label: "Code"
                         Layout.fillWidth: false
-                        FramedField { id: locCode; Layout.preferredWidth: 120; maximumLength: 500; Accessible.name: "Code"; placeholderText: "W-04" }
+                        FramedField { id: locCode; Layout.preferredWidth: 120; maximumLength: 500; Accessible.name: "Code"; placeholderText: "e.g. W-04" }
                     }
                     FormRow {
                         label: "Name"
-                        FramedField { id: locLabel; Layout.fillWidth: true; maximumLength: 500; Accessible.name: "Name"; placeholderText: "Tap behind tent 4"; onAccepted: addLoc.submit() }
+                        FramedField { id: locLabel; Layout.fillWidth: true; maximumLength: 500; Accessible.name: "Name"; placeholderText: "e.g. Tap behind tent 4"; onAccepted: addLoc.submit() }
                     }
                 }
                 ActionButton {
@@ -1359,7 +1365,7 @@ Item {
                                     Layout.preferredWidth: 170
                                     maximumLength: 500
                                     enabled: !locRow.blocked
-                                    placeholderText: locRow.blocked ? "close its issues first" : "reason"
+                                    placeholderText: locRow.blocked ? "close its issues first" : "e.g. duplicate"
                                     Accessible.name: "Reason for changing " + locRow.modelData.code
                                 }
                                 RowLayout {   // fixed width, right-aligned: every row's reason box and Edit line up
@@ -1467,7 +1473,7 @@ Item {
                 LabelledField {
                     id: anchorField
                     label: "Anchor reference"
-                    placeholder: "tx hash or pda:<account id> printed by spel"
+                    placeholder: "e.g. 0x9f2c…e1 or pda:<account id> printed by spel"
                     buttonText: "Record anchor"
                     buttonEnabled: !!root.checkpoint && anchorField.text.trim() !== ""
                     onSubmitted: {
@@ -1486,11 +1492,12 @@ Item {
                 }
                 FormRow {
                     label: "Password (at least 8 characters)"
-                    FramedField { id: exportPassword; Layout.fillWidth: true; echoMode: TextInput.Password; Accessible.name: "Backup password" }
+                    FramedField { id: exportPassword; Layout.fillWidth: true; echoMode: TextInput.Password; Accessible.name: "Backup password"; placeholderText: "e.g. a long phrase only you know" }
                 }
                 LabelledField {
                     id: exportConfirm
                     label: "Repeat the password"
+                    placeholder: "type the same password again"
                     echoMode: TextInput.Password
                     buttonText: "Export identity"
                     buttonEnabled: exportPassword.text.length >= 8 && exportConfirm.text === exportPassword.text
