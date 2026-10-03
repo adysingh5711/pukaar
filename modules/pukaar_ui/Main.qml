@@ -53,29 +53,38 @@ Item {
     // Raw reply of each polled method as last applied. Not bound to anything: poll() compares
     // against it and skips the assignment when nothing changed, so a quiet 2 s tick resets no model.
     property var seen: ({})
+    property bool polling: false         // one poll in flight at a time
+    property bool repoll: false          // an action finished mid-poll: poll again right after
 
     // This is the ONE place that talks to pukaar_core: every button routes through run()/call()/poll().
-    function callRaw(method, args) {
+    // Async (`callModuleAsync`) so a slow core call (Delivery IPC, big replay) never freezes the UI;
+    // `done(raw)` runs once with the reply string. A host without it falls back to the blocking call.
+    function send(method, args, done) {
         // qmllint disable unqualified
         // `logos` is injected by the C++ host at runtime; it has no static QML type.
         if (typeof logos === "undefined" || !logos.callModule)
-            return "error: no logos bridge (run inside Basecamp or logos-standalone-app)"
-        return logos.callModule("pukaar_core", method, args)
+            done("error: no logos bridge (run inside Basecamp or logos-standalone-app)")
+        else if (logos.callModuleAsync)
+            logos.callModuleAsync("pukaar_core", method, args, done)
+        else
+            done(logos.callModule("pukaar_core", method, args))
         // qmllint enable unqualified
     }
-    // Replies arrive as JSON strings, sometimes double-encoded by the bridge.
+    // Replies arrive as JSON strings, sometimes double-encoded by the bridge; the bridge's own
+    // failures ({"error": …}) are folded into the "error: …" strings the core uses.
     function decode(v) {
         try { v = JSON.parse(v) } catch (e) {}
         if (typeof v === "string") { try { v = JSON.parse(v) } catch (e) {} }
+        if (v && typeof v.error === "string") return "error: " + v.error + (v.message ? ": " + v.message : "")
         return v
     }
-    function call(method, args) { return decode(callRaw(method, args)) }
+    function call(method, args, done) { send(method, args, function (raw) { done(decode(raw)) }) }
     // Read-only refresh: hand the decoded reply to `apply` only if it differs from the last one.
-    function poll(method, args, apply) {
-        var raw = callRaw(method, args)
-        if (raw === seen[method]) return
-        seen[method] = raw
-        apply(decode(raw))
+    function poll(method, args, apply, next) {
+        send(method, args, function (raw) {
+            if (raw !== seen[method]) { seen[method] = raw; apply(decode(raw)) }
+            if (next) next()
+        })
     }
     function keep(name, value) { if (JSON.stringify(value) !== JSON.stringify(root[name])) root[name] = value }
     function setInfo(i) {
@@ -83,20 +92,22 @@ Item {
         keep("categories", i.categories); keep("locations", i.locations)
         keep("members", i.members); keep("pending", i.pending)
     }
-    function openIssue(id) { poll("issue_timeline", [id], function (t) { if (t && t.issue) selected = t }) }
-    function closeIssue() { selected = null; delete seen.issue_timeline }
+    function openIssue(id) { call("issue_timeline", [id], function (t) { if (t && t.issue) selected = t }) }
+    function closeIssue() { selected = null }
     function failed(v) {
         return typeof v === "string" && (v.indexOf("error:") === 0 || v.indexOf("rejected:") === 0)
     }
     // Every action goes through here. `onOk(reply)` runs only when the core accepted it, so
     // typed text survives a refusal and the user can fix it and retry.
     function run(method, args, onOk) {
+        if (busy) return
         busy = true
-        var r = call(method, args)
-        busy = false
-        message = failed(r) ? r : ""
-        refresh()
-        if (!failed(r) && onOk) onOk(r)
+        call(method, args, function (r) {
+            busy = false
+            message = failed(r) ? r : ""
+            refresh()
+            if (!failed(r) && onOk) onOk(r)
+        })
     }
     // Drop this device's copy of the site (the key stays); back to the first-run screen.
     function leave() {
@@ -104,12 +115,31 @@ Item {
             closeIssue(); checkpoint = null; issues = []; setInfo(noInfo); seen = ({})
         })
     }
+    // Poll steps in order; the site-bound ones only once my_identity says we are in a site.
+    function pollSteps(steps, i) {
+        if (i >= steps.length || (i > 0 && !inSite)) {
+            polling = false
+            if (repoll) { repoll = false; refresh() }
+            return
+        }
+        poll(steps[i][0], steps[i][1], steps[i][2], function () { pollSteps(steps, i + 1) })
+    }
     function refresh() {
-        poll("my_identity", [], function (m) { me = (m && typeof m === "object") ? m : {} })
-        if (!inSite) return
-        poll("site_info", [], function (i) { if (i && i.site) setInfo(i) })
-        poll("list_issues", [], function (l) { if (Array.isArray(l)) issues = l })
-        if (selected) poll("issue_timeline", [selected.issue.id], function (t) { if (t && t.issue) selected = t })
+        if (polling) { repoll = true; return }
+        polling = true
+        var steps = [
+            ["my_identity", [], function (m) { me = (m && typeof m === "object") ? m : {} }],
+            ["site_info", [], function (i) { if (i && i.site) setInfo(i) }],
+            ["list_issues", [], function (l) { if (Array.isArray(l)) issues = l }]
+        ]
+        // only refresh the pane that is still open (a reply landing after Close must not reopen it)
+        if (selected) {
+            var open = selected.issue.id
+            steps.push(["issue_timeline", [open], function (t) {
+                if (t && t.issue && selected && selected.issue.id === t.issue.id) selected = t
+            }])
+        }
+        pollSteps(steps, 0)
     }
     function inColumn(statuses) {
         return issues.filter(function (i) {
@@ -677,7 +707,7 @@ Item {
             // Anchor: compute, run the printed spel command in a terminal, record the reference
             TabPage {
                 enabled: !root.syncing
-                ActionButton { text: "Compute checkpoint"; onClicked: root.checkpoint = root.call("checkpoint_now", []) }
+                ActionButton { text: "Compute checkpoint"; onClicked: root.run("checkpoint_now", [], function (r) { root.checkpoint = r }) }
                 Label { visible: !!root.checkpoint; text: root.checkpoint ? root.checkpoint.n_events + " events, root " + root.checkpoint.heads_root.substr(0, 16) + "…" : "" }
                 TextArea {
                     visible: !!root.checkpoint
