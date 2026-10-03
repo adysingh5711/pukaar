@@ -35,10 +35,31 @@ Item {
     readonly property bool narrow: width < 1040
 
     // ---- design tokens: the only place a colour or the stage->colour map is spelled out ----
+    // One light theme. A dark theme means swapping the values of this block, nothing else.
+    readonly property color surfaceColor: "#ffffff"       // page, fields, list rows
+    readonly property color surfaceAltColor: "#f3f4f6"    // buttons, tabs, cards, group headers
+    readonly property color hoverColor: "#e8eaed"         // pointer over a row or a menu item
+    readonly property color textColor: "#1f2328"          // 15:1 on surface
+    readonly property color mutedColor: "#57606a"         // 6:1 on white (plain "gray" was 3.95:1)
+    readonly property color borderColor: "#8c959f"        // 3:1 on white: the box edge is a UI boundary
+    readonly property color accentColor: "#1d6fd8"        // focus ring, selected tab, selection
+    readonly property color accentSoftColor: "#dbe8f9"    // the picked row
+    readonly property color accentTextColor: "#ffffff"    // text on accent or on a stage chip
     readonly property color dangerColor: "#d73a49"
-    readonly property color mutedColor: "#57606a"     // 6:1 on white (plain "gray" was 3.95:1)
-    readonly property color borderColor: "#8c959f"    // 3:1 on white: the box edge is a UI boundary
-    readonly property color focusBorderColor: "#1d6fd8"
+    // Every control reads these roles. Set once on the root, so nothing falls back to the
+    // system palette (a dark OS would otherwise give light-on-light or dark-on-dark controls).
+    // Same value in the disabled and inactive groups: disabled controls fade with `opacity`.
+    palette {
+        window: root.surfaceColor; windowText: root.textColor
+        base: root.surfaceColor; alternateBase: root.surfaceAltColor; text: root.textColor
+        button: root.surfaceAltColor; buttonText: root.textColor; brightText: root.accentTextColor
+        placeholderText: root.mutedColor
+        highlight: root.accentColor; highlightedText: root.accentTextColor
+        link: root.accentColor; linkVisited: root.accentColor
+        toolTipBase: root.surfaceColor; toolTipText: root.textColor
+        light: root.surfaceColor; midlight: root.hoverColor; mid: root.borderColor
+        dark: root.mutedColor; shadow: root.textColor
+    }
     // Sizes follow the user's system font instead of fixed pixels.
     FontMetrics { id: systemFont }       // default font = the application's
     readonly property real baseSize: systemFont.font.pointSize > 0 ? systemFont.font.pointSize : 10
@@ -47,7 +68,7 @@ Item {
     readonly property var stageColors: ({
         Open: "#b45309",
         Acknowledged: "#b45309",
-        InProgress: "#1d6fd8",
+        InProgress: accentColor,
         AwaitingConfirmation: "#7c3aed",
         ConfirmedResolved: "#15803d",
         ClosedWontfix: mutedColor,
@@ -247,11 +268,11 @@ Item {
     // field, button, combo or box is ever borderless whatever style the host uses ----
     component Frame: Rectangle {
         property bool ring: false          // keyboard/typing focus: thicker, blue
-        property color fill: palette.base
+        property color fill: root.surfaceColor
         color: fill
         radius: 4
         border.width: ring ? 2 : 1
-        border.color: ring ? root.focusBorderColor : root.borderColor
+        border.color: ring ? root.accentColor : root.borderColor
     }
     component FramedField: TextField {
         id: field
@@ -264,7 +285,7 @@ Item {
         id: fb
         leftPadding: 12; rightPadding: 12; topPadding: 6; bottomPadding: 6
         opacity: enabled ? 1 : 0.5
-        background: Frame { ring: fb.visualFocus; fill: fb.down ? Qt.darker(fb.palette.button, 1.12) : fb.palette.button }
+        background: Frame { ring: fb.visualFocus; fill: fb.down ? Qt.darker(root.surfaceAltColor, 1.12) : root.surfaceAltColor }
     }
     component FramedCombo: ComboBox {
         id: combo
@@ -273,6 +294,18 @@ Item {
         background: Frame { ring: combo.visualFocus }
         contentItem: Label { text: combo.displayText; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }
         indicator: Label { x: combo.width - width - 10; y: (combo.height - height) / 2; text: "\u25be" }
+        // The style's own row paints its highlight from palette roles that are not meant for it
+        // (invisible text on some palettes); this one reads the tokens.
+        delegate: ItemDelegate {
+            id: option
+            required property var model
+            required property int index
+            width: ListView.view.width
+            text: model[combo.textRole]
+            highlighted: combo.highlightedIndex === index
+            background: Rectangle { color: option.highlighted ? root.hoverColor : root.surfaceColor }
+            contentItem: Label { text: option.text; verticalAlignment: Text.AlignVCenter; font.bold: combo.currentIndex === option.index }
+        }
     }
     component FramedCheck: CheckBox {
         id: check
@@ -287,8 +320,8 @@ Item {
     component PageTab: TabButton {
         id: tab
         background: Frame {
-            fill: tab.checked ? palette.base : palette.button
-            Rectangle { visible: tab.checked; width: parent.width; height: 3; anchors.bottom: parent.bottom; color: root.focusBorderColor }
+            fill: tab.checked ? root.surfaceColor : root.surfaceAltColor
+            Rectangle { visible: tab.checked; width: parent.width; height: 3; anchors.bottom: parent.bottom; color: root.accentColor }
         }
         contentItem: Label {
             text: tab.text; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
@@ -310,7 +343,7 @@ Item {
         color: chip.tint
         Label {   // elides when the parent narrows the chip below its natural width
             id: chipText; anchors.centerIn: parent; width: Math.min(implicitWidth, chip.width - 12)
-            elide: Text.ElideRight; text: chip.label; color: "white"; font.pointSize: root.smallSize
+            elide: Text.ElideRight; text: chip.label; color: root.accentTextColor; font.pointSize: root.smallSize
         }
     }
 
@@ -329,7 +362,7 @@ Item {
         signal opened()
         width: ListView.view.width
         padding: 8
-        background: Frame { ring: card.visualFocus || card.current; fill: card.down ? Qt.darker(card.palette.window, 1.08) : Qt.darker(card.palette.window, 1.03) }
+        background: Frame { ring: card.visualFocus || card.current; fill: card.down ? Qt.darker(root.surfaceAltColor, 1.06) : root.surfaceAltColor }
         Accessible.name: card.placeText + ": " + card.issue.text
         Accessible.description: card.issue.stage + ". " + card.hintText
         contentItem: Column {
@@ -358,7 +391,7 @@ Item {
         required property color alertColor
         width: ListView.view.width
         wrapMode: Text.Wrap
-        color: row.rejected ? row.alertColor : palette.text
+        color: row.rejected ? row.alertColor : root.textColor
         text: row.lineText
     }
 
@@ -395,7 +428,7 @@ Item {
     component Banner: RowLayout {
         id: banner
         property string text
-        property color tint: label.palette.windowText
+        property color tint: root.textColor
         property bool bold: false
         property string buttonText
         property string buttonName: buttonText     // what a screen reader says for the button
@@ -469,7 +502,7 @@ Item {
         property alias fieldEnabled: field.enabled
         property string name: label
         property string caption
-        property color captionColor: palette.windowText
+        property color captionColor: root.textColor
         property int indent: 0              // side margin, for rows inside a framed list
         property string buttonText: "Go"
         property bool buttonEnabled: true
@@ -497,7 +530,7 @@ Item {
         required property string section
         width: ListView.view.width
         height: title.implicitHeight + 8
-        color: Qt.darker(palette.window, 1.06)
+        color: root.surfaceAltColor
         Label { id: title; x: 8; anchors.verticalCenter: parent.verticalCenter; text: parent.section; font.bold: true; color: root.mutedColor }
     }
 
@@ -511,7 +544,7 @@ Item {
         opacity: enabled ? 1 : 0.55
         Accessible.role: Accessible.RadioButton
         Accessible.checked: choice.picked
-        background: Rectangle { color: choice.picked ? Qt.tint(palette.base, Qt.rgba(0.11, 0.44, 0.85, 0.16)) : choice.hovered ? Qt.darker(palette.base, 1.04) : palette.base }
+        background: Rectangle { color: choice.picked ? root.accentSoftColor : choice.hovered ? root.hoverColor : root.surfaceColor }
         contentItem: Label { text: choice.text; elide: Text.ElideRight; font.bold: choice.picked; font.italic: choice.retired }
     }
 
@@ -572,6 +605,8 @@ Item {
     }
 
     Timer { interval: 2000; running: true; repeat: true; triggeredOnStart: true; onTriggered: root.refresh() }
+
+    Rectangle { anchors.fill: parent; color: root.surfaceColor }     // the page never shows the host's window colour
 
     ColumnLayout {
         anchors.fill: parent
@@ -1086,7 +1121,7 @@ Item {
                             caption: modelData.code + "  " + modelData.label
                                 + (modelData.retired ? "  (retired: " + modelData.retired_reason + ")" : "")
                                 + (blocked ? "  · " + root.openIssuesText(modelData.open_issues) : "")
-                            captionColor: modelData.retired ? root.mutedColor : palette.windowText
+                            captionColor: modelData.retired ? root.mutedColor : root.textColor
                             name: "Reason for " + (modelData.retired ? "restoring " : "retiring ") + modelData.code
                             placeholder: blocked ? "close its issues first" : modelData.retired ? "reason for restoring" : "reason for retiring"
                             fieldEnabled: !blocked
