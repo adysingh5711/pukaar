@@ -534,14 +534,16 @@ Item {
         Label { id: title; x: 8; anchors.verticalCenter: parent.verticalCenter; text: parent.section; font.bold: true; color: root.mutedColor }
     }
 
-    // One selectable row of the Report picker. A retired place is greyed and cannot be picked.
+    // One selectable row of the Report picker. A retired place is greyed and never becomes the
+    // pick; with `explains` it stays clickable so the caller can say why (see PlaceBrowser.retiredPlace).
     component PlaceChoice: ItemDelegate {
         id: choice
         property bool picked: false
         property bool retired: false
+        property bool explains: false
         topPadding: 5; bottomPadding: 5
-        enabled: !retired
-        opacity: enabled ? 1 : 0.55
+        enabled: !retired || explains
+        opacity: retired ? 0.55 : 1
         Accessible.role: Accessible.RadioButton
         Accessible.checked: choice.picked
         background: Rectangle { color: choice.picked ? root.accentSoftColor : choice.hovered ? root.hoverColor : root.surfaceColor }
@@ -555,6 +557,10 @@ Item {
         property int maxHeight: 260
         property Component rowDelegate
         property Component listHeader
+        // Report picker only: the retired place the user just tried to pick (null = none). While
+        // set, a notice under the list explains it and offers to report it as "Other".
+        property var retiredPlace: null
+        signal reportOther()
         readonly property var places: root.placesView(search.text, groupFilter.currentIndex > 0 ? groupFilter.currentText : "", showRetired.checked)
         readonly property int total: root.placesView("", "", showRetired.checked).length
         Layout.fillWidth: true
@@ -601,6 +607,14 @@ Item {
                 header: Loader { width: list.width; sourceComponent: pb.listHeader }
                 ScrollBar.vertical: ScrollBar {}
             }
+        }
+        Banner {
+            visible: pb.retiredPlace !== null && showRetired.checked
+            text: pb.retiredPlace ? pb.retiredPlace.code + " " + pb.retiredPlace.label + " is retired"
+                + (pb.retiredPlace.retired_reason ? " (reason: " + pb.retiredPlace.retired_reason + ")" : "")
+                + ". If the problem is real, report it as Other and describe the place, or ask the admin to restore it." : ""
+            buttonText: "Report as Other at this spot"
+            onActivated: pb.reportOther()
         }
     }
 
@@ -939,7 +953,9 @@ Item {
             TabPage {
                 id: reportPage
                 enabled: !root.syncing
-                property string pick: ""          // "" = nothing yet, "other", or a place code
+                property string pick: ""          // "" = nothing yet, "other", or a place code (never a retired one)
+                property var retired: null        // the retired place last clicked: its notice shows until another pick
+                function choose(p) { pick = p; retired = null }
                 // What still blocks the Report button, in words ("" = ready).
                 readonly property string missing: reportText.text.trim() === "" ? "Describe the problem in one line."
                     : pick === "" ? "Pick where it is."
@@ -966,11 +982,17 @@ Item {
                 Heading { text: "Where?" }
                 PlaceBrowser {
                     maxHeight: 220
+                    retiredPlace: reportPage.retired
+                    onReportOther: {      // keep category and description; the landmark starts as an editable "near ..."
+                        landmark.text = "near " + reportPage.retired.code + " " + reportPage.retired.label
+                        reportPage.choose("other")
+                        landmark.forceActiveFocus()
+                    }
                     listHeader: Component {
                         PlaceChoice {
                             text: "Other (describe the place)"
                             picked: reportPage.pick === "other"
-                            onClicked: reportPage.pick = "other"
+                            onClicked: reportPage.choose("other")
                         }
                     }
                     rowDelegate: Component {
@@ -979,8 +1001,9 @@ Item {
                             width: ListView.view.width
                             text: modelData.code + "  " + modelData.label + (modelData.retired ? "  (retired)" : "")
                             retired: modelData.retired
+                            explains: true
                             picked: reportPage.pick === modelData.code
-                            onClicked: reportPage.pick = modelData.code
+                            onClicked: modelData.retired ? reportPage.retired = modelData : reportPage.choose(modelData.code)
                         }
                     }
                 }
