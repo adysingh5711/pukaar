@@ -213,6 +213,8 @@ impl Node {
             "locations": s.locations.iter().map(|l| json!(l)).collect::<Vec<_>>(),
             "members": s.roles.iter().map(|(k, r)| { let mut m = member(k); m["role"] = json!(format!("{r:?}")); m }).collect::<Vec<_>>(),
             "pending": s.pending_members.iter().map(member).collect::<Vec<_>>(),
+            "sla_ack_h": s.config.sla_ack_h,
+            "sla_fix_h": s.config.sla_fix_h,
             "events": self.store.events.len(),
             "forks": self.store.forks.len(),
         })
@@ -282,15 +284,17 @@ impl Node {
         )
     }
 
+    /// Oldest report first. `now` (unix seconds) drives the overdue flags.
     #[must_use]
-    pub fn issues_json(&self) -> String {
+    pub fn issues_json(&self, now: u64) -> String {
         let s = self.state();
-        let v: Vec<Value> = s.issues.values().map(|i| issue_json(&s, i)).collect();
-        Value::Array(v).to_string()
+        let mut v: Vec<&Issue> = s.issues.values().collect();
+        v.sort_by_key(|i| (i.reported_ts, i.id));
+        Value::Array(v.into_iter().map(|i| issue_json(&s, i, now)).collect()).to_string()
     }
 
     #[must_use]
-    pub fn timeline_json(&self, issue_hex: &str) -> String {
+    pub fn timeline_json(&self, issue_hex: &str, now: u64) -> String {
         let s = self.state();
         let Some(i) = parse_id(issue_hex).and_then(|id| s.issues.get(&id)) else {
             return "null".into();
@@ -312,7 +316,7 @@ impl Node {
                 })
             })
             .collect();
-        json!({ "issue": issue_json(&s, i), "events": events }).to_string()
+        json!({ "issue": issue_json(&s, i, now), "events": events }).to_string()
     }
 }
 
@@ -410,7 +414,19 @@ pub fn stage(st: Status) -> &'static str {
     }
 }
 
-fn issue_json(s: &State, i: &Issue) -> Value {
+/// A claimed fix nobody has confirmed for this long is flagged for follow-up.
+const CONFIRM_WAIT_H: u32 = 48;
+
+/// `ts` plus `h` hours; None when `h` is 0 (no deadline set).
+fn deadline(ts: u64, h: u32) -> Option<u64> {
+    (h > 0).then(|| ts + u64::from(h) * 3600)
+}
+
+fn past(now: u64, ts: u64, h: u32) -> bool {
+    deadline(ts, h).is_some_and(|d| now > d)
+}
+
+fn issue_json(s: &State, i: &Issue, now: u64) -> Value {
     let location_label = s
         .locations
         .iter()
@@ -425,7 +441,7 @@ fn issue_json(s: &State, i: &Issue) -> Value {
             "next_step": p.next_step,
             "eta_h": p.eta_h,
             // the UI compares this with its clock to show "overdue"; 0 = no ETA given
-            "due_ts": if p.eta_h > 0 { p.ts + p.eta_h as u64 * 3600 } else { 0 },
+            "due_ts": deadline(p.ts, p.eta_h).unwrap_or(0),
         })
     });
     json!({
@@ -444,6 +460,10 @@ fn issue_json(s: &State, i: &Issue) -> Value {
         "confirms": i.confirms.len(),
         "reopen_count": i.reopen_count,
         "reported_ts": i.reported_ts,
+        "ack_overdue": i.status == Status::Open && past(now, i.reported_ts, s.config.sla_ack_h),
+        "fix_overdue": i.status.awaits_staff() && past(now, i.reported_ts, s.config.sla_fix_h),
+        "awaiting_48h": i.status == Status::AwaitingConfirmation
+            && i.progress.as_ref().is_some_and(|p| past(now, p.ts, CONFIRM_WAIT_H)),
     })
 }
 

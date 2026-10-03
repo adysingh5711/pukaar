@@ -16,6 +16,15 @@ pub enum Status {
 }
 
 impl Status {
+    /// Still staff's to act on: acknowledge, update, claim a fix or close.
+    #[must_use]
+    pub fn awaits_staff(self) -> bool {
+        matches!(
+            self,
+            Status::Open | Status::Acknowledged | Status::InProgress
+        )
+    }
+
     #[must_use]
     pub fn is_terminal(self) -> bool {
         matches!(
@@ -316,10 +325,7 @@ fn apply(s: &mut State, e: &Event) -> Result<(), String> {
                         !note.trim().is_empty(),
                         "an update needs a note: what is happening",
                     )?;
-                    require(
-                        matches!(st, Open | Acknowledged | InProgress),
-                        not_permitted(st),
-                    )?;
+                    require(st.awaits_staff(), not_permitted(st))?;
                     i.status = InProgress;
                     i.progress = progress(note, next_step, *eta_h);
                 }
@@ -329,10 +335,7 @@ fn apply(s: &mut State, e: &Event) -> Result<(), String> {
                         !note.trim().is_empty(),
                         "a fix claim needs a note: what was done",
                     )?;
-                    require(
-                        matches!(st, Open | Acknowledged | InProgress),
-                        not_permitted(st),
-                    )?;
+                    require(st.awaits_staff(), not_permitted(st))?;
                     i.progress = progress(note, "reporter or two residents confirm", 0);
                     i.status = AwaitingConfirmation;
                     i.claimant = Some(a);
@@ -342,10 +345,7 @@ fn apply(s: &mut State, e: &Event) -> Result<(), String> {
                 CloseWontfix { reason, .. } => {
                     require(staff, "only stewards close")?;
                     require(!reason.trim().is_empty(), "won't-fix needs a reason")?;
-                    require(
-                        matches!(st, Open | Acknowledged | InProgress),
-                        not_permitted(st),
-                    )?;
+                    require(st.awaits_staff(), not_permitted(st))?;
                     i.status = ClosedWontfix;
                     i.progress = progress(reason, "", 0);
                 }

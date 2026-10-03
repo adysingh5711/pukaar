@@ -550,11 +550,11 @@ impl PukaarCoreModule for Pukaar {
     }
 
     fn list_issues(&mut self) -> String {
-        read(|n| n.issues_json()).unwrap_or_else(err)
+        read(|n| n.issues_json(now())).unwrap_or_else(err)
     }
 
     fn issue_timeline(&mut self, issue_hex: String) -> String {
-        read(|n| n.timeline_json(&issue_hex)).unwrap_or_else(err)
+        read(|n| n.timeline_json(&issue_hex, now())).unwrap_or_else(err)
     }
 
     fn site_info(&mut self) -> String {

@@ -89,6 +89,25 @@ Item {
         var p = i.progress
         return !!p && p.due_ts > 0 && isActionable(i.status) && dueHours(p) < 0
     }
+    function age(ts) {
+        var h = Math.floor((Date.now() / 1000 - ts) / 3600)
+        return h < 1 ? "just now" : h < 48 ? h + " h ago" : Math.floor(h / 24) + " d ago"
+    }
+    // Overdue flags are computed by the core (site SLA hours); this only words them.
+    function slaLine(i) {
+        if (i.ack_overdue) return "Not acknowledged within " + info.sla_ack_h + " h. "
+        if (i.fix_overdue) return "Past the " + info.sla_fix_h + " h fix target. "
+        if (i.awaiting_48h) return "Fix unconfirmed for over 48 h. "
+        return ""
+    }
+    function flagged(i) { return isOverdue(i) || !!i.ack_overdue || !!i.fix_overdue || !!i.awaiting_48h }
+    // The card's grey line: age, whose move it is, SLA flags, reopen count, next step.
+    function hint(i) {
+        var waiting = i.status !== "AwaitingConfirmation" ? ""
+            : i.reporter === me.key ? "Needs your confirmation. " : "Fix claimed: waiting for the reporter to confirm. "
+        return "Reported " + age(i.reported_ts) + ". " + waiting + slaLine(i)
+            + (i.reopen_count > 0 ? "Reopened " + i.reopen_count + "×. " : "") + nextLine(i)
+    }
     // "Next: fit washer · due in 5 h" / "· OVERDUE by 2 h"
     function nextLine(i) {
         var p = i.progress
@@ -125,13 +144,13 @@ Item {
         }
     }
 
-    // One board card. All text is pre-computed by the caller (place/nextLine/stageColor),
+    // One board card. All text is pre-computed by the caller (place/hint/stageColor),
     // so this stays a pure presentational piece reusable across all four columns.
     component IssueCard: ItemDelegate {
         id: card
         required property var issue
         required property string placeText
-        required property string nextText
+        required property string hintText
         required property bool overdue
         required property color tint
         required property color alertColor
@@ -150,9 +169,7 @@ Item {
                 wrapMode: Text.Wrap
                 font.pixelSize: 11
                 color: card.overdue ? card.alertColor : card.mutedColor
-                text: (card.issue.status === "AwaitingConfirmation" ? "Fix claimed: waiting for the reporter to confirm. " : "")
-                      + (card.issue.reopen_count > 0 ? "Reopened " + card.issue.reopen_count + "×. " : "")
-                      + card.nextText
+                text: card.hintText
             }
         }
         onClicked: card.opened()
@@ -346,8 +363,8 @@ Item {
                                     required property var modelData
                                     issue: modelData
                                     placeText: root.place(modelData)
-                                    nextText: root.nextLine(modelData)
-                                    overdue: root.isOverdue(modelData)
+                                    hintText: root.hint(modelData)
+                                    overdue: root.flagged(modelData)
                                     tint: root.stageColor(modelData.status)
                                     alertColor: root.dangerColor
                                     mutedColor: root.mutedColor
