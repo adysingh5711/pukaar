@@ -228,6 +228,16 @@ Item {
         text: row.lineText
     }
 
+    // One tab of the StackLayout: scrolls when its content outgrows the window (30 pending
+    // members, a long checkpoint). Content is laid out as a column of the page's width.
+    component TabPage: ScrollView {
+        id: page
+        default property alias content: column.data
+        contentWidth: availableWidth
+        clip: true
+        ColumnLayout { id: column; width: page.availableWidth; spacing: 8 }
+    }
+
     // A button that also waits while a call is running. `allowed` is the caller's own
     // precondition; submit() is what Return in a neighbouring field calls (it honours both).
     component ActionButton: Button {
@@ -520,7 +530,7 @@ Item {
             }
 
             // Report: pick a group, then a place; or "Other" plus a landmark
-            ColumnLayout {
+            TabPage {
                 enabled: !root.syncing
                 Label { text: "What's wrong?" }
                 ComboBox { id: category; model: root.categories; Layout.preferredWidth: 240 }
@@ -571,17 +581,18 @@ Item {
                     buttonText: "Set name"
                     onSubmitted: root.run("set_profile", [nameField.text])
                 }
-                Item { Layout.fillHeight: true }
             }
 
             // Members (admin): grant pending keys after the fingerprint is read aloud
-            ColumnLayout {
+            TabPage {
                 enabled: !root.syncing
                 Label { text: "Pending: grant only after the person reads this fingerprint aloud"; font.bold: true }
                 Repeater {
                     model: root.pending
-                    delegate: RowLayout {
+                    delegate: Flow {
                         id: pendingRow
+                        Layout.fillWidth: true
+                        spacing: 6
                         required property var modelData
                         Label { text: pendingRow.modelData.fingerprint + "  " + (pendingRow.modelData.name || "(no name)"); font.family: "monospace" }
                         ActionButton { text: "Grant resident"; onClicked: root.run("grant_role", [pendingRow.modelData.key, "resident", ""]) }
@@ -597,8 +608,10 @@ Item {
                 Label { text: "Members"; font.bold: true }
                 Repeater {
                     model: root.members
-                    delegate: RowLayout {
+                    delegate: Flow {
                         id: memberRow
+                        Layout.fillWidth: true
+                        spacing: 6
                         required property var modelData
                         Label {
                             text: memberRow.modelData.fingerprint + "  " + memberRow.modelData.role + "  " + (memberRow.modelData.name || "pseudonym")
@@ -630,11 +643,10 @@ Item {
                                             function () { locCode.text = ""; locLabel.text = "" })
                     }
                 }
-                Item { Layout.fillHeight: true }
             }
 
             // Anchor: compute, run the printed spel command in a terminal, record the reference
-            ColumnLayout {
+            TabPage {
                 enabled: !root.syncing
                 ActionButton { text: "Compute checkpoint"; onClicked: root.checkpoint = root.call("checkpoint_now", []) }
                 Label { visible: !!root.checkpoint; text: root.checkpoint ? root.checkpoint.n_events + " events, root " + root.checkpoint.heads_root.substr(0, 16) + "…" : "" }
@@ -654,11 +666,10 @@ Item {
                                  function () { anchorField.text = ""; root.checkpoint = null })
                     }
                 }
-                Item { Layout.fillHeight: true }
             }
 
             // Identity: a password-sealed backup, to continue as the same person after a reinstall
-            ColumnLayout {
+            TabPage {
                 Label { text: "Back up your identity"; font.bold: true }
                 Label {
                     text: "Keep this and your password safe. Anyone with both can act as you. Never run the same identity on two devices at once."
@@ -688,7 +699,6 @@ Item {
                     Layout.fillWidth: true
                 }
                 Button { visible: exportOut.text !== ""; text: "Hide"; flat: true; onClicked: exportOut.text = "" }
-                Item { Layout.fillHeight: true }
             }
         }
     }
