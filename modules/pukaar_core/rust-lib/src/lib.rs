@@ -172,6 +172,17 @@ fn delivered(
     }
 }
 
+/// `delivered` for a step that is idempotent: Delivery is a shared, long-lived module, so another
+/// module, an earlier load of ours, or a leave_site whose channelClose failed may already have done
+/// it, and Delivery then refuses with "already initialized" / "already exists". The state we wanted
+/// holds, so that refusal is success.
+fn delivered_once(
+    method: &str,
+    r: Result<serde_json::Value, logos_rust_sdk::LogosError>,
+) -> Result<(), String> {
+    delivered(method, r).or_else(|e| e.contains("already ").then_some(()).ok_or(e))
+}
+
 /// Record the outcome of a bring-up step. An error keeps the link where it is: the next flush retries.
 fn advance(r: Result<Link, String>) {
     if let Some(sh) = SHARED.lock().unwrap().as_mut() {
@@ -207,7 +218,7 @@ fn listen<T: 'static>(
     Ok(())
 }
 
-/// createNode (another module may own it: "already initialized" is fine), then subscribe.
+/// createNode (another module may own it), then subscribe.
 // ponytail: if the 2nd subscribe fails after the 1st worked, the retry adds one duplicate
 // nodeStarted listener (harmless: advance is idempotent); split the step if that ever matters.
 fn create_and_listen() -> Result<(), String> {
@@ -215,10 +226,7 @@ fn create_and_listen() -> Result<(), String> {
     // PUKAAR_DELIVERY_CFG overrides the network (LAN entry-node, L2).
     let cfg = std::env::var("PUKAAR_DELIVERY_CFG")
         .unwrap_or_else(|_| r#"{"mode":"Edge","preset":"logos.test"}"#.to_string());
-    match delivered("createNode", modules().delivery_module.create_node(&cfg)) {
-        Err(e) if !e.contains("already initialized") => return Err(e),
-        _ => {}
-    }
+    delivered_once("createNode", modules().delivery_module.create_node(&cfg))?;
     listen(
         modules().delivery_module.on_node_started(),
         D::decode_node_started,
@@ -239,7 +247,8 @@ fn create_and_listen() -> Result<(), String> {
 
 fn open_channel(site_hex: &str, me_hex: &str) -> Result<(), String> {
     let topic = format!("/pukaar/1/site-{site_hex}/proto");
-    delivered(
+    // An existing channel (our earlier load, or a failed channelClose) already carries our site.
+    delivered_once(
         "channelCreate",
         modules()
             .delivery_module
