@@ -10,7 +10,7 @@
 |---|---|
 | Demo video | To be added in later version |
 | Screenshots | To be added in later version |
-| Latest release | [v0.1.0](https://github.com/adysingh5711/pukaar/releases/tag/v0.1.0): signed `.lgx` packages for Logos Basecamp 0.3.1 |
+| Latest release | [v0.1.1](https://github.com/adysingh5711/pukaar/releases/tag/v0.1.1): signed `.lgx` packages for Logos Basecamp 0.3.1 |
 
 ---
 
