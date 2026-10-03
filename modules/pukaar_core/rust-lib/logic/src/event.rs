@@ -116,6 +116,13 @@ pub enum Body {
         heads: Vec<(Key, u64)>,
         lez_tx: String,
     },
+    /// Admin only. `retired: false` restores. Never a delete: the location and its old
+    /// issues stay; a retired location just takes no new reports.
+    LocationRetire {
+        code: String,
+        retired: bool,
+        reason: String,
+    },
 }
 
 fn location_texts(ls: &[Location]) -> impl Iterator<Item = &str> {
@@ -161,6 +168,7 @@ impl Body {
             | Confirm { note: t, .. }
             | Comment { text: t, .. }
             | Checkpoint { lez_tx: t, .. } => vec![t],
+            LocationRetire { code, reason, .. } => vec![code, reason],
             MarkDuplicate { .. } => vec![],
         }
     }
@@ -239,10 +247,17 @@ pub fn decode(bytes: &[u8]) -> Result<Event, DecodeError> {
     if u.v != VERSION {
         return Err(BadVersion);
     }
-    if let Body::Report { text, landmark, .. } = &u.body {
-        if text.len() > MAX_TEXT || landmark.len() > MAX_TEXT {
-            return Err(TextTooLong);
+    // ponytail: only these bodies are capped on receipt (the sender caps every text);
+    // capping the rest would retroactively reject already-shared events.
+    let over = match &u.body {
+        Body::Report { text, landmark, .. } => [text, landmark].iter().any(|t| t.len() > MAX_TEXT),
+        Body::LocationRetire { code, reason, .. } => {
+            [code, reason].iter().any(|t| t.len() > MAX_TEXT)
         }
+        _ => false,
+    };
+    if over {
+        return Err(TextTooLong);
     }
     Ok(Event {
         id: sha256(payload),

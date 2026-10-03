@@ -80,12 +80,58 @@ pub struct State {
     pub admin: Option<Key>,
     pub config: Config,
     pub locations: Vec<Location>,
+    /// code -> why it was retired. Retired locations stay in `locations`.
+    pub retired: BTreeMap<String, String>,
     pub roles: BTreeMap<Key, Role>,
     pub names: BTreeMap<Key, String>,
     pub pending_members: BTreeSet<Key>,
     pub issues: BTreeMap<Id, Issue>,
     pub rejected: BTreeMap<Id, String>,
     pub checkpoints: Vec<CheckpointRecord>,
+}
+
+impl State {
+    /// Issues at `code` that still need someone to act: they block retiring it.
+    #[must_use]
+    pub fn open_issues_at(&self, code: &str) -> usize {
+        self.issues
+            .values()
+            .filter(|i| i.location == code && !i.status.is_terminal())
+            .count()
+    }
+
+    /// THE retire/restore rule. The reducer enforces it on every replica and `Node` runs the
+    /// same check before signing, so a refusal never reaches the network.
+    pub fn check_location_change(
+        &self,
+        by: &Key,
+        code: &str,
+        retire: bool,
+        reason: &str,
+    ) -> Result<(), String> {
+        require(
+            self.roles.get(by) == Some(&Role::Admin),
+            "only admin retires locations",
+        )?;
+        require(
+            code != OTHER_LOCATION && self.locations.iter().any(|l| l.code == code),
+            format!("unknown location {code}"),
+        )?;
+        require(
+            !reason.trim().is_empty(),
+            "a retire or restore needs a reason",
+        )?;
+        let retired = self.retired.contains_key(code);
+        if !retire {
+            return require(retired, format!("{code} is not retired"));
+        }
+        require(!retired, format!("{code} is already retired"))?;
+        let n = self.open_issues_at(code);
+        require(
+            n == 0,
+            format!("{code} has {n} open issue{}", if n == 1 { "" } else { "s" }),
+        )
+    }
 }
 
 #[must_use]
@@ -228,6 +274,19 @@ fn apply(s: &mut State, e: &Event) -> Result<(), String> {
             }
             Ok(())
         }
+        LocationRetire {
+            code,
+            retired,
+            reason,
+        } => {
+            s.check_location_change(&a, code, *retired, reason)?;
+            if *retired {
+                s.retired.insert(code.clone(), reason.clone());
+            } else {
+                s.retired.remove(code);
+            }
+            Ok(())
+        }
         Report {
             category,
             location,
@@ -247,6 +306,10 @@ fn apply(s: &mut State, e: &Event) -> Result<(), String> {
                 require(
                     s.locations.iter().any(|l| &l.code == location),
                     format!("unknown location {location}"),
+                )?;
+                require(
+                    !s.retired.contains_key(location),
+                    format!("location {location} is retired"),
                 )?;
             }
             let open = s
@@ -372,6 +435,10 @@ fn apply(s: &mut State, e: &Event) -> Result<(), String> {
                 }
                 Reopen { reason, .. } => {
                     require(!reason.trim().is_empty(), "reopen needs a reason")?;
+                    require(
+                        !s.retired.contains_key(&i.location),
+                        format!("location {} is retired", i.location),
+                    )?;
                     require(
                         matches!(
                             st,

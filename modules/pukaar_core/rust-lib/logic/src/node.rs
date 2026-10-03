@@ -3,8 +3,8 @@
 
 use crate::checkpoint::{checkpoint_now, root_for};
 use crate::event::{
-    decode, sign, Body, DecodeError, Event, Id, Key, Unsigned, MAX_EVENT_BYTES, MAX_TEXT, VERSION,
-    ZERO,
+    decode, sign, Body, DecodeError, Event, Id, Key, Location, Unsigned, MAX_EVENT_BYTES, MAX_TEXT,
+    VERSION, ZERO,
 };
 use crate::reducer::{reduce, Issue, State, Status};
 use crate::store::{Accept, Store};
@@ -212,7 +212,7 @@ impl Node {
             "site": hex::encode(self.store.site),
             "name": s.config.name,
             "categories": s.config.categories,
-            "locations": s.locations.iter().map(|l| json!(l)).collect::<Vec<_>>(),
+            "locations": s.locations.iter().map(|l| location_json(&s, l)).collect::<Vec<_>>(),
             "members": s.roles.iter().map(|(k, r)| { let mut m = member(k); m["role"] = json!(format!("{r:?}")); m }).collect::<Vec<_>>(),
             "pending": s.pending_members.iter().map(member).collect::<Vec<_>>(),
             "sla_ack_h": s.config.sla_ack_h,
@@ -255,6 +255,36 @@ impl Node {
         self.publish(
             Body::RoleRevoke {
                 subject,
+                reason: reason.into(),
+            },
+            ts,
+        )
+    }
+
+    /// Retire a location. Same rule as the reducer (`State::check_location_change`), checked
+    /// first so a refusal like "W-03 has 2 open issues" publishes nothing.
+    pub fn retire_location(&mut self, code: &str, reason: &str, ts: u64) -> Result<Event, String> {
+        self.set_location_retired(code, true, reason, ts)
+    }
+
+    pub fn restore_location(&mut self, code: &str, reason: &str, ts: u64) -> Result<Event, String> {
+        self.set_location_retired(code, false, reason, ts)
+    }
+
+    fn set_location_retired(
+        &mut self,
+        code: &str,
+        retired: bool,
+        reason: &str,
+        ts: u64,
+    ) -> Result<Event, String> {
+        let (code, reason) = (code.trim(), reason.trim());
+        self.state()
+            .check_location_change(&self.me(), code, retired, reason)?;
+        self.publish(
+            Body::LocationRetire {
+                code: code.into(),
+                retired,
                 reason: reason.into(),
             },
             ts,
@@ -431,6 +461,15 @@ fn past(now: u64, ts: u64, h: u32) -> bool {
     deadline(ts, h).is_some_and(|d| now > d)
 }
 
+/// A location plus whether it is retired (and why) and how many issues still block retiring it.
+fn location_json(s: &State, l: &Location) -> Value {
+    let mut v = json!(l);
+    v["retired"] = json!(s.retired.contains_key(&l.code));
+    v["retired_reason"] = json!(s.retired.get(&l.code).map_or("", String::as_str));
+    v["open_issues"] = json!(s.open_issues_at(&l.code));
+    v
+}
+
 fn issue_json(s: &State, i: &Issue, now: u64) -> Value {
     let location_label = s
         .locations
@@ -456,6 +495,7 @@ fn issue_json(s: &State, i: &Issue, now: u64) -> Value {
         "category": i.category,
         "location": i.location,
         "location_label": location_label,
+        "location_retired": s.retired.contains_key(&i.location),
         "landmark": i.landmark,
         "text": i.text,
         "progress": progress,
@@ -492,6 +532,7 @@ pub fn kind_name(b: &Body) -> &'static str {
         MarkDuplicate { .. } => "mark_duplicate",
         Comment { .. } => "comment",
         Checkpoint { .. } => "checkpoint",
+        LocationRetire { .. } => "location_retire",
     }
 }
 
