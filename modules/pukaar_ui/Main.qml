@@ -10,6 +10,14 @@ Item {
     property var me: ({})
     readonly property var noInfo: ({ categories: [], locations: [], members: [], pending: [] })
     property var info: noInfo
+    // The lists of site_info live in properties of their own, written only when their content
+    // changed: info itself changes on every received event (it carries an event count), and a
+    // rebuilt model would wipe typed text in the Members rows and reset the Report combos.
+    property var categories: []
+    property var locations: []
+    property var members: []
+    property var pending: []
+    readonly property var groupNames: groups()
     property var issues: []
     property var selected: null          // issue_timeline() result
     property var checkpoint: null        // checkpoint_now() result
@@ -38,19 +46,41 @@ Item {
     // Statuses a steward can still act on (acknowledge / update / claim / won't-fix).
     function isActionable(status) { return ["Open", "Acknowledged", "InProgress"].indexOf(status) >= 0 }
 
-    // Replies arrive as JSON strings, sometimes double-encoded by the bridge.
-    // This is the ONE place that talks to pukaar_core: every button routes through run()/call().
-    function call(method, args) {
+    // Raw reply of each polled method as last applied. Not bound to anything: poll() compares
+    // against it and skips the assignment when nothing changed, so a quiet 2 s tick resets no model.
+    property var seen: ({})
+
+    // This is the ONE place that talks to pukaar_core: every button routes through run()/call()/poll().
+    function callRaw(method, args) {
         // qmllint disable unqualified
         // `logos` is injected by the C++ host at runtime; it has no static QML type.
         if (typeof logos === "undefined" || !logos.callModule)
             return "error: no logos bridge (run inside Basecamp or logos-standalone-app)"
-        var v = logos.callModule("pukaar_core", method, args)
+        return logos.callModule("pukaar_core", method, args)
         // qmllint enable unqualified
+    }
+    // Replies arrive as JSON strings, sometimes double-encoded by the bridge.
+    function decode(v) {
         try { v = JSON.parse(v) } catch (e) {}
         if (typeof v === "string") { try { v = JSON.parse(v) } catch (e) {} }
         return v
     }
+    function call(method, args) { return decode(callRaw(method, args)) }
+    // Read-only refresh: hand the decoded reply to `apply` only if it differs from the last one.
+    function poll(method, args, apply) {
+        var raw = callRaw(method, args)
+        if (raw === seen[method]) return
+        seen[method] = raw
+        apply(decode(raw))
+    }
+    function keep(name, value) { if (JSON.stringify(value) !== JSON.stringify(root[name])) root[name] = value }
+    function setInfo(i) {
+        info = i
+        keep("categories", i.categories); keep("locations", i.locations)
+        keep("members", i.members); keep("pending", i.pending)
+    }
+    function openIssue(id) { poll("issue_timeline", [id], function (t) { if (t && t.issue) selected = t }) }
+    function closeIssue() { selected = null; delete seen.issue_timeline }
     function failed(v) {
         return typeof v === "string" && (v.indexOf("error:") === 0 || v.indexOf("rejected:") === 0)
     }
@@ -63,15 +93,14 @@ Item {
     // Drop this device's copy of the site (the key stays); back to the first-run screen.
     function leave() {
         if (failed(run("leave_site", []))) return
-        selected = null; checkpoint = null; issues = []; info = noInfo
+        closeIssue(); checkpoint = null; issues = []; setInfo(noInfo); seen = ({})
     }
     function refresh() {
-        var m = call("my_identity", [])
-        me = (m && typeof m === "object") ? m : {}
+        poll("my_identity", [], function (m) { me = (m && typeof m === "object") ? m : {} })
         if (!inSite) return
-        var i = call("site_info", []); if (i && i.site) info = i
-        var l = call("list_issues", []); if (Array.isArray(l)) issues = l
-        if (selected) { var t = call("issue_timeline", [selected.issue.id]); if (t && t.issue) selected = t }
+        poll("site_info", [], function (i) { if (i && i.site) setInfo(i) })
+        poll("list_issues", [], function (l) { if (Array.isArray(l)) issues = l })
+        if (selected) poll("issue_timeline", [selected.issue.id], function (t) { if (t && t.issue) selected = t })
     }
     function inColumn(statuses) {
         return issues.filter(function (i) {
@@ -127,11 +156,11 @@ Item {
     }
     function groups() {
         var g = []
-        info.locations.forEach(function (l) { if (g.indexOf(l.group) < 0) g.push(l.group) })
+        locations.forEach(function (l) { if (g.indexOf(l.group) < 0) g.push(l.group) })
         g.push(otherLabel)
         return g
     }
-    function locationsIn(group) { return info.locations.filter(function (l) { return l.group === group }) }
+    function locationsIn(group) { return locations.filter(function (l) { return l.group === group }) }
 
     // ---- reusable pieces (props in, signals out; no reach into the enclosing scope) ----
 
@@ -379,7 +408,7 @@ Item {
                                     tint: root.stageColor(modelData.status)
                                     alertColor: root.dangerColor
                                     mutedColor: root.mutedColor
-                                    onOpened: root.selected = root.call("issue_timeline", [modelData.id])
+                                    onOpened: root.openIssue(modelData.id)
                                 }
                             }
                         }
@@ -467,7 +496,7 @@ Item {
                                     onClicked: { root.run("act", [detail.issue.id, "mark_duplicate", dupOf.target, "", 0]); dupOf.target = "" }
                                 }
                             }
-                            Button { text: "Close"; flat: true; onClicked: root.selected = null }
+                            Button { text: "Close"; flat: true; onClicked: root.closeIssue() }
                         }
                     }
                 }
@@ -477,9 +506,9 @@ Item {
             ColumnLayout {
                 enabled: !root.syncing
                 Label { text: "What's wrong?" }
-                ComboBox { id: category; model: root.info.categories; Layout.preferredWidth: 240 }
+                ComboBox { id: category; model: root.categories; Layout.preferredWidth: 240 }
                 RowLayout {
-                    ComboBox { id: group; model: root.groups(); Layout.preferredWidth: 220 }
+                    ComboBox { id: group; model: root.groupNames; Layout.preferredWidth: 220 }
                     ComboBox {
                         id: location
                         visible: group.currentText !== root.otherLabel
@@ -529,7 +558,7 @@ Item {
                 enabled: !root.syncing
                 Label { text: "Pending: grant only after the person reads this fingerprint aloud"; font.bold: true }
                 Repeater {
-                    model: root.info.pending
+                    model: root.pending
                     delegate: RowLayout {
                         id: pendingRow
                         required property var modelData
@@ -545,7 +574,7 @@ Item {
                 }
                 Label { text: "Members"; font.bold: true }
                 Repeater {
-                    model: root.info.members
+                    model: root.members
                     delegate: RowLayout {
                         id: memberRow
                         required property var modelData
@@ -564,7 +593,7 @@ Item {
                 }
                 Label { text: "Add a location (for example, found on the site walk)"; font.bold: true }
                 RowLayout {
-                    ComboBox { id: locGroup; editable: true; model: root.groups().slice(0, -1); Layout.preferredWidth: 180 }
+                    ComboBox { id: locGroup; editable: true; model: root.groupNames.slice(0, -1); Layout.preferredWidth: 180 }
                     TextField { id: locCode; placeholderText: "W-04"; Layout.preferredWidth: 80 }
                     TextField { id: locLabel; placeholderText: "Tap behind tent 4"; Layout.fillWidth: true }
                     Button {
