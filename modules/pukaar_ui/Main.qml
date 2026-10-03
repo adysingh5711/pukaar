@@ -771,7 +771,7 @@ Item {
                     }
                     FormRow {   // staff are always named: this goes into the genesis as the admin's name
                         label: "Your name, as residents will see it"
-                        FramedField { id: adminName; Layout.fillWidth: true; maximumLength: 500; Accessible.name: "Your name"; placeholderText: "e.g. Aditya Singh" }
+                        FramedField { id: adminName; Layout.fillWidth: true; maximumLength: 500; Accessible.name: "Your name"; placeholderText: "e.g. John" }
                     }
                 }
                 FormRow {

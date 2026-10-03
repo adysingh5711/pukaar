@@ -4,7 +4,7 @@
 
 [![ci](https://github.com/adysingh5711/pukaar/actions/workflows/ci.yml/badge.svg)](https://github.com/adysingh5711/pukaar/actions/workflows/ci.yml)
 ![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)
-![status](https://img.shields.io/badge/status-in%20development-orange)
+![status](https://img.shields.io/badge/status-pilot--ready%20v0.1-blue)
 
 | | |
 |---|---|
@@ -61,6 +61,7 @@ Pukaar takes that power away from the operator:
 - **Events.** Each action is an ed25519-signed, postcard-encoded envelope (`author`, `seq`, `prev` hash, Lamport clock, body) under the domain `logos:pukaar:1\0`. The decoder is strict: events are at most 4 KiB, text fields at most 500 B, trailing bytes are rejected, and the signature is checked before the body is decoded.
 - **Ordering.** Events apply in `(lamport, author, id)` order, so every replica computes the same board no matter what order messages arrive in. A property test replays 60 random histories in 20 shuffled delivery orders each and checks that the final states are identical.
 - **Transport.** Live events go over `delivery_module` Reliable Channels on the content topic `/pukaar/1/site-<site_hex>/proto`. Catch-up is heads-based anti-entropy with a capped resend, not Store queries, so late joiners, restarts and LAN-only sites work without a store node.
+- **Forks.** If one identity ever signs two different events at the same position (one person on two devices, or a cheat), every replica keeps the **same** branch: at each position the event with the lowest id wins, whatever order the copies arrive in. The losing branch is kept and saved as evidence, never applied, and the board shows a fork warning.
 - **Checkpoints.** A Merkle root (RFC 6962 style) over every author's chain head, signed by a member under `logos:pukaar:cp:1\0` and anchored with one SPEL instruction on LEZ. Anyone can recompute the root from their own replica and compare.
 
 ## Features
@@ -69,16 +70,18 @@ Pukaar takes that power away from the operator:
 - **Staff workflow:** acknowledge, post updates with the next step and an ETA, claim a fix (a note is required), close as won't-fix, or mark a duplicate. Overdue and waiting-for-48 h cards are highlighted.
 - **Two-key closure:** only the reporter, or two residents who aren't the claimant, can confirm a fix. The reporter can always reopen.
 - **Members:** join with the site id; the admin approves each person after hearing their fingerprint read aloud. Staff are always named by the admin, and residents choose a name or stay pseudonymous. The admin can revoke a role, with a reason.
-- **Locations:** the admin adds places, and can retire or restore them, never delete. A place with open issues can't be retired, and a retired place offers "Report as Other at this spot".
+- **Site setup:** the admin creates a site from a guided form: site name, their own name, editable categories, and a places table that starts empty (or from the Dhun sample). Service rules (acknowledge and fix targets in hours, open reports per person) are plain fields with explanations.
+- **Locations:** the admin adds places and can **edit** a place's name or group (its code never changes; old issues show "renamed from …"). A place in use can be **retired** (blocked while it has open issues), and a retired place offers "Report as Other at this spot". A place nobody ever reported can be **removed**: it shows as pending for 30 days with Undo, then is hidden from every list and listed in the admin's change log. A duplicate code is refused.
 - **Identity backup:** export a password-sealed copy of your identity (Argon2id + XChaCha20-Poly1305) and restore it on a new install. A restored identity waits for its own history before it can publish, so it can't fork its own chain.
 - **Anchor:** compute a checkpoint of everyone's history and anchor it on LEZ with the printed `spel` command. Covered events show who recorded the anchor.
-- **Nothing is ever deleted:** rejected actions are kept and shown, and the board flags any forked chain.
+- **Nothing is ever deleted:** rejected actions are kept and shown. "Removed" places are only hidden; their signed events stay in everyone's log. A forked chain is flagged, and every replica settles on the same branch.
+- **One identity, one device:** your key is your identity (there are no accounts). Run it on one device at a time; a restored identity waits for its own history before it can act.
 
 ## Project status
 
 | Component | Path | Status |
 |---|---|---|
-| Rules engine (`pukaar_logic`): events, chains, reducer, sync, checkpoints, persistence, identity backup | `modules/pukaar_core/rust-lib/logic/` | **Done.** 69 tests, clippy `-D warnings` clean, fuzzed in CI |
+| Rules engine (`pukaar_logic`): events, chains, reducer, sync, checkpoints, persistence, identity backup | `modules/pukaar_core/rust-lib/logic/` | **Done.** 108 tests, clippy `-D warnings` clean, fuzzed in CI |
 | Checkpoint registry (`pukaar_registry`), a SPEL program on LEZ | `programs/pukaar_registry/` | **Done.** Deployed and anchored on localnet ([record](programs/pukaar_registry/ANCHOR.md)) |
 | Logos core module (`pukaar_core`), a Rust cdylib plus Delivery glue | `modules/pukaar_core/` | **Done.** Runs in the standalone Logos host and inside Basecamp 0.3.1 |
 | QML UI module (`pukaar_ui`) | `modules/pukaar_ui/` | **Done.** Board, Report, Members, Anchor and Identity tabs |
@@ -142,7 +145,7 @@ A one-instruction [SPEL](https://github.com/logos-co/spel) program ([source](pro
 
 ```bash
 cd modules/pukaar_core/rust-lib/logic
-cargo test                                   # 69 tests
+cargo test                                   # 108 tests
 cargo clippy --all-targets -- -D warnings
 cargo +nightly fuzz run decode -- -max_total_time=60   # needs cargo-fuzz
 ```
@@ -161,9 +164,14 @@ spel --idl idl/pukaar_registry.json --program <PROGRAM_ID> -- anchor \
 
 1. Download `logos-pukaar_core-module-lib.lgx` and `logos-pukaar_ui-module.lgx` from the [latest release](https://github.com/adysingh5711/pukaar/releases/latest), and check them (see Security → Release signing).
 2. In Basecamp 0.3.1: **Package Manager → Install Local Package**. Install the core package first, then the UI package.
-3. Open Pukaar. The site admin types their name and clicks **Create site**. Everyone else pastes the site id and clicks **Join**, then reads their fingerprint aloud at the kiosk so the admin can approve them.
+3. Open Pukaar. Everyone except the admin pastes the site id under **Join a site**, then reads their fingerprint aloud at the kiosk so the admin can approve them. The admin opens **Create a site** instead, fills in the form, and clicks **Create site**. **Restore your identity** brings back an exported identity on a new install.
 
-One Basecamp profile holds one Pukaar identity. To run several people on one machine, give each its own Basecamp data directory: `scripts/basecamp.sh <name>` (Pukaar is installed once per profile).
+One Basecamp profile holds one Pukaar identity. To run several people on one machine, give each its own Basecamp data directory, side by side:
+
+```bash
+scripts/basecamp.sh default    # your normal Basecamp profile
+scripts/basecamp.sh asha       # a separate profile (install Pukaar once in it)
+```
 
 ### Try it from source (developers)
 
@@ -190,7 +198,9 @@ The `heads_root` and `n_events` it prints must equal the values that your own re
 | Deleting an embarrassing report | No server and no delete event. Replicas on every device. Anchored heads |
 | Closing a ticket that isn't fixed | A claim isn't resolution. It needs the reporter, or 2 residents, and never the claimant. Reopen is always allowed |
 | Backdating an acknowledgement | `ts` is informational. Order comes from the chain and the Lamport clock. Checkpoints bound when an event existed |
-| Rewriting history (equivocation) | Per-author hash chains. Two events at one `(author, seq)` form a self-contained fork proof, flagged on the board |
+| Rewriting history (equivocation) | Per-author hash chains. Two events at one `(author, seq)` form a self-contained fork proof, kept as evidence and flagged on the board. Every replica keeps the same branch (lowest id wins), so boards still converge |
+| One identity used on two devices | Treated like a fork: both versions kept, one deterministic winner everywhere, a fork warning on the board. A restored identity can't publish until its own history has synced back |
+| Removing an inconvenient place | Only places nobody ever reported can be removed, with a reason, after a 30-day pending period anyone can see; places with reports can only be retired |
 | Spam | A deterministic open-report cap per key. The admin can revoke roles, and the reports stay visible |
 | Malformed input | Strict decoder with size limits, the signature checked before decoding, and a `cargo-fuzz` target run in CI |
 | Junk on-chain checkpoints | One PDA per (site, root). Signature and membership are checked off-chain |
@@ -215,14 +225,14 @@ modules/pukaar_core/
                           nested here so the Nix build's crate-dir staging
                           sees it (single source of truth, no copy)
       src/event.rs        signed envelope, strict decode
-      src/store.rs        per-author chains, pending buffer, fork proofs
+      src/store.rs        per-author chains, pending buffer, deterministic fork choice + evidence
       src/checkpoint.rs   Merkle root, checkpoint signature, verification
       src/sync.rs         Wire enum, heads-based anti-entropy
       src/reducer.rs      state machine → State
       src/node.rs         one participant: publish/receive + JSON views
       src/persist.rs      atomic on-disk replica, leave/rejoin
       src/identity.rs     password-sealed identity export/import
-      tests/              event, store, checkpoint, sync, lifecycle, convergence, persist, identity, retire
+      tests/              event, store, checkpoint, sync, lifecycle, convergence, persist, identity, retire, location, setup
       fuzz/               cargo-fuzz decode target
     src/lib.rs            Logos glue: PukaarCoreModule trait + delivery_module wiring
 modules/pukaar_ui/Main.qml  the QML UI (one call funnel, shared components, one colour palette)
@@ -245,7 +255,8 @@ scripts/                   demo.sh, window.sh, basecamp.sh
 ## Roadmap
 
 - **L1 (done in v0.1.0):** the full report → claim → confirm loop between instances over Logos Delivery, running inside Basecamp, with signed portable `.lgx` packages.
-- **L1+:** anchoring from the app's Anchor tab, with a ✓ on each timeline row; a testnet anchor.
+- **v0.1.1:** guided site setup, edit and remove locations (30-day pending removal), a change log, service rules as form fields, deterministic fork resolution.
+- **L1+:** anchoring from the app's Anchor tab on localnet and a testnet anchor; an "identity active on another device" warning; Heads messages that carry head ids, so anti-entropy also repairs equal-length forks.
 - **L2:** LAN relay for sites without internet, a password-sealed key file, a site-health view (category level only, no per-person ranking), export and verify bundles, evidence photos on Logos Storage (EXIF stripped), UI tests, and a steward guide in Hindi and English.
 - **L3:** an anonymous reporting lane with an RLN rate limit, a phone path, and 2-of-3 admin grants.
 
