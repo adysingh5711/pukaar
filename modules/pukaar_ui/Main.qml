@@ -37,15 +37,20 @@ Item {
 
     // ---- design tokens: the only place a colour or the stage->colour map is spelled out ----
     readonly property color dangerColor: "#d73a49"
-    readonly property color mutedColor: "gray"
+    readonly property color mutedColor: "#57606a"     // 6:1 on white (plain "gray" was 3.95:1)
+    // Sizes follow the user's system font instead of fixed pixels.
+    FontMetrics { id: systemFont }       // default font = the application's
+    readonly property real baseSize: systemFont.font.pointSize > 0 ? systemFont.font.pointSize : 10
+    readonly property real smallSize: baseSize * 0.85
+    readonly property real titleSize: baseSize * 1.6
     readonly property var stageColors: ({
         Open: "#b45309",
         Acknowledged: "#b45309",
         InProgress: "#1d6fd8",
         AwaitingConfirmation: "#7c3aed",
         ConfirmedResolved: "#15803d",
-        ClosedWontfix: "#57606a",
-        Duplicate: "#57606a"
+        ClosedWontfix: mutedColor,
+        Duplicate: mutedColor
     })
     function stageColor(status) { return root.stageColors[status] || root.dangerColor }
     // Statuses a steward can still act on (acknowledge / update / claim / won't-fix).
@@ -93,7 +98,14 @@ Item {
         keep("categories", i.categories); keep("locations", i.locations)
         keep("members", i.members); keep("pending", i.pending)
     }
-    function openIssue(id) { call("issue_timeline", [id], function (t) { if (t && t.issue) selected = t }) }
+    // Opening a card moves the cursor to the note, so a steward can type straight away.
+    function openIssue(id) {
+        call("issue_timeline", [id], function (t) {
+            if (!t || !t.issue) return
+            selected = t
+            note.forceActiveFocus()
+        })
+    }
     function closeIssue() { selected = null }
     // The core's Delivery state, in plain words (the raw Down/Listening/Starting/Started/Open are internal).
     function deliveryLabel(d) {
@@ -221,7 +233,7 @@ Item {
         color: chip.tint
         Label {   // elides when the parent narrows the chip below its natural width
             id: chipText; anchors.centerIn: parent; width: Math.min(implicitWidth, chip.width - 12)
-            elide: Text.ElideRight; text: chip.label; color: "white"; font.pixelSize: 11
+            elide: Text.ElideRight; text: chip.label; color: "white"; font.pointSize: root.smallSize
         }
     }
 
@@ -238,6 +250,8 @@ Item {
         required property color mutedColor
         signal opened()
         width: ListView.view.width
+        Accessible.name: card.placeText + ": " + card.issue.text
+        Accessible.description: card.issue.stage + ". " + card.hintText
         contentItem: Column {
             width: card.width
             spacing: 2
@@ -248,7 +262,7 @@ Item {
             Label {
                 width: parent.width
                 wrapMode: Text.Wrap
-                font.pixelSize: 11
+                font.pointSize: root.smallSize
                 color: card.overdue ? card.alertColor : card.mutedColor
                 text: card.hintText
             }
@@ -329,12 +343,12 @@ Item {
             id: header
             Layout.fillWidth: true
             spacing: 12
-            Label { text: "Pukaar"; font.pixelSize: 20; font.bold: true }
-            Label { text: root.inSite ? (root.info.name || "") : "not in a site yet"; opacity: 0.7 }
+            Label { text: "Pukaar"; font.pointSize: root.titleSize; font.bold: true }
+            Label { text: root.inSite ? (root.info.name || "") : "not in a site yet"; color: root.mutedColor }
             Row {   // the 64-hex id is long: show the short form, Copy puts the full one on the clipboard
                 visible: root.inSite
                 spacing: 4
-                Label { anchors.verticalCenter: parent.verticalCenter; text: "site " + root.shortId(root.me.site); font.pixelSize: 10; color: root.mutedColor }
+                Label { anchors.verticalCenter: parent.verticalCenter; text: "site " + root.shortId(root.me.site); font.pointSize: root.smallSize; color: root.mutedColor }
                 Button {
                     text: "Copy"; flat: true
                     Accessible.name: "Copy the full site id"
@@ -529,6 +543,7 @@ Item {
                         property string st: issue.status || ""
                         property bool mine: issue.reporter === root.me.key
                         property bool claimant: issue.claimant === root.me.key
+                        Keys.onEscapePressed: root.closeIssue()
                         property bool hasNote: note.text.trim() !== ""   // the core rejects these without one
                         function act(a, eta) {
                             root.run("act", [issue.id, a, note.text, nextStep.text, eta | 0],
@@ -590,6 +605,7 @@ Item {
                                     // The model is rebuilt on every 2 s refresh, which resets currentIndex,
                                     // so the user's pick is kept in `target`, never read from currentIndex.
                                     id: dupOf
+                                    Accessible.name: "Duplicate of another report"
                                     property string target: ""
                                     property string targetLabel: ""
                                     property string forIssue: detail.issue.id || ""
@@ -622,11 +638,12 @@ Item {
                     text: "Waiting for the admin to approve you. Read your fingerprint aloud at the kiosk; you can report once you are approved."
                 }
                 Label { text: "What's wrong?" }
-                ComboBox { id: category; model: root.categories; Layout.preferredWidth: 240 }
+                ComboBox { id: category; Accessible.name: "What is wrong (category)"; model: root.categories; Layout.preferredWidth: 240 }
                 RowLayout {
-                    ComboBox { id: group; model: root.groupNames; Layout.preferredWidth: 220 }
+                    ComboBox { id: group; Accessible.name: "Place group"; model: root.groupNames; Layout.preferredWidth: 220 }
                     ComboBox {
                         id: location
+                        Accessible.name: "Place"
                         visible: group.currentText !== root.otherLabel
                         Layout.preferredWidth: 320
                         model: root.locationsIn(group.currentText).map(function (l) { return l.code + " · " + l.label })
@@ -721,7 +738,7 @@ Item {
                 }
                 Label { text: "Add a location (for example, found on the site walk)"; font.bold: true }
                 RowLayout {
-                    ComboBox { id: locGroup; editable: true; model: root.groupNames.slice(0, -1); Layout.preferredWidth: 180 }
+                    ComboBox { id: locGroup; Accessible.name: "Group for the new location"; editable: true; model: root.groupNames.slice(0, -1); Layout.preferredWidth: 180 }
                     TextField { id: locCode; placeholderText: "W-04"; Layout.preferredWidth: 80 }
                     TextField { id: locLabel; placeholderText: "Tap behind tent 4"; Layout.fillWidth: true; onAccepted: addLoc.submit() }
                     ActionButton {
