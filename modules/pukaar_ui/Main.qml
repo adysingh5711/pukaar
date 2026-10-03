@@ -95,6 +95,11 @@ Item {
     }
     function openIssue(id) { call("issue_timeline", [id], function (t) { if (t && t.issue) selected = t }) }
     function closeIssue() { selected = null }
+    // The core's Delivery state, in plain words (the raw Down/Listening/Starting/Started/Open are internal).
+    function deliveryLabel(d) {
+        if (failed(d)) return "offline: " + d.substr("error: ".length)
+        return d === "Open" ? "online" : "connecting"
+    }
     function failed(v) {
         return typeof v === "string" && (v.indexOf("error:") === 0 || v.indexOf("rejected:") === 0)
     }
@@ -273,6 +278,25 @@ Item {
         ColumnLayout { id: column; width: page.availableWidth; spacing: 8 }
     }
 
+    // A full-width notice: wrapped text, and optionally one button on the right.
+    component Banner: RowLayout {
+        id: banner
+        property string text
+        property color tint: label.palette.windowText
+        property bool bold: false
+        property string buttonText
+        property string buttonName: buttonText     // what a screen reader says for the button
+        signal activated()
+        Layout.fillWidth: true
+        Label { id: label; Layout.fillWidth: true; wrapMode: Text.Wrap; text: banner.text; color: banner.tint; font.bold: banner.bold }
+        ActionButton {
+            visible: banner.buttonText !== ""
+            text: banner.buttonText
+            Accessible.name: banner.buttonName
+            onClicked: banner.activated()
+        }
+    }
+
     // A button that also waits while a call is running. `allowed` is the caller's own
     // precondition; submit() is what Return in a neighbouring field calls (it honours both).
     component ActionButton: Button {
@@ -319,7 +343,7 @@ Item {
                 TextEdit { id: clip; visible: false }
             }
             Label {   // Delivery bring-up status from pukaar_core; errors stay visible until it recovers
-                text: "delivery " + (root.me.delivery || "…")
+                text: "delivery: " + root.deliveryLabel(root.me.delivery)
                 color: root.failed(root.me.delivery) ? root.dangerColor : root.mutedColor
             }
             Label {
@@ -330,29 +354,29 @@ Item {
                       + (root.me.role || "pending: read your fingerprint at the kiosk")
             }
         }
-        Label { visible: root.message !== ""; text: root.message; color: root.dangerColor; wrapMode: Text.Wrap; Layout.fillWidth: true }
-        Label {   // forks: someone signed two versions of their log (the threat model says: flag it)
+        Banner {   // the last refused action; stays until dismissed or the next action replaces it
+            visible: root.message !== ""
+            text: root.message; tint: root.dangerColor
+            buttonText: "×"; buttonName: "Dismiss this error"
+            onActivated: root.message = ""
+        }
+        Banner {   // forks: someone signed two versions of their log (the threat model says: flag it)
             visible: root.inSite && root.info.forks > 0
-            Layout.fillWidth: true; wrapMode: Text.Wrap; color: root.dangerColor; font.bold: true
+            tint: root.dangerColor; bold: true
             text: "Integrity warning: " + root.info.forks + " conflicting history pair(s) found. Someone signed two versions of their log, so devices may show different boards."
         }
-        RowLayout {   // joined, but the genesis hasn't arrived: wrong id, or nobody online yet
+        Banner {   // joined, but the genesis hasn't arrived: wrong id, or nobody online yet
             visible: root.inSite && !root.info.name
-            Layout.fillWidth: true
-            Label {
-                Layout.fillWidth: true; wrapMode: Text.Wrap
-                text: "Waiting for site data… If this lasts, check the site id, or wait for a member to come online."
-            }
-            ActionButton { text: "Leave this site"; onClicked: root.leave() }
+            text: "Waiting for site data… If this lasts, check the site id, or wait for a member to come online."
+            buttonText: "Leave this site"
+            onActivated: root.leave()
         }
-        RowLayout {
+        Banner {
             visible: root.inSite && root.syncing
-            Layout.fillWidth: true
-            Label {
-                Layout.fillWidth: true; wrapMode: Text.Wrap; color: root.dangerColor
-                text: "Restoring your earlier reports from the network. Actions are paused until they arrive, so your new ones can't conflict with them."
-            }
-            ActionButton { text: "Skip waiting (history lost)"; onClicked: root.run("skip_history_sync", []) }
+            tint: root.dangerColor
+            text: "Restoring your earlier reports from the network. Actions are paused until they arrive, so your new ones can't conflict with them."
+            buttonText: "Skip waiting (history lost)"
+            onActivated: root.run("skip_history_sync", [])
         }
 
         // ---------- first run: create or join ----------
@@ -549,13 +573,13 @@ Item {
                             ActionButton { visible: root.staff && root.isActionable(detail.st); allowed: detail.hasNote; text: "Won't fix (reason)"; onClicked: detail.act("close_wontfix", 0) }
                             ActionButton {
                                 visible: detail.st === "AwaitingConfirmation" && !detail.claimant && (detail.mine || root.me.role === "Resident")
-                                text: detail.mine ? "Confirm it's fixed" : "Confirm (1 of 2 residents)"
+                                text: detail.mine ? "Confirm it's fixed" : "Confirm (" + detail.issue.confirms + " of 2 residents so far)"
                                 onClicked: detail.act("confirm", 0)
                             }
                             ActionButton {
                                 visible: ["AwaitingConfirmation", "ConfirmedResolved", "ClosedWontfix", "Duplicate"].indexOf(detail.st) >= 0 && (detail.mine || root.me.role === "Resident")
                                 allowed: detail.hasNote
-                                text: "Reopen (reason)"
+                                text: "Reopen (reason)" + (detail.issue.reopen_count > 0 ? ", reopened " + detail.issue.reopen_count + "×" : "")
                                 onClicked: detail.act("reopen", 0)
                             }
                             ActionButton { id: comment; allowed: detail.hasNote; text: "Comment"; onClicked: detail.act("comment", 0) }
@@ -713,7 +737,7 @@ Item {
             // Anchor: compute, run the printed spel command in a terminal, record the reference
             TabPage {
                 enabled: !root.syncing
-                ActionButton { text: "Compute checkpoint"; onClicked: root.run("checkpoint_now", [], function (r) { root.checkpoint = r }) }
+                ActionButton { text: "Compute checkpoint"; onClicked: root.run("checkpoint_now", [], function (r) { if (r && r.heads_root) root.checkpoint = r }) }
                 Label { visible: !!root.checkpoint; text: root.checkpoint ? root.checkpoint.n_events + " events, root " + root.checkpoint.heads_root.substr(0, 16) + "…" : "" }
                 TextArea {
                     visible: !!root.checkpoint
