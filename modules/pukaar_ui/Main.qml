@@ -2,7 +2,7 @@
 // `logos` bridge, and the view re-reads state every 2 s (no module events at L1).
 pragma ComponentBehavior: Bound
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 Item {
@@ -166,6 +166,7 @@ Item {
             return statuses.indexOf(i.status) >= 0 && (!onlyMine || i.reporter === me.key)
         })
     }
+    readonly property int boardCount: issues.filter(function (i) { return !onlyMine || i.reporter === me.key }).length
     // Clipboard via a hidden TextEdit (QML has no direct clipboard API); header Copy and FramedTextArea share it.
     TextEdit { id: clip; visible: false }
     function copyText(t) { clip.text = t; clip.selectAll(); clip.copy() }
@@ -228,6 +229,60 @@ Item {
     function locationsIn(group) { return locations.filter(function (l) { return l.group === group && !l.retired }) }
     function openIssuesText(n) { return n + (n === 1 ? " open issue" : " open issues") }
 
+    // ---- controls: one frame (border token, blue when focused) shared by every control, so no
+    // field, button, combo or box is ever borderless whatever style the host uses ----
+    component Frame: Rectangle {
+        property bool ring: false          // keyboard/typing focus: thicker, blue
+        property color fill: palette.base
+        color: fill
+        radius: 4
+        border.width: ring ? 2 : 1
+        border.color: ring ? root.focusBorderColor : root.borderColor
+    }
+    component FramedField: TextField {
+        id: field
+        selectByMouse: true
+        leftPadding: 8; rightPadding: 8
+        opacity: enabled ? 1 : 0.5
+        background: Frame { ring: field.activeFocus }
+    }
+    component FramedButton: Button {
+        id: fb
+        leftPadding: 12; rightPadding: 12; topPadding: 6; bottomPadding: 6
+        opacity: enabled ? 1 : 0.5
+        background: Frame { ring: fb.visualFocus; fill: fb.down ? Qt.darker(fb.palette.button, 1.12) : fb.palette.button }
+    }
+    component FramedCombo: ComboBox {
+        id: combo
+        leftPadding: 10; rightPadding: 28; topPadding: 6; bottomPadding: 6
+        opacity: enabled ? 1 : 0.5
+        background: Frame { ring: combo.visualFocus }
+        contentItem: Label { text: combo.displayText; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }
+        indicator: Label { x: combo.width - width - 10; y: (combo.height - height) / 2; text: "\u25be" }
+    }
+    component FramedCheck: CheckBox {
+        id: check
+        opacity: enabled ? 1 : 0.5
+        indicator: Frame {
+            ring: check.visualFocus
+            x: check.leftPadding; y: (check.height - height) / 2; width: 18; height: 18
+            Label { anchors.centerIn: parent; text: "\u2713"; visible: check.checked }
+        }
+        contentItem: Label { text: check.text; leftPadding: check.indicator.width + 8; verticalAlignment: Text.AlignVCenter }
+    }
+    component PageTab: TabButton {
+        id: tab
+        background: Frame {
+            fill: tab.checked ? palette.base : palette.button
+            Rectangle { visible: tab.checked; width: parent.width; height: 3; anchors.bottom: parent.bottom; color: root.focusBorderColor }
+        }
+        contentItem: Label {
+            text: tab.text; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+            font.bold: tab.checked
+        }
+        opacity: enabled ? 1 : 0.5
+    }
+
     // ---- reusable pieces (props in, signals out; no reach into the enclosing scope) ----
 
     // Small coloured pill for an issue's stage. Colour always comes from stageColor() above.
@@ -258,6 +313,8 @@ Item {
         required property color mutedColor
         signal opened()
         width: ListView.view.width
+        padding: 8
+        background: Frame { ring: card.visualFocus; fill: card.down ? Qt.darker(card.palette.window, 1.08) : Qt.darker(card.palette.window, 1.03) }
         Accessible.name: card.placeText + ": " + card.issue.text
         Accessible.description: card.issue.stage + ". " + card.hintText
         contentItem: Column {
@@ -290,14 +347,33 @@ Item {
         text: row.lineText
     }
 
+    // ---- layout pieces ----
+
     // One tab of the StackLayout: scrolls when its content outgrows the window (30 pending
-    // members, a long checkpoint). Content is laid out as a column of the page's width.
+    // members, a long checkpoint). Content is a column of the page's width, capped so forms
+    // don't sprawl across a wide window.
     component TabPage: ScrollView {
         id: page
         default property alias content: column.data
         contentWidth: availableWidth
         clip: true
-        ColumnLayout { id: column; width: page.availableWidth; spacing: 8 }
+        ColumnLayout { id: column; width: Math.min(page.availableWidth, 760); spacing: 8 }
+    }
+
+    // A bold section title.
+    component Heading: Label {
+        Layout.topMargin: 8
+        font.bold: true
+        font.pointSize: root.baseSize * 1.15
+    }
+
+    // A visible label above whatever is put inside (every field has one, not only a placeholder).
+    component FormRow: ColumnLayout {
+        id: form
+        property string label
+        Layout.fillWidth: true
+        spacing: 4
+        Label { visible: form.label !== ""; text: form.label; font.pointSize: root.smallSize }
     }
 
     // A full-width notice: wrapped text, and optionally one button on the right.
@@ -326,8 +402,8 @@ Item {
         textFormat: Text.PlainText
     }
 
-    // The one multi-line text box: visible frame (border token, brighter when focused), scrolls,
-    // optional placeholder. Read-only boxes are selectable and get a Copy button.
+    // The one multi-line text box: visible frame, scrolls, optional placeholder. Read-only boxes
+    // are selectable and get a Copy button.
     component FramedTextArea: ColumnLayout {
         id: fta
         property alias text: area.text
@@ -341,12 +417,7 @@ Item {
             Layout.fillWidth: true
             Layout.preferredHeight: fta.boxHeight
             clip: true
-            background: Rectangle {
-                color: area.palette.base
-                radius: 4
-                border.width: area.activeFocus ? 2 : 1
-                border.color: area.activeFocus ? root.focusBorderColor : root.borderColor
-            }
+            background: Frame { ring: area.activeFocus }
             TextArea {
                 id: area
                 readOnly: fta.readOnly
@@ -357,9 +428,9 @@ Item {
                 Accessible.name: fta.name
             }
         }
-        Button {
+        FramedButton {
             visible: fta.readOnly && area.text !== ""
-            text: "Copy"; flat: true
+            text: "Copy"
             Accessible.name: "Copy " + fta.name
             onClicked: root.copyText(area.text)
         }
@@ -367,23 +438,39 @@ Item {
 
     // A button that also waits while a call is running. `allowed` is the caller's own
     // precondition; submit() is what Return in a neighbouring field calls (it honours both).
-    component ActionButton: Button {
+    component ActionButton: FramedButton {
         property bool allowed: true
         enabled: allowed && !root.busy
         function submit() { if (enabled) clicked() }
     }
 
-    // A text field with its submit button glued on — the "paste id / type name, then act" row.
-    component LabelledField: RowLayout {
+    // A text field with its submit button glued on: the "paste id / type name, then act" row.
+    // `label` sits above it; `caption` is a left-hand description for list rows (field then keeps a fixed width).
+    component LabelledField: FormRow {
         id: lf
         property alias text: field.text
         property alias placeholder: field.placeholderText
         property alias echoMode: field.echoMode
+        property alias fieldEnabled: field.enabled
+        property string name: label
+        property string caption
         property string buttonText: "Go"
         property bool buttonEnabled: true
         signal submitted()
-        TextField { id: field; Layout.fillWidth: true; onAccepted: go.submit() }
-        ActionButton { id: go; text: lf.buttonText; allowed: lf.buttonEnabled; onClicked: lf.submitted() }
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 8
+            Label { visible: lf.caption !== ""; Layout.fillWidth: true; elide: Text.ElideRight; text: lf.caption; font.family: "monospace"; textFormat: Text.PlainText }
+            FramedField {
+                id: field
+                Layout.fillWidth: lf.caption === ""
+                Layout.preferredWidth: lf.caption === "" ? -1 : 220
+                maximumLength: 500
+                Accessible.name: lf.name
+                onAccepted: go.submit()
+            }
+            ActionButton { id: go; text: lf.buttonText; allowed: lf.buttonEnabled; onClicked: lf.submitted() }
+        }
     }
 
     Timer { interval: 2000; running: true; repeat: true; triggeredOnStart: true; onTriggered: root.refresh() }
@@ -393,32 +480,34 @@ Item {
         anchors.margins: 12
         spacing: 8
 
-        Flow {   // wraps onto a second row instead of overflowing a narrow window
-            id: header
+        RowLayout {
             Layout.fillWidth: true
             spacing: 12
             Label { text: "Pukaar"; font.pointSize: root.titleSize; font.bold: true }
-            Label { text: root.inSite ? (root.info.name || "") : "not in a site yet"; color: root.mutedColor }
-            Row {   // the 64-hex id is long: show the short form, Copy puts the full one on the clipboard
-                visible: root.inSite
-                spacing: 4
-                Label { anchors.verticalCenter: parent.verticalCenter; text: "site " + root.shortId(root.me.site); font.pointSize: root.smallSize; color: root.mutedColor }
-                Button {
-                    text: "Copy"; flat: true
-                    Accessible.name: "Copy the full site id"
-                    onClicked: root.copyText(root.me.site)
-                }
-            }
+            Label { Layout.fillWidth: true; elide: Text.ElideRight; text: root.inSite ? (root.info.name || "") : "not in a site yet"; color: root.mutedColor }
             Label {   // Delivery bring-up status from pukaar_core; errors stay visible until it recovers
+                Layout.maximumWidth: root.width / 2
+                elide: Text.ElideRight
                 text: "delivery: " + root.deliveryLabel(root.me.delivery)
                 color: root.failed(root.me.delivery) ? root.dangerColor : root.mutedColor
             }
+        }
+        RowLayout {
+            visible: root.inSite
+            Layout.fillWidth: true
+            spacing: 8
             Label {
-                visible: root.inSite
-                width: Math.min(implicitWidth, header.width)
+                Layout.fillWidth: true
                 elide: Text.ElideRight
                 text: "you: " + (root.me.name || "pseudonym") + " · " + (root.me.fingerprint || "") + " · "
                       + (root.me.role || "pending: read your fingerprint at the kiosk")
+            }
+            // the 64-hex id is long: show the short form, Copy puts the full one on the clipboard
+            Label { text: "site " + root.shortId(root.me.site || ""); font.pointSize: root.smallSize; color: root.mutedColor }
+            FramedButton {
+                text: "Copy"
+                Accessible.name: "Copy the full site id"
+                onClicked: root.copyText(root.me.site)
             }
         }
         Banner {   // the last refused action; stays until dismissed or the next action replaces it
@@ -446,35 +535,41 @@ Item {
             onActivated: root.run("skip_history_sync", [])
         }
 
-        // ---------- first run: create or join ----------
-        ColumnLayout {
+        // ---------- first run: join, create or restore ----------
+        TabPage {
             visible: !root.inSite
             Layout.fillWidth: true
-            Label { text: "Join a site (paste the site id shown on the kiosk)" }
+            Layout.fillHeight: true
+            Heading { text: "Join a site"; Layout.topMargin: 0 }
             LabelledField {
                 id: joinField
+                label: "Site id (shown on the kiosk)"
                 placeholder: "64 hex characters"
                 buttonText: "Join"
                 onSubmitted: root.run("site_join", [joinField.text])
             }
-            Label { text: "Or create one (site admin only). Edit the location list, then give your name." }
-            FramedTextArea {
-                id: genesis
-                name: "Site settings, JSON"
-                boxHeight: 160
-                text: '{"Genesis":{"name":"Dhun",'
-                    + '"categories":["water","waste","power","access","rooms","kitchen","safety"],'
-                    + '"locations":['
-                    + '{"code":"W-01","label":"Tap, dining hall","group":"Water points"},'
-                    + '{"code":"W-02","label":"Tap, tent row A","group":"Water points"},'
-                    + '{"code":"B-01","label":"Bin, main path","group":"Bins"},'
-                    + '{"code":"P-01","label":"Gate to the farm path","group":"Paths"},'
-                    + '{"code":"R-01","label":"Tent 1","group":"Rooms and tents"}],'
-                    + '"sla_ack_h":12,"sla_fix_h":48,"max_open_per_author":10}}'
+            Heading { text: "Create a site (site admin only)" }
+            Note { text: "Edit the categories and places below, then give your name." }
+            FormRow {
+                label: "Site settings (JSON)"
+                FramedTextArea {
+                    id: genesis
+                    name: "Site settings, JSON"
+                    boxHeight: 160
+                    text: '{"Genesis":{"name":"Dhun",'
+                        + '"categories":["water","waste","power","access","rooms","kitchen","safety"],'
+                        + '"locations":['
+                        + '{"code":"W-01","label":"Tap, dining hall","group":"Water points"},'
+                        + '{"code":"W-02","label":"Tap, tent row A","group":"Water points"},'
+                        + '{"code":"B-01","label":"Bin, main path","group":"Bins"},'
+                        + '{"code":"P-01","label":"Gate to the farm path","group":"Paths"},'
+                        + '{"code":"R-01","label":"Tent 1","group":"Rooms and tents"}],'
+                        + '"sla_ack_h":12,"sla_fix_h":48,"max_open_per_author":10}}'
+                }
             }
             LabelledField {   // staff are always named: the name goes into the genesis, not the JSON above
                 id: adminField
-                placeholder: "Your name, as residents will see it"
+                label: "Your name, as residents will see it"
                 buttonText: "Create site"
                 buttonEnabled: adminField.text.trim() !== ""
                 onSubmitted: {
@@ -489,21 +584,19 @@ Item {
                     root.run("site_create", [JSON.stringify(g)])
                 }
             }
-        }
-
-        // ---------- first run: restore a backed-up identity ----------
-        ColumnLayout {
-            visible: !root.inSite
-            Layout.fillWidth: true
-            Label { text: "Or restore your identity from a backup (Identity tab, on your other device or before you reinstalled)" }
-            FramedTextArea {
-                id: importBlob
-                name: "Identity backup"
-                placeholder: "pukaar-id-1:…"
+            Heading { text: "Restore your identity" }
+            Note { text: "Paste the backup made in the Identity tab, on your other device or before you reinstalled." }
+            FormRow {
+                label: "Identity backup"
+                FramedTextArea {
+                    id: importBlob
+                    name: "Identity backup"
+                    placeholder: "pukaar-id-1:…"
+                }
             }
             LabelledField {
                 id: importPassword
-                placeholder: "backup password"
+                label: "Backup password"
                 echoMode: TextInput.Password
                 buttonText: "Import identity"
                 buttonEnabled: importBlob.text.trim() !== "" && importPassword.text !== ""
@@ -519,11 +612,12 @@ Item {
             id: tabs
             visible: root.inSite
             Layout.fillWidth: true
-            TabButton { text: "Board" }
-            TabButton { text: "Report" }
-            TabButton { text: "Members"; enabled: root.isAdmin }
-            TabButton { text: "Anchor" }
-            TabButton { text: "Identity" }
+            background: null
+            PageTab { text: "Board" }
+            PageTab { text: "Report" }
+            PageTab { text: "Members"; enabled: root.isAdmin }
+            PageTab { text: "Anchor" }
+            PageTab { text: "Identity" }
         }
 
         StackLayout {
@@ -534,7 +628,14 @@ Item {
 
             // Board (the brief's three stages) + timeline
             ColumnLayout {
-                CheckBox { text: "Only my reports"; checked: root.onlyMine; onToggled: root.onlyMine = checked }
+                FramedCheck { text: "Only my reports"; checked: root.onlyMine; onToggled: root.onlyMine = checked }
+                Note {   // an empty board says why, and what to do
+                    visible: root.boardCount === 0
+                    Layout.bottomMargin: 6
+                    color: root.mutedColor
+                    text: root.onlyMine ? "You haven't reported anything yet. Use the Report tab to raise a problem."
+                                        : "No reports yet. Use the Report tab to raise the first one."
+                }
                 RowLayout {
                     spacing: 8
                     Layout.fillWidth: true
@@ -595,6 +696,7 @@ Item {
                         property bool claimant: issue.claimant === root.me.key
                         Keys.onEscapePressed: root.closeIssue()
                         property bool hasNote: note.text.trim() !== ""   // the core rejects these without one
+                        readonly property int etaHours: parseInt(eta.text) || 0
                         function act(a, eta) {
                             root.run("act", [issue.id, a, note.text, nextStep.text, eta | 0],
                                      function () { note.text = ""; nextStep.text = "" })
@@ -602,13 +704,14 @@ Item {
                         RowLayout {
                             Layout.fillWidth: true
                             Label { text: detail.issue.category + " · " + root.place(detail.issue) + " · " + detail.issue.stage; font.bold: true; wrapMode: Text.Wrap; Layout.fillWidth: true }
-                            Button { text: root.narrow ? "← Board" : "Close"; flat: true; onClicked: root.closeIssue() }
+                            FramedButton { text: root.narrow ? "← Board" : "Close"; onClicked: root.closeIssue() }
                         }
                         Label { text: detail.issue.text || ""; wrapMode: Text.Wrap; Layout.fillWidth: true }
                         ListView {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             clip: true
+                            spacing: 6
                             model: root.selected ? root.selected.events : []
                             delegate: TimelineRow {
                                 required property var modelData
@@ -621,19 +724,36 @@ Item {
                                              + "… recorded by " + root.who(modelData.anchored_by, modelData.anchored_by_name) : "")
                             }
                         }
-                        TextField { id: note; Layout.fillWidth: true; maximumLength: 500; placeholderText: "note: what was seen / done / why"; onAccepted: comment.submit() }
+                        FormRow {
+                            label: "Note (what was seen, done or why)"
+                            FramedField { id: note; Layout.fillWidth: true; maximumLength: 500; Accessible.name: "Note"; onAccepted: comment.submit() }
+                        }
                         RowLayout {
                             visible: root.staff && root.isActionable(detail.st)
-                            TextField { id: nextStep; Layout.fillWidth: true; maximumLength: 500; placeholderText: "next step (for updates)" }
-                            Label { text: "ETA h" }
-                            SpinBox { id: eta; from: 0; to: 168; value: 4 }
+                            spacing: 8
+                            FormRow {
+                                label: "Next step (for updates)"
+                                FramedField { id: nextStep; Layout.fillWidth: true; maximumLength: 500; Accessible.name: "Next step" }
+                            }
+                            FormRow {
+                                label: "ETA (hours)"
+                                Layout.fillWidth: false
+                                FramedField {
+                                    id: eta
+                                    Layout.preferredWidth: 80
+                                    text: "4"
+                                    inputMethodHints: Qt.ImhDigitsOnly
+                                    validator: IntValidator { bottom: 0; top: 168 }
+                                    Accessible.name: "ETA in hours"
+                                }
+                            }
                         }
                         Flow {
                             Layout.fillWidth: true
                             enabled: !root.syncing
                             spacing: 6
-                            ActionButton { visible: root.staff && detail.st === "Open"; text: "Acknowledge"; onClicked: detail.act("acknowledge", eta.value) }
-                            ActionButton { visible: root.staff && root.isActionable(detail.st); allowed: detail.hasNote; text: "Post update"; onClicked: detail.act("update", eta.value) }
+                            ActionButton { visible: root.staff && detail.st === "Open"; text: "Acknowledge"; onClicked: detail.act("acknowledge", detail.etaHours) }
+                            ActionButton { visible: root.staff && root.isActionable(detail.st); allowed: detail.hasNote; text: "Post update"; onClicked: detail.act("update", detail.etaHours) }
                             ActionButton { visible: root.staff && root.isActionable(detail.st); allowed: detail.hasNote; text: "Claim fixed (say what was done)"; onClicked: detail.act("claim_resolved", 0) }
                             ActionButton { visible: root.staff && root.isActionable(detail.st); allowed: detail.hasNote; text: "Won't fix (reason)"; onClicked: detail.act("close_wontfix", 0) }
                             ActionButton {
@@ -648,10 +768,11 @@ Item {
                                 onClicked: detail.act("reopen", 0)
                             }
                             ActionButton { id: comment; allowed: detail.hasNote; text: "Comment"; onClicked: detail.act("comment", 0) }
-                            Row {   // staff: close this one as a duplicate of another open issue
+                            RowLayout {   // staff: close this one as a duplicate of another open issue
                                 visible: root.staff && root.isActionable(detail.st)
+                                width: parent.width
                                 spacing: 6
-                                ComboBox {
+                                FramedCombo {
                                     // The model is rebuilt on every 2 s refresh, which resets currentIndex,
                                     // so the user's pick is kept in `target`, never read from currentIndex.
                                     id: dupOf
@@ -660,7 +781,8 @@ Item {
                                     property string targetLabel: ""
                                     property string forIssue: detail.issue.id || ""
                                     onForIssueChanged: target = ""
-                                    width: 260
+                                    Layout.fillWidth: true
+                                    Layout.preferredWidth: 260
                                     textRole: "label"
                                     valueRole: "id"
                                     displayText: target ? targetLabel : "Duplicate of…"
@@ -688,10 +810,10 @@ Item {
                     text: "Waiting for the admin to approve you. Read your fingerprint aloud at the kiosk; you can report once you are approved."
                 }
                 Label { text: "What's wrong?" }
-                ComboBox { id: category; Accessible.name: "What is wrong (category)"; model: root.categories; Layout.preferredWidth: 240 }
+                FramedCombo { id: category; Accessible.name: "What is wrong (category)"; model: root.categories; Layout.preferredWidth: 240 }
                 RowLayout {
-                    ComboBox { id: group; Accessible.name: "Place group"; model: root.groupNames; Layout.preferredWidth: 220 }
-                    ComboBox {
+                    FramedCombo { id: group; Accessible.name: "Place group"; model: root.groupNames; Layout.preferredWidth: 220 }
+                    FramedCombo {
                         id: location
                         Accessible.name: "Place"
                         visible: group.currentText !== root.otherLabel
@@ -699,7 +821,7 @@ Item {
                         model: root.locationsIn(group.currentText).map(function (l) { return l.code + " · " + l.label })
                     }
                 }
-                TextField {
+                FramedField {
                     id: landmark
                     Layout.fillWidth: true
                     maximumLength: 500
@@ -709,7 +831,7 @@ Item {
                 }
                 // maximumLength counts characters; the core's 500 limit is bytes (Hindi is 3 B/char),
                 // so a long non-Latin line comes back as "error: too long" instead.
-                TextField {
+                FramedField {
                     id: reportText; Layout.fillWidth: true; maximumLength: 500
                     placeholderText: "One line: what's wrong"; onAccepted: reportBtn.submit()
                 }
@@ -752,7 +874,7 @@ Item {
                         required property var modelData
                         Label { text: pendingRow.modelData.fingerprint + "  " + (pendingRow.modelData.name || "(no name)"); font.family: "monospace" }
                         ActionButton { text: "Grant resident"; onClicked: root.run("grant_role", [pendingRow.modelData.key, "resident", ""]) }
-                        TextField { id: staffName; placeholderText: "steward's real name"; Layout.preferredWidth: 160; onAccepted: grantSteward.submit() }
+                        FramedField { id: staffName; placeholderText: "steward's real name"; Layout.preferredWidth: 160; onAccepted: grantSteward.submit() }
                         ActionButton {
                             id: grantSteward
                             text: "Grant steward"
@@ -773,7 +895,7 @@ Item {
                             text: memberRow.modelData.fingerprint + "  " + memberRow.modelData.role + "  " + (memberRow.modelData.name || "pseudonym")
                             font.family: "monospace"
                         }
-                        TextField {
+                        FramedField {
                             id: revokeReason; visible: memberRow.modelData.key !== root.me.key; maximumLength: 500
                             placeholderText: "reason for revoking"; Layout.preferredWidth: 200; onAccepted: revoke.submit()
                         }
@@ -788,9 +910,9 @@ Item {
                 }
                 Label { text: "Add a location (for example, found on the site walk)"; font.bold: true }
                 RowLayout {
-                    ComboBox { id: locGroup; Accessible.name: "Group for the new location"; editable: true; model: root.groupNames.slice(0, -1); Layout.preferredWidth: 180 }
-                    TextField { id: locCode; placeholderText: "W-04"; Layout.preferredWidth: 80 }
-                    TextField { id: locLabel; placeholderText: "Tap behind tent 4"; Layout.fillWidth: true; onAccepted: addLoc.submit() }
+                    FramedCombo { id: locGroup; Accessible.name: "Group for the new location"; editable: true; model: root.groupNames.slice(0, -1); Layout.preferredWidth: 180 }
+                    FramedField { id: locCode; placeholderText: "W-04"; Layout.preferredWidth: 80 }
+                    FramedField { id: locLabel; placeholderText: "Tap behind tent 4"; Layout.fillWidth: true; onAccepted: addLoc.submit() }
                     ActionButton {
                         id: addLoc
                         text: "Add"
@@ -800,7 +922,7 @@ Item {
                     }
                 }
                 Label { text: "Locations (a retired place takes no new reports; nothing is deleted)"; font.bold: true }
-                CheckBox { id: showRetired; text: "Show retired" }
+                FramedCheck { id: showRetired; text: "Show retired" }
                 Repeater {
                     model: root.locations.filter(function (l) { return showRetired.checked || !l.retired })
                     delegate: Flow {
@@ -815,7 +937,7 @@ Item {
                                 + (locRow.modelData.retired ? "  (retired: " + locRow.modelData.retired_reason + ")" : "")
                             font.family: "monospace"
                         }
-                        TextField {
+                        FramedField {
                             id: locReason; maximumLength: 500; Layout.preferredWidth: 200; onAccepted: locToggle.submit()
                             Accessible.name: "Reason for " + (locRow.modelData.retired ? "restoring " : "retiring ") + locRow.modelData.code
                             placeholderText: locRow.modelData.retired ? "reason for restoring" : "reason for retiring"
@@ -839,19 +961,22 @@ Item {
                     text: "An anchor writes a fingerprint of everyone's history to the Logos blockchain (LEZ), so no one, "
                         + "not even the admin, can quietly rewrite or delete past events. Anyone can recompute it from their own copy and compare."
                 }
-                Note { text: "1. Compute the checkpoint"; font.bold: true }
+                Heading { text: "1. Compute the checkpoint" }
                 ActionButton { text: "Compute checkpoint"; onClicked: root.run("checkpoint_now", [], function (r) { if (r && r.heads_root) root.checkpoint = r }) }
                 Label { visible: !!root.checkpoint; text: root.checkpoint ? root.checkpoint.n_events + " events, root " + root.checkpoint.heads_root.substr(0, 16) + "…" : "" }
-                Note { text: "2. Copy this command and run it from programs/pukaar_registry/ in a terminal. Replace <YOUR_PUBLIC_ACCOUNT> with your LEZ account."; font.bold: true }
+                Heading { text: "2. Run the command" }
+                Note { text: "Copy this command and run it from programs/pukaar_registry/ in a terminal. Replace <YOUR_PUBLIC_ACCOUNT> with your LEZ account." }
                 FramedTextArea {
                     readOnly: true
                     name: "spel anchor command"
                     placeholder: "Compute the checkpoint first"
                     text: root.checkpoint ? root.checkpoint.spel : ""
                 }
-                Note { text: "3. Paste the tx hash or pda:<id> that spel prints, then record it"; font.bold: true }
+                Heading { text: "3. Record the anchor" }
+                Note { text: "Paste the tx hash or pda:<id> that spel prints, then record it." }
                 LabelledField {
                     id: anchorField
+                    label: "Anchor reference"
                     placeholder: "tx hash or pda:<account id> printed by spel"
                     buttonText: "Record anchor"
                     buttonEnabled: !!root.checkpoint && anchorField.text.trim() !== ""
@@ -864,20 +989,18 @@ Item {
 
             // Identity: a password-sealed backup, to continue as the same person after a reinstall
             TabPage {
-                Label { text: "Back up your identity"; font.bold: true }
-                Label {
+                Heading { text: "Back up your identity"; Layout.topMargin: 0 }
+                Note {
                     text: "Keep this and your password safe. Anyone with both can act as you. Never run the same identity on two devices at once."
-                    color: root.dangerColor; wrapMode: Text.Wrap; Layout.fillWidth: true
+                    color: root.dangerColor
                 }
-                TextField {
-                    id: exportPassword
-                    Layout.fillWidth: true
-                    echoMode: TextInput.Password
-                    placeholderText: "password (at least 8 characters)"
+                FormRow {
+                    label: "Password (at least 8 characters)"
+                    FramedField { id: exportPassword; Layout.fillWidth: true; echoMode: TextInput.Password; Accessible.name: "Backup password" }
                 }
                 LabelledField {
                     id: exportConfirm
-                    placeholder: "same password again"
+                    label: "Repeat the password"
                     echoMode: TextInput.Password
                     buttonText: "Export identity"
                     buttonEnabled: exportPassword.text.length >= 8 && exportConfirm.text === exportPassword.text
@@ -892,7 +1015,7 @@ Item {
                     readOnly: true
                     name: "identity backup"
                 }
-                Button { visible: exportOut.text !== ""; text: "Hide"; flat: true; onClicked: exportOut.text = "" }
+                FramedButton { visible: exportOut.text !== ""; text: "Hide"; onClicked: exportOut.text = "" }
             }
         }
     }
