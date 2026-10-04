@@ -159,11 +159,16 @@ Item {
         // qmllint enable unqualified
     }
     // Replies arrive as JSON strings, sometimes double-encoded by the bridge; the bridge's own
-    // failures ({"error": …}) are folded into the "error: …" strings the core uses.
+    // failures ({"error": …}: the core isn't loaded, or didn't answer within the bridge's 20 s)
+    // are folded into the "error: …" strings the core uses, in words, with the raw text kept last.
+    // A timed-out call may still finish in the core, hence "if it went through".
     function decode(v) {
         try { v = JSON.parse(v) } catch (e) {}
         if (typeof v === "string") { try { v = JSON.parse(v) } catch (e) {} }
-        if (v && typeof v.error === "string") return "error: " + v.error + (v.message ? ": " + v.message : "")
+        if (v && typeof v.error === "string")
+            return "error: Pukaar's core did not answer. If it went through after all, this screen updates by itself; "
+                    + "otherwise try again in a moment (what you typed is kept). Details: "
+                    + v.error + (v.message ? ": " + v.message : "")
         return v
     }
     function call(method, args, done) { send(method, args, function (raw) { done(decode(raw)) }) }
@@ -1763,7 +1768,7 @@ Item {
         Flash {   // the last refused action; stays until dismissed or the next action replaces it
             visible: root.message !== ""
             err: true; bold: true
-            text: root.message
+            text: root.message.replace(/^error: /, "")   // the red warning icon already says so
             buttonIcon: "x"; buttonName: "Dismiss this error"
             onActivated: root.message = ""
         }
