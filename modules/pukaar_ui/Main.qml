@@ -96,13 +96,15 @@ Item {
     // Sizes follow the user's system font instead of fixed pixels.
     FontMetrics { id: systemFont }       // default font = the application's
     readonly property real baseSize: systemFont.font.pointSize > 0 ? systemFont.font.pointSize : 10
-    readonly property real smallSize: baseSize * 0.85
+    readonly property real smallSize: baseSize * 13 / 14      // meta text: 13 px when the body is 14
     readonly property real titleSize: baseSize * 1.6
     // Stage -> {fg, bg, bd, edge}: text, tint, border, strip. The only orange is Reported.
     readonly property var stageGroup: ({
         Open: "reported", Acknowledged: "reported", InProgress: "progress", AwaitingConfirmation: "awaiting",
         ConfirmedResolved: "resolved", ClosedWontfix: "closed", Duplicate: "closed"
     })
+    readonly property var groupIcon: ({ reported: "rep", progress: "prog", awaiting: "await", resolved: "res", closed: "clo" })
+    function stageIcon(status) { return groupIcon[stageGroup[status]] || "warn" }
     function stageStyle(status) {
         return t[stageGroup[status]] || { fg: t.danger, bg: t.dangerBg, bd: t.dangerBd, edge: t.danger }
     }
@@ -226,11 +228,15 @@ Item {
     function shortId(hex) { return String(hex).substr(0, 8) + "…" + String(hex).substr(-4) }
     function who(key, name) { return name ? name : "pseudonym " + String(key).substr(0, 6) }
     function when(ts) { return new Date(ts * 1000).toLocaleString(Qt.locale(), "d MMM HH:mm") }
+    function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") }
     function place(i) {
         var p = i.location === "other" ? "Other" : (i.location + " " + (i.location_label || ""))
         if (i.location_retired) p += " (retired)"
         return i.landmark ? p + " (" + i.landmark + ")" : p
     }
+    function placeCode(i) { return i.location === "other" ? "Other" : i.location }
+    // place() without its code, which the card sets apart; "Other" shows its landmark bare.
+    function placeName(i) { return i.location === "other" ? (i.landmark || "") : place(i).substr(i.location.length + 1) }
     function plural(n, word) { return n + " " + word + (n === 1 ? "" : "s") }
     // A place that takes no reports, in words: "retired" or "removes in 12 days" ("" = active).
     function placeState(l) {
@@ -247,30 +253,27 @@ Item {
         var h = Math.floor((Date.now() / 1000 - ts) / 3600)
         return h < 1 ? "just now" : h < 48 ? h + " h ago" : Math.floor(h / 24) + " d ago"
     }
-    // Overdue flags are computed by the core (site SLA hours); this only words them.
-    function slaLine(i) {
-        if (i.ack_overdue) return "Not acknowledged within " + info.sla_ack_h + " h. "
-        if (i.fix_overdue) return "Past the " + info.sla_fix_h + " h fix target. "
-        if (i.awaiting_48h) return "Fix unconfirmed for over 48 h. "
-        return ""
+    // The card's red lines. SLA flags are computed by the core (site SLA hours); this only words them.
+    function flagLines(i) {
+        var out = []
+        if (i.ack_overdue) out.push("Not acknowledged within " + info.sla_ack_h + " h.")
+        else if (i.fix_overdue) out.push("Past the " + info.sla_fix_h + " h fix target.")
+        else if (i.awaiting_48h) out.push("Fix unconfirmed for over 48 h.")
+        if (isOverdue(i)) out.push("OVERDUE by " + -dueHours(i.progress) + " h")
+        return out
     }
-    function flagged(i) { return isOverdue(i) || !!i.ack_overdue || !!i.fix_overdue || !!i.awaiting_48h }
-    // The card's grey line: age, whose move it is, SLA flags, reopen count, next step.
+    // The card's grey line: age, whose move it is, next step. (Reopens and flags have their own chip and line.)
     function hint(i) {
         var waiting = i.status !== "AwaitingConfirmation" ? ""
             : i.reporter === me.key ? "Needs your confirmation. " : "Fix claimed: waiting for the reporter to confirm. "
-        return "Reported " + age(i.reported_ts) + ". " + waiting + slaLine(i)
-            + (i.reopen_count > 0 ? "Reopened " + i.reopen_count + "×. " : "") + nextLine(i)
+        return "Reported " + age(i.reported_ts) + ". " + waiting + nextLine(i)
     }
-    // "Next: fit washer · due in 5 h" / "· OVERDUE by 2 h"
+    // "Next: fit washer · due in 5 h"
     function nextLine(i) {
         var p = i.progress
         if (!p) return i.status === "Open" ? "Waiting for a steward to acknowledge" : ""
         var t = p.next_step ? "Next: " + p.next_step : p.note
-        if (p.due_ts > 0 && isActionable(i.status)) {
-            var h = dueHours(p)
-            t += h >= 0 ? " · due in " + h + " h" : " · OVERDUE by " + (-h) + " h"
-        }
+        if (p.due_ts > 0 && isActionable(i.status) && dueHours(p) >= 0) t += " · due in " + dueHours(p) + " h"
         return t + " (" + who(p.by, p.by_name) + ")"
     }
     // Pick list for "Duplicate of…": every other issue that isn't closed yet.
@@ -459,56 +462,124 @@ Item {
 
     // ---- reusable pieces (props in, signals out; no reach into the enclosing scope) ----
 
-    // Small coloured pill for an issue's stage. Colours come from stageStyle() above.
+    // Pill with an icon and text: a stage chip, "Reopened N×" (neutral) or "Needs your confirmation"
+    // (filled blue). The text wraps, never elides, so long labels and Hindi stay whole. Colours
+    // are a stage {fg, bg, bd}; the parent caps the width with maxWidth.
     component StatusChip: Rectangle {
         id: chip
         required property string label
         required property var stage     // stageStyle(): {fg, bg, bd, edge}
-        implicitWidth: chipText.implicitWidth + 12
-        implicitHeight: chipText.implicitHeight + 4
-        radius: height / 2
+        property string icon: ""
+        property bool strong: false
+        property real maxWidth: 1e6
+        readonly property real inset: 8 + 13 + 5
+        width: Math.min(chipText.implicitWidth + inset + 8, maxWidth)
+        height: Math.max(22, chipText.height + 2)
+        radius: 12
         color: chip.stage.bg
         border.width: 1; border.color: chip.stage.bd
-        Label {   // elides when the parent narrows the chip below its natural width
-            id: chipText; anchors.centerIn: parent; width: Math.min(implicitWidth, chip.width - 12)
-            elide: Text.ElideRight; text: chip.label; color: chip.stage.fg; font.pointSize: root.smallSize
+        Icon { x: 8; y: (chip.height - 13) / 2; name: chip.icon; size: 13; color: chip.stage.fg }
+        Label {
+            id: chipText
+            x: chip.inset; y: (chip.height - height) / 2; width: chip.width - chip.inset - 8
+            wrapMode: Text.Wrap; text: chip.label; color: chip.stage.fg
+            font.pointSize: root.smallSize; font.weight: chip.strong ? Font.DemiBold : Font.Medium
         }
     }
 
-    // One board card. All text is pre-computed by the caller (place/hint/stage),
+    // One board card. All text is pre-computed by the caller (place/hint/flags/stage),
     // so this stays a pure presentational piece reusable across all four columns.
     component IssueCard: ItemDelegate {
         id: card
         required property var issue
         required property string placeText
         required property string hintText
-        required property bool overdue
-        required property bool current       // the issue open in the timeline pane
+        required property var flags          // red lines: root.flagLines()
+        required property bool needsMe       // the viewer is the reporter of a claimed fix
+        required property bool current       // the issue open in the timeline pane: gets the stage strip
         required property var stage
-        required property color alertColor
-        required property color mutedColor
         signal opened()
+        readonly property color ink: issue.location_retired ? root.t.muted : root.t.fg   // a retired place's card is quieter
         width: ListView.view.width
-        padding: 8
-        background: Frame { ring: card.visualFocus || card.current; fill: card.down ? Qt.darker(root.t.card, 1.06) : root.t.card }
+        topPadding: 10; bottomPadding: 12; rightPadding: 12
+        leftPadding: current ? 16 : 12
+        background: Frame {
+            ring: card.visualFocus
+            fill: card.down ? Qt.darker(root.t.card, 1.06) : card.issue.location_retired ? root.t.well : root.t.card
+            edge: card.current || card.hovered ? root.t.ctlBd : root.t.bd
+            Shape {   // 5 px strip, round on its outer corners only
+                visible: card.current
+                x: -1; y: -1; width: 5; height: card.height + 2
+                preferredRendererType: Shape.CurveRenderer
+                ShapePath {
+                    strokeColor: "transparent"; fillColor: card.stage.edge
+                    PathSvg { path: "M5 0H6A6 6 0 0 0 0 6V" + (card.height - 4) + "A6 6 0 0 0 6 " + (card.height + 2) + "H5Z" }
+                }
+            }
+        }
         Accessible.name: card.placeText + ": " + card.issue.text
-        Accessible.description: card.issue.stage + ". " + card.hintText
+        Accessible.description: card.issue.stage + ". " + card.hintText + " " + card.flags.join(" ")
         contentItem: Column {
-            width: card.width
-            spacing: 2
-            Label { width: parent.width; wrapMode: Text.Wrap; font.bold: true; text: card.placeText }
-            Label { width: parent.width; wrapMode: Text.Wrap; text: card.issue.text }
-            // Stacked, not side by side: a wide chip must never squeeze the hint to a sliver.
-            StatusChip { width: Math.min(implicitWidth, parent.width); label: card.issue.stage; stage: card.stage }
+            spacing: 6
             Label {
-                width: parent.width
-                wrapMode: Text.Wrap
-                font.pointSize: root.smallSize
-                color: card.overdue ? card.alertColor : card.mutedColor
-                text: card.hintText
+                width: parent.width; wrapMode: Text.Wrap; textFormat: Text.RichText; color: card.ink; font.weight: Font.DemiBold
+                text: "<span style='font-family:Menlo,Consolas,monospace;font-size:" + root.smallSize
+                      + "pt;color:" + root.t.muted + "'>" + root.esc(root.placeCode(card.issue)) + "</span> " + root.esc(root.placeName(card.issue))
+            }
+            Label { width: parent.width; wrapMode: Text.Wrap; color: card.ink; font.pointSize: root.baseSize * 1.07; text: card.issue.text }
+            Flow {
+                width: parent.width; spacing: 4
+                StatusChip { label: card.issue.stage; stage: card.stage; icon: root.stageIcon(card.issue.status); maxWidth: parent.width }
+                StatusChip {
+                    visible: card.issue.reopen_count > 0; maxWidth: parent.width
+                    label: "Reopened " + card.issue.reopen_count + "×"; stage: root.t.closed; icon: "reopen"
+                }
+                StatusChip {
+                    visible: card.needsMe; maxWidth: parent.width; strong: true
+                    label: "Needs your confirmation"; icon: "bell"
+                    stage: ({ fg: root.t.onPrimary, bg: root.t.primary, bd: root.t.primary })
+                }
+            }
+            Label { width: parent.width; wrapMode: Text.Wrap; font.pointSize: root.smallSize; color: root.t.muted; text: card.hintText }
+            Repeater {
+                model: card.flags
+                delegate: Row {
+                    id: flag
+                    required property string modelData
+                    width: card.availableWidth; spacing: 6
+                    Icon { y: 2; name: "warn"; size: 15; color: root.t.danger }
+                    Label {
+                        width: flag.width - 21; wrapMode: Text.Wrap; text: flag.modelData
+                        font.pointSize: root.smallSize; font.weight: Font.DemiBold; color: root.t.danger
+                    }
+                }
             }
         }
         onClicked: card.opened()
+    }
+
+    // A board column's title: stage icon, name, count pill, and a one-line subtitle.
+    component ColumnHeader: Column {
+        id: head
+        required property string title
+        required property string subtitle
+        required property string icon
+        required property color tint
+        required property int count
+        width: parent.width; spacing: 2; bottomPadding: 8
+        Flow {
+            width: parent.width; spacing: 8
+            Row {
+                spacing: 8
+                Icon { anchors.verticalCenter: parent.verticalCenter; name: head.icon; size: 16; color: head.tint }
+                Label { text: head.title; font.weight: Font.DemiBold }
+            }
+            Rectangle {
+                width: Math.max(22, countText.implicitWidth + 14); height: 20; radius: 10; color: root.t.closed.bg
+                Label { id: countText; anchors.centerIn: parent; text: head.count; font.pointSize: root.smallSize; font.weight: Font.DemiBold }
+            }
+        }
+        Label { width: parent.width; wrapMode: Text.Wrap; text: head.subtitle; font.pointSize: root.smallSize; color: root.t.muted }
     }
 
     // One timeline entry. The caller composes the full line (who/when/kind/body/rejected/anchored).
@@ -1080,12 +1151,23 @@ Item {
             // Board (the brief's three stages) + timeline
             ColumnLayout {
                 FramedCheck { text: "Only my reports"; checked: root.onlyMine; onToggled: root.onlyMine = checked }
-                Note {   // an empty board says why, and what to do
+                Rectangle {   // an empty board says why, and what to do
                     visible: root.boardCount === 0
-                    Layout.bottomMargin: 6
-                    color: root.t.muted
-                    text: root.onlyMine ? "You haven't reported anything yet. Use the Report tab to raise a problem."
-                                        : "No reports yet. Use the Report tab to raise the first one."
+                    Layout.fillWidth: true; Layout.bottomMargin: 8
+                    implicitHeight: emptyRow.implicitHeight + 20
+                    radius: 6; color: root.t.accentBg; border.color: root.t.accentBd
+                    RowLayout {
+                        id: emptyRow
+                        anchors { fill: parent; margins: 10 }
+                        spacing: 10
+                        Icon { name: "info"; size: 16; color: root.t.accent; Layout.alignment: Qt.AlignTop; Layout.topMargin: 2 }
+                        Label {
+                            Layout.fillWidth: true; wrapMode: Text.Wrap
+                            text: root.onlyMine ? "You haven't reported anything yet. Use the Report tab to raise a problem."
+                                                : "No reports yet. Use the Report tab to raise the first one."
+                        }
+                        FramedButton { text: "Report a problem"; onClicked: tabs.currentIndex = 1 }
+                    }
                 }
                 RowLayout {
                     spacing: 8
@@ -1093,41 +1175,65 @@ Item {
                     Layout.fillHeight: true
                     RowLayout {   // the four columns; hidden behind the pane on a narrow window
                         visible: !(root.narrow && root.selected)
-                        spacing: 8
+                        spacing: 12
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         Repeater {
                             model: [
-                                { title: "Reported", statuses: ["Open", "Acknowledged"] },
-                                { title: "In progress", statuses: ["InProgress", "AwaitingConfirmation"] },
-                                { title: "Resolved", statuses: ["ConfirmedResolved"] },
-                                { title: "Closed without fix", statuses: ["ClosedWontfix", "Duplicate"] }
+                                { title: "Reported", status: "Open", statuses: ["Open", "Acknowledged"], subtitle: "Waiting for a steward to see it", empty: "No reports yet." },
+                                { title: "In progress", status: "InProgress", statuses: ["InProgress", "AwaitingConfirmation"], subtitle: "A steward is on it", empty: "Nothing in progress." },
+                                { title: "Resolved", status: "ConfirmedResolved", statuses: ["ConfirmedResolved"], subtitle: "Confirmed fixed", empty: "Nothing resolved yet." },
+                                { title: "Closed without fix", status: "ClosedWontfix", statuses: ["ClosedWontfix", "Duplicate"], subtitle: "Won't fix or duplicate", empty: "Nothing closed." }
                             ]
-                            delegate: ColumnLayout {
+                            delegate: Rectangle {
                                 id: col
                                 required property var modelData
+                                readonly property var cards: root.inColumn(modelData.statuses)
                                 Layout.fillWidth: true
                                 Layout.fillHeight: true
                                 Layout.preferredWidth: 1   // equal shares of the width...
                                 Layout.minimumWidth: 160   // ...but never thinner than this
-                                Label { text: col.modelData.title + " (" + root.inColumn(col.modelData.statuses).length + ")"; font.bold: true }
-                                ListView {
-                                    Layout.fillWidth: true
-                                    Layout.fillHeight: true
-                                    clip: true
-                                    spacing: 4
-                                    model: root.inColumn(col.modelData.statuses)
-                                    delegate: IssueCard {
-                                        required property var modelData
-                                        issue: modelData
-                                        placeText: root.place(modelData)
-                                        hintText: root.hint(modelData)
-                                        overdue: root.flagged(modelData)
-                                        current: !!root.selected && root.selected.issue.id === modelData.id
-                                        stage: root.stageStyle(modelData.status)
-                                        alertColor: root.t.danger
-                                        mutedColor: root.t.muted
-                                        onOpened: root.openIssue(modelData.id)
+                                color: root.t.well; radius: 8; border.color: root.t.bd
+                                ColumnLayout {
+                                    anchors { fill: parent; margins: 8 }
+                                    spacing: 0
+                                    ColumnHeader {
+                                        Layout.fillWidth: true; Layout.topMargin: 4; Layout.leftMargin: 4
+                                        title: col.modelData.title; subtitle: col.modelData.subtitle; count: col.cards.length
+                                        icon: root.stageIcon(col.modelData.status); tint: root.stageStyle(col.modelData.status).fg
+                                    }
+                                    Label {   // an empty column says so, in a dashed box
+                                        id: empty
+                                        visible: col.cards.length === 0
+                                        Layout.fillWidth: true; padding: 12; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap
+                                        text: root.onlyMine ? "None of your reports here yet." : col.modelData.empty
+                                        font.pointSize: root.smallSize; color: root.t.muted
+                                        background: Shape {
+                                            preferredRendererType: Shape.CurveRenderer
+                                            ShapePath {
+                                                strokeColor: root.t.ctlBd; strokeWidth: 1; fillColor: "transparent"
+                                                strokeStyle: ShapePath.DashLine; dashPattern: [4, 3]
+                                                PathSvg { path: root.box(0.5, 0.5, empty.width - 1, empty.height - 1, 6) }
+                                            }
+                                        }
+                                    }
+                                    ListView {
+                                        Layout.fillWidth: true
+                                        Layout.fillHeight: true
+                                        clip: true
+                                        spacing: 8
+                                        model: col.cards
+                                        delegate: IssueCard {
+                                            required property var modelData
+                                            issue: modelData
+                                            placeText: root.place(modelData)
+                                            hintText: root.hint(modelData)
+                                            flags: root.flagLines(modelData)
+                                            needsMe: modelData.status === "AwaitingConfirmation" && modelData.reporter === root.me.key
+                                            current: !!root.selected && root.selected.issue.id === modelData.id
+                                            stage: root.stageStyle(modelData.status)
+                                            onOpened: root.openIssue(modelData.id)
+                                        }
                                     }
                                 }
                             }
