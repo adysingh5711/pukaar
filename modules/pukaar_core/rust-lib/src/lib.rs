@@ -10,8 +10,11 @@ use pukaar_logic::identity;
 use pukaar_logic::node::{action_body, genesis_from_json, parse_id, Node};
 use pukaar_logic::persist;
 use pukaar_logic::store::Accept;
-use pukaar_logic::sync::{heads_msg, should_answer, to_resend, to_resend_own, Wire};
+use pukaar_logic::sync::{
+    heads_msg, lost_node, send_queue, should_answer, to_resend, to_resend_own, SendError, Wire,
+};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 // Mutex comes from the generated scaffold below (same module scope): a second
 // `use std::sync::Mutex;` here would be a duplicate import (confirmed at Step 8).
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -97,7 +100,8 @@ const RETRY_AFTER: Duration = Duration::from_secs(10);
 /// Delivery bring-up, advanced one step per flush(). Not done in on_context_ready: the host
 /// authorises our calls to delivery_module only after that returns, so a createNode/start made
 /// there fails "unauthorized", the node never starts, and nothing ever crosses (seen headless).
-/// Only moves forward, so a nodeStarted that lands mid-flush is never overwritten.
+/// Only moves forward, so a nodeStarted that lands mid-flush is never overwritten; the one way back
+/// is to Down, when Delivery's host restarted without its node (see `advance`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 enum Link {
     #[default]
@@ -116,13 +120,18 @@ struct Shared {
     dir: PathBuf,
     node: Option<Node>,
     /// Wire messages waiting to go out. Only drained inside module method calls,
-    /// so Delivery is never called from our own threads.
+    /// so Delivery is never called from our own threads. What Delivery couldn't take stays here.
     outbox: Vec<Vec<u8>>,
     last_heads: Option<Instant>,
     last_answer: Option<Instant>,
     link: Link,
     /// Last Delivery failure, shown as `"delivery": "error: …"` until a later step succeeds.
     link_error: Option<String>,
+    /// Delivery took a message but then couldn't get it onto the network (channelMessageError),
+    /// until one gets through (channelMessageSent). Our calls all succeed meanwhile, so without
+    /// this the UI said "online" while nothing left the device (seen live: every send failed
+    /// "The node does not have a usable RLN membership").
+    send_error: Option<String>,
     /// Set by a failed step: no Delivery call before then (see RETRY_AFTER).
     retry_at: Option<Instant>,
     /// Events arrived (on_wire) since the last save.
@@ -202,8 +211,10 @@ fn delivered_once(
     delivered(method, r).or_else(|e| e.contains("already ").then_some(()).ok_or(e))
 }
 
-/// Record the outcome of a bring-up step. An error keeps the link where it is: the first flush
-/// after RETRY_AFTER retries.
+/// Record the outcome of a bring-up step. An error keeps the link where it is, so the first flush
+/// after RETRY_AFTER retries that step, unless Delivery lost its node: its host restarted, and
+/// only a new createNode, start and channelCreate bring it back (before, every later send was
+/// refused "Context not initialized" and nothing went out until Basecamp restarted).
 fn advance(r: Result<Link, String>) {
     if let Some(sh) = SHARED.lock().unwrap().as_mut() {
         match r {
@@ -213,6 +224,9 @@ fn advance(r: Result<Link, String>) {
                 sh.retry_at = None;
             }
             Err(e) => {
+                if lost_node(&e) {
+                    sh.link = Link::Down;
+                }
                 sh.link_error = Some(e);
                 sh.retry_at = Some(Instant::now() + RETRY_AFTER);
             }
@@ -225,6 +239,10 @@ fn delivery_status() -> String {
         None => "module not ready".into(),
         Some(Shared {
             link_error: Some(e),
+            ..
+        })
+        | Some(Shared {
+            send_error: Some(e),
             ..
         }) => err(e),
         Some(sh) => format!("{:?}", sh.link),
@@ -242,9 +260,23 @@ fn listen<T: 'static>(
     Ok(())
 }
 
+/// Set once our event listeners exist: the SDK re-arms them when Delivery's host restarts, so a
+/// bring-up after that only redoes createNode (a second set would handle every message twice).
+static LISTENING: AtomicBool = AtomicBool::new(false);
+
+/// Note a channel send's final outcome (see `Shared::send_error`).
+fn sent(error: Option<String>) {
+    if let Some(sh) = SHARED.lock().unwrap().as_mut() {
+        // Delivery says only "one or more segments failed"; the cause seen live is RLN
+        sh.send_error = error.map(|e| {
+            format!("messages aren't reaching the network ({e}): is this profile's RLN membership active?")
+        });
+    }
+}
+
 /// createNode (another module may own it), then subscribe.
-// ponytail: if the 2nd subscribe fails after the 1st worked, the retry adds one duplicate
-// nodeStarted listener (harmless: advance is idempotent); split the step if that ever matters.
+// ponytail: if a later subscribe fails after an earlier one worked, the retry adds one duplicate
+// listener (harmless: advance, on_wire and sent are idempotent); split the step if that matters.
 fn create_and_listen() -> Result<(), String> {
     use delivery_module::DeliveryModuleClient as D;
     // PUKAAR_DELIVERY_CFG overrides the network (LAN entry-node, L2).
@@ -256,6 +288,9 @@ fn create_and_listen() -> Result<(), String> {
             .delivery_module
             .create_node_with_timeout(&cfg, DELIVERY_TIMEOUT),
     )?;
+    if LISTENING.load(Ordering::Relaxed) {
+        return Ok(());
+    }
     listen(
         modules().delivery_module.on_node_started(),
         D::decode_node_started,
@@ -272,7 +307,19 @@ fn create_and_listen() -> Result<(), String> {
         modules().delivery_module.on_channel_message_received(),
         D::decode_channel_message_received,
         |m| on_wire(&m.channel_id, &m.payload),
-    )
+    )?;
+    listen(
+        modules().delivery_module.on_channel_message_error(),
+        D::decode_channel_message_error,
+        |m| sent(Some(m.error)),
+    )?;
+    listen(
+        modules().delivery_module.on_channel_message_sent(),
+        D::decode_channel_message_sent,
+        |_| sent(None),
+    )?;
+    LISTENING.store(true, Ordering::Relaxed);
+    Ok(())
 }
 
 fn open_channel(site_hex: &str, me_hex: &str) -> Result<(), String> {
@@ -355,22 +402,24 @@ fn send_queued(site: &str) -> Result<(), String> {
         }
         std::mem::take(outbox)
     };
-    // try every message, keep the last failure; a lost one comes back through anti-entropy.
-    // Stop at the first call Delivery didn't answer: each further one would stall another timeout.
-    let mut r = Ok(());
-    for msg in &out {
-        let sent = modules()
+    // Before, a send batch was dropped whole when Delivery didn't answer, so a join made while
+    // Delivery was down waited for a peer's Heads to come back. Now it goes out on reconnect.
+    // ponytail: while Delivery stays down one stale Heads per minute piles up here (tens of bytes
+    // each, harmless when sent); drop queued Heads before adding a new one if outages run to days.
+    let (unsent, err) = send_queue(out, |msg| {
+        let r = modules()
             .delivery_module
             .channel_send_with_timeout(site, msg, DELIVERY_TIMEOUT);
-        let unreachable = sent.is_err();
-        if let Err(e) = delivered("channelSend", sent) {
-            r = Err(e);
-            if unreachable {
-                break;
-            }
+        let answered = r.is_ok();
+        delivered("channelSend", r).map_err(|e| SendError::new(answered, e))
+    });
+    if !unsent.is_empty() {
+        // in front of anything on_wire queued meanwhile, in order
+        if let Some(sh) = SHARED.lock().unwrap().as_mut() {
+            sh.outbox.splice(..0, unsent);
         }
     }
-    r
+    err.map_or(Ok(()), Err)
 }
 
 /// One Delivery step: bring the node up, open our site's channel, then send. The UI polls
@@ -695,6 +744,7 @@ impl PukaarCoreModule for Pukaar {
             last_answer: None,
             link: Link::Down,
             link_error: None,
+            send_error: None,
             retry_at: None,
             dirty: false,
             last_save: Instant::now(),

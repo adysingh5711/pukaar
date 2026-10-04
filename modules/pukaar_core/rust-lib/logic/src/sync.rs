@@ -34,6 +34,57 @@ pub fn heads_msg(store: &Store) -> Wire {
     Wire::Heads(store.head_seqs())
 }
 
+/// Why Delivery didn't take a message.
+pub enum SendError {
+    /// Delivery will take it once it's back (no answer, or restarted without its node): keep it.
+    Retry(String),
+    /// Delivery answered no: resending the same bytes won't change that.
+    Refused(String),
+}
+
+impl SendError {
+    /// A failed Delivery call: `answered` is false when Delivery gave no answer at all.
+    #[must_use]
+    pub fn new(answered: bool, e: String) -> Self {
+        if !answered || lost_node(&e) {
+            SendError::Retry(e)
+        } else {
+            SendError::Refused(e)
+        }
+    }
+}
+
+/// Delivery answered but holds no node: its host restarted under us ("Context not initialized"),
+/// so the node, its start and our channel must be set up again before anything can go out.
+#[must_use]
+pub fn lost_node(e: &str) -> bool {
+    e.contains("not initialized")
+}
+
+/// Hand `queue` to `send` in order. Returns what stays queued (the first message to `Retry` and
+/// everything after it, in order: each further call would only stall or fail the same way) and
+/// the last error. A refused message is dropped; anti-entropy re-sends a lost event.
+#[must_use]
+pub fn send_queue(
+    mut queue: Vec<Vec<u8>>,
+    mut send: impl FnMut(&[u8]) -> Result<(), SendError>,
+) -> (Vec<Vec<u8>>, Option<String>) {
+    let mut last = None;
+    let stop = queue.iter().position(|m| match send(m) {
+        Ok(()) => false,
+        Err(SendError::Refused(e)) => {
+            last = Some(e);
+            false
+        }
+        Err(SendError::Retry(e)) => {
+            last = Some(e);
+            true
+        }
+    });
+    queue.drain(..stop.unwrap_or(queue.len()));
+    (queue, last)
+}
+
 /// Should this node answer a Heads message? Every receiver ranks the members the same way,
 /// by sha256(member || message || minute), and only the top `ANSWERERS` answer, so a
 /// newcomer on check-in day gets 3 copies instead of 30. The minute is in the hash, so if

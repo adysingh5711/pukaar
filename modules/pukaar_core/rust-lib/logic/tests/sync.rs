@@ -1,8 +1,9 @@
 mod util;
 use pukaar_logic::event::new_key;
-use pukaar_logic::store::Store;
+use pukaar_logic::store::{Accept, Store};
 use pukaar_logic::sync::{
-    heads_msg, should_answer, to_resend, to_resend_own, Wire, ANSWERERS, MAX_RESEND,
+    heads_msg, lost_node, send_queue, should_answer, to_resend, to_resend_own, SendError, Wire,
+    ANSWERERS, MAX_RESEND,
 };
 use util::*;
 
@@ -106,6 +107,77 @@ fn an_author_always_resends_their_own_events() {
         to_resend(&mine, &theirs).len(),
         4,
         "both authors when elected (the peer already has genesis)"
+    );
+}
+
+#[test]
+fn a_message_delivery_did_not_answer_stays_queued_with_everything_after_it() {
+    // Delivery unreachable at the 2nd message: it and the 3rd come back, in order; nothing resent
+    let queue = vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()];
+    let mut tried = vec![];
+    let (unsent, err) = send_queue(queue, |m| {
+        tried.push(m.to_vec());
+        match m {
+            b"b" => Err(SendError::Retry("timed out".into())),
+            _ => Ok(()),
+        }
+    });
+    assert_eq!(
+        tried,
+        [b"a".to_vec(), b"b".to_vec()],
+        "stops at the first unanswered call"
+    );
+    assert_eq!(unsent, [b"b".to_vec(), b"c".to_vec()]);
+    assert_eq!(err.as_deref(), Some("timed out"));
+    // once Delivery is back the rest goes out, and nothing is left
+    let (unsent, err) = send_queue(unsent, |_| Ok(()));
+    assert!(unsent.is_empty() && err.is_none());
+    // a refusal (Delivery answered) drops that message and carries on
+    let (unsent, err) = send_queue(vec![b"x".to_vec(), b"y".to_vec()], |m| match m {
+        b"x" => Err(SendError::Refused("too big".into())),
+        _ => Ok(()),
+    });
+    assert!(unsent.is_empty());
+    assert_eq!(err.as_deref(), Some("too big"));
+}
+
+#[test]
+fn a_restarted_delivery_is_a_reason_to_retry_not_to_drop() {
+    let retry =
+        |answered, e: &str| matches!(SendError::new(answered, e.into()), SendError::Retry(_));
+    assert!(retry(false, "channelSend: timed out"), "no answer");
+    // Delivery's own words when its host came back without a node (seen headless after a restart)
+    assert!(retry(true, "channelSend: Context not initialized"));
+    assert!(lost_node("channelSend: Context not initialized"));
+    assert!(!retry(true, "channelSend: payload too large"));
+    assert!(!lost_node("createNode: Context already initialized"));
+}
+
+#[test]
+fn a_join_published_while_delivery_was_down_still_reaches_the_admin() {
+    use pukaar_logic::node::Node;
+    let g = genesis_event(&new_key());
+    let mut admin = Store::new(g.id);
+    admin.insert(g.clone());
+    // the joiner announced itself, but the send failed and the message was lost for good
+    let mut joiner = Node::join_announced(new_key(), g.id, 1);
+    joiner.receive(&g.bytes).unwrap();
+    // the admin's next Heads (once a minute) makes the joiner re-send its own announce
+    let Wire::Heads(theirs) = heads_msg(&admin) else {
+        unreachable!()
+    };
+    for b in to_resend_own(&joiner.store, &theirs, &joiner.me()) {
+        assert_eq!(
+            admin.insert(pukaar_logic::event::decode(&b).unwrap()),
+            Accept::New
+        );
+    }
+    assert_eq!(admin.heads(), joiner.store.heads());
+    // a second copy (the original turning up late, or another answer) changes nothing
+    let announce = to_resend(&joiner.store, &[]).pop().unwrap();
+    assert_eq!(
+        admin.insert(pukaar_logic::event::decode(&announce).unwrap()),
+        Accept::Duplicate
     );
 }
 
