@@ -40,19 +40,20 @@ Item {
     // Two sets (design/proposal/NOTES.md section 1): light = Primer, dark = Logos neutrals with
     // Primer's stage hues. Everything reads root.t, which follows the system colour scheme live.
     // Names match the mockup's CSS variables; the sb*/tip* roles are for the sidebar (step 5).
+    // QML spells alpha first (#AARRGGBB): CSS #54aeff99 is "#9954aeff" here.
     readonly property bool dark: Application.styleHints.colorScheme === Qt.Dark
     readonly property var lightTokens: ({
         fg: "#1f2328", muted: "#59636e", ph: "#6e7781", disabled: "#818b98",
         page: "#ffffff", well: "#f6f8fa", card: "#ffffff", field: "#ffffff", hover: "#eff2f5", btn: "#f6f8fa", btnOff: "#f6f8fa",
         bd: "#d1d9e0", ctlBd: "#818b98", btnBd: "#d1d9e0",
-        accent: "#0969da", accentBg: "#ddf4ff", accentBd: "#54aeff99", focus: "#0969da",
+        accent: "#0969da", accentBg: "#ddf4ff", accentBd: "#9954aeff", focus: "#0969da",
         primary: "#0969da", primaryHover: "#0860ca", onPrimary: "#ffffff",
-        danger: "#d1242f", dangerBg: "#ffebe9", dangerBd: "#ff818299",
+        danger: "#d1242f", dangerBg: "#ffebe9", dangerBd: "#99ff8182",
         okDot: "#1a7f37", connDot: "#9a6700",
-        reported: { fg: "#bc4c00", bg: "#fff1e5", bd: "#fb8f4499", edge: "#bc4c00" },
-        progress: { fg: "#0969da", bg: "#ddf4ff", bd: "#54aeff99", edge: "#0969da" },
-        awaiting: { fg: "#8250df", bg: "#fbefff", bd: "#c297ff99", edge: "#8250df" },
-        resolved: { fg: "#1a7f37", bg: "#dafbe1", bd: "#4ac26b99", edge: "#1a7f37" },
+        reported: { fg: "#bc4c00", bg: "#fff1e5", bd: "#99fb8f44", edge: "#bc4c00" },
+        progress: { fg: "#0969da", bg: "#ddf4ff", bd: "#9954aeff", edge: "#0969da" },
+        awaiting: { fg: "#8250df", bg: "#fbefff", bd: "#99c297ff", edge: "#8250df" },
+        resolved: { fg: "#1a7f37", bg: "#dafbe1", bd: "#994ac26b", edge: "#1a7f37" },
         closed: { fg: "#59636e", bg: "#eff1f3", bd: "#d1d9e0", edge: "#818b98" },
         sb: "#f6f8fa", sbCard: "#ffffff", sbHover: "#eaeef2", sbFg: "#1f2328", sbMuted: "#59636e", sbIcon: "#59636e",
         sbEdge: "#d1d9e0", sbLine: "#d1d9e0", sbCtl: "#818b98", sbActBg: "#c8e6ff", sbActFg: "#0550ae", sbActIcon: "#0550ae",
@@ -262,10 +263,90 @@ Item {
         if (isOverdue(i)) out.push("OVERDUE by " + -dueHours(i.progress) + " h")
         return out
     }
+    // ---- who may act on an issue: the core's rules (logic/src/reducer.rs), each as the reason the
+    // viewer can't, checked in the core's order; "" = allowed. The pane shows an action when its
+    // rule says "", and unavailable() lists the others with these reasons. ----
+    function stageWhy(st) {
+        return isActionable(st) ? "no fix has been claimed yet" : st === "AwaitingConfirmation" ? "a fix is already claimed"
+             : st === "ConfirmedResolved" ? "it is resolved" : "it is closed"
+    }
+    // The reporter decides alone; any other resident is one of the two votes (confirm and reopen alike).
+    function canVote(i) { return i.reporter === me.key || me.role === "Resident" }
+    // Post update, Claim fixed, Won't fix, Mark duplicate (and Acknowledge while Open).
+    function stewardWhy(i) { return !staff ? "only stewards can" : isActionable(i.status) ? "" : stageWhy(i.status) }
+    function confirmWhy(i) {
+        return i.status !== "AwaitingConfirmation" ? stageWhy(i.status)
+             : i.claimant === me.key ? "you claimed this fix"
+             : canVote(i) ? "" : "only the reporter or a resident can"
+    }
+    function reopenWhy(i) { return isActionable(i.status) ? stageWhy(i.status) : canVote(i) ? "" : "only the reporter or a resident can" }
+    function needsMe(i) { return i.reporter === me.key && confirmWhy(i) === "" }
+    // "Not available to you": every action the pane hides or disables, one line per reason, in the
+    // mockup's words ("Reopen and Comment need a note first."). The core refuses these without a note.
+    function unavailable(i, hasNote) {
+        var note = hasNote ? "" : "note", steward = stewardWhy(i)
+        var why = [["Acknowledge", staff ? "" : steward]]
+        ;["Post update", "Claim fixed", "Won't fix"].forEach(function (a) { why.push([a, steward || note]) })
+        why.push(["Confirm it's fixed", confirmWhy(i)], ["Reopen", reopenWhy(i) || note], ["Comment", note])
+        var reasons = [], acts = {}
+        why.forEach(function (w) {
+            if (!w[1]) return
+            if (!acts[w[1]]) { acts[w[1]] = []; reasons.push(w[1]) }
+            acts[w[1]].push(w[0])
+        })
+        return reasons.map(function (r) {
+            var a = acts[r], names = a.length > 1 ? a.slice(0, -1).join(", ") + " and " + a[a.length - 1] : a[0]
+            return r === "note" ? names + (a.length > 1 ? " need" : " needs") + " a note first." : names + ", because " + r + "."
+        })
+    }
+    // "Why it isn't closed yet": what still has to happen, by the same rules (the reporter confirms,
+    // or 2 other residents do; the fixer never confirms their own fix). null once it is closed.
+    function whyCard(i) {
+        if (i.status === "AwaitingConfirmation") {
+            var p = i.progress || {}
+            var fixer = i.claimant === me.key ? "you" : esc(who(i.claimant, p.by === i.claimant ? p.by_name : ""))
+            var mine = i.reporter === me.key
+            return {
+                intro: "Fix claimed by <b>" + fixer + "</b>" + (p.ts ? " on " + when(p.ts) : "") + ". A claim is not a closure.",
+                steps: [
+                    { title: mine ? "<b>You (the reporter) confirm</b>" : "<b>" + esc(who(i.reporter, i.reporter_name)) + "</b> (the reporter) confirms",
+                      hint: i.claimant === i.reporter ? "Not possible here: the reporter claimed this fix."
+                          : mine ? "Or reopen it, with a reason, if it still isn't fixed." : "Waiting. The reporter can also reopen at any time." },
+                    { title: "<b>or 2 other residents confirm</b>", meter: i.confirms, hint: i.confirms + " of 2 so far" }
+                ],
+                never: fixer === "you" ? "<b>You claimed this fix, so you can't confirm it.</b>" : fixer + " claimed this fix, so " + fixer + " can't confirm it."
+            }
+        }
+        if (!isActionable(i.status)) return null
+        var late = Math.floor((Date.now() / 1000 - i.reported_ts) / 3600) - info.sla_ack_h
+        return { intro: "", never: "", steps: [
+            { title: "<b>A steward acknowledges it</b>", done: i.status !== "Open",
+              hint: i.status !== "Open" ? "Done." : "Not done yet." + (i.ack_overdue ? " " + late + " h past the " + info.sla_ack_h + " h target." : "") },
+            { title: "<b>A steward claims a fix and says what was done</b>", hint: i.fix_overdue ? "Not done yet. Past the " + info.sla_fix_h + " h fix target." : "" },
+            { title: "<b>The reporter, or 2 other residents, confirm it</b>", hint: "" }
+        ] }
+    }
+    // Timeline kinds in words: [label, noun when rejected, icon, label when a resident other than the
+    // reporter did it (one of two votes, so it may not have changed the status)]. The raw kind shows beside it.
+    readonly property var kinds: ({
+        report: ["Reported", "Report", "rep"], acknowledge: ["Acknowledged", "Acknowledgement", "eye"],
+        update: ["Update posted", "Update", "update"], claim_resolved: ["Fix claimed", "Fix claim", "flag"],
+        confirm: ["Confirmed fixed", "Confirmation", "res", "Resident confirmed"],
+        reopen: ["Reopened", "Reopen", "reopen", "Resident asked to reopen"],
+        close_wontfix: ["Closed: won't fix", "Won't fix", "clo"], mark_duplicate: ["Marked duplicate", "Duplicate mark", "dup"],
+        comment: ["Comment", "Comment", "cmt"]
+    })
+    function kindLabel(kind, rejected, byReporter) {
+        var k = kinds[kind]
+        return !k ? kind : rejected ? k[1] + " rejected" : !byReporter && k[3] ? k[3] : k[0]
+    }
+    // Inline monospace for codes, fingerprints and raw kinds (in a RichText label).
+    function mono(s) { return "<span style='font-family:Menlo,Consolas,monospace;font-size:" + smallSize + "pt;color:" + t.muted + "'>" + esc(s) + "</span>" }
     // The card's grey line: age, whose move it is, next step. (Reopens and flags have their own chip and line.)
     function hint(i) {
         var waiting = i.status !== "AwaitingConfirmation" ? ""
-            : i.reporter === me.key ? "Needs your confirmation. " : "Fix claimed: waiting for the reporter to confirm. "
+            : needsMe(i) ? "Needs your confirmation. "
+            : "Fix claimed: waiting for " + (i.claimant === i.reporter ? "2 residents" : "the reporter") + " to confirm. "
         return "Reported " + age(i.reported_ts) + ". " + waiting + nextLine(i)
     }
     // "Next: fit washer · due in 5 h"
@@ -523,8 +604,7 @@ Item {
             spacing: 6
             Label {
                 width: parent.width; wrapMode: Text.Wrap; textFormat: Text.RichText; color: card.ink; font.weight: Font.DemiBold
-                text: "<span style='font-family:Menlo,Consolas,monospace;font-size:" + root.smallSize
-                      + "pt;color:" + root.t.muted + "'>" + root.esc(root.placeCode(card.issue)) + "</span> " + root.esc(root.placeName(card.issue))
+                text: root.mono(root.placeCode(card.issue)) + " " + root.esc(root.placeName(card.issue))
             }
             Label { width: parent.width; wrapMode: Text.Wrap; color: card.ink; font.pointSize: root.baseSize * 1.07; text: card.issue.text }
             Flow {
@@ -582,16 +662,158 @@ Item {
         Label { width: parent.width; wrapMode: Text.Wrap; text: head.subtitle; font.pointSize: root.smallSize; color: root.t.muted }
     }
 
-    // One timeline entry. The caller composes the full line (who/when/kind/body/rejected/anchored).
-    component TimelineRow: Label {
+    // One timeline entry (an issue_timeline() event): a node on the spine, the plain label then the
+    // raw kind, who and when, the body, and the anchor line. A rejected event is red and stays in the record.
+    component TimelineRow: RowLayout {
         id: row
-        required property string lineText
-        required property bool rejected
-        required property color alertColor
-        width: ListView.view.width
-        wrapMode: Text.Wrap
-        color: row.rejected ? row.alertColor : root.t.fg
-        text: row.lineText
+        required property var event
+        required property bool byReporter
+        readonly property bool rejected: !!event.rejected
+        readonly property var kind: root.kinds[event.kind] || []
+        spacing: 10
+        Rectangle {
+            Layout.alignment: Qt.AlignTop
+            implicitWidth: 28; implicitHeight: 28; radius: 14
+            color: row.rejected ? root.t.dangerBg : root.t.well
+            border.color: row.rejected ? root.t.dangerBd : root.t.bd
+            Icon { anchors.centerIn: parent; name: row.rejected ? "reject" : row.kind[2] || "cmt"; size: 16; color: row.rejected ? root.t.danger : root.t.muted }
+        }
+        ColumnLayout {
+            Layout.fillWidth: true
+            spacing: 2
+            Label {
+                Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.RichText
+                color: row.rejected ? root.t.danger : root.t.fg
+                text: "<b>" + root.esc(root.kindLabel(row.event.kind, row.rejected, row.byReporter)) + "</b>&nbsp; " + root.mono(row.event.kind)
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 5
+                Icon { Layout.alignment: Qt.AlignTop; Layout.topMargin: 2; name: "user"; size: 13; color: root.t.muted }
+                Label {
+                    Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.RichText; font.pointSize: root.smallSize; color: root.t.muted
+                    text: root.esc(root.who(row.event.author, row.event.author_name)) + " " + root.mono(String(row.event.author).substr(0, 6))
+                          + " · " + root.when(row.event.ts)
+                }
+            }
+            Label { visible: text !== ""; Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText; text: row.event.body || "" }
+            Label {
+                visible: row.rejected; Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
+                text: "[rejected: " + row.event.rejected + "]"; color: root.t.danger; font.weight: Font.DemiBold
+            }
+            Label { visible: row.rejected; text: "Kept in the record. It changed nothing."; font.pointSize: root.smallSize; color: root.t.muted }
+            Label {
+                visible: !!row.event.anchored_tx; Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.RichText
+                font.pointSize: root.smallSize; color: root.t.muted
+                text: "anchor ref " + root.mono(String(row.event.anchored_tx).substr(0, 16) + "…") + " recorded by "
+                      + root.esc(root.who(row.event.anchored_by, row.event.anchored_by_name))
+            }
+        }
+    }
+
+    // "Why it isn't closed yet" (proposal F): the steps root.whyCard() returns, tinted by the issue's stage.
+    component WhyCard: Rectangle {
+        id: why
+        required property var card      // whyCard(): {intro, steps: [{title, hint, meter?, done?}], never}
+        required property var stage     // stageStyle(): header tint, icon and border
+        implicitHeight: whyCol.implicitHeight + 2
+        radius: 8; color: root.t.card; border.color: why.stage.bd
+        Accessible.role: Accessible.Grouping; Accessible.name: "Why it isn't closed yet"
+        ColumnLayout {
+            id: whyCol
+            x: 1; y: 1; width: parent.width - 2
+            spacing: 0
+            Rectangle {
+                Layout.fillWidth: true
+                implicitHeight: whyHead.implicitHeight + 16
+                color: why.stage.bg; topLeftRadius: 7; topRightRadius: 7
+                RowLayout {
+                    id: whyHead
+                    anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; margins: 12 }
+                    spacing: 8
+                    Icon { name: "info"; size: 16; color: why.stage.fg }
+                    Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: "Why it isn't closed yet"; font.weight: Font.DemiBold }
+                }
+            }
+            ColumnLayout {
+                Layout.fillWidth: true; Layout.margins: 12; Layout.topMargin: 10; Layout.bottomMargin: 10
+                spacing: 0
+                Label { visible: why.card.intro !== ""; Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.RichText; text: why.card.intro; bottomPadding: 6 }
+                Repeater {
+                    model: why.card.steps
+                    delegate: ColumnLayout {
+                        id: step
+                        required property var modelData
+                        required property int index
+                        readonly property bool dashed: index > 0 || why.card.intro !== ""
+                        Layout.fillWidth: true
+                        spacing: 0
+                        Shape {   // dashed rule between the steps: a long line, clipped to the card
+                            visible: step.dashed
+                            Layout.fillWidth: true; implicitHeight: 1; clip: true
+                            ShapePath {
+                                strokeColor: root.t.bd; strokeWidth: 1; strokeStyle: ShapePath.DashLine; dashPattern: [3, 3]
+                                startX: 0; startY: 0.5
+                                PathLine { x: 2000; y: 0.5 }
+                            }
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true; Layout.topMargin: step.dashed ? 8 : 0; Layout.bottomMargin: 8
+                            spacing: 10
+                            Rectangle {
+                                Layout.alignment: Qt.AlignTop
+                                implicitWidth: 24; implicitHeight: 24; radius: 12; color: "transparent"
+                                border.width: 2; border.color: step.modelData.done ? root.t.resolved.fg : root.t.ctlBd
+                                Label {
+                                    anchors.centerIn: parent; text: step.index + 1; font.pointSize: root.smallSize; font.bold: true
+                                    color: step.modelData.done ? root.t.resolved.fg : root.t.fg
+                                }
+                            }
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 2
+                                Label { Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.RichText; text: step.modelData.title }
+                                Rectangle {   // the residents' votes so far, of 2
+                                    visible: step.modelData.meter !== undefined
+                                    Layout.fillWidth: true; Layout.maximumWidth: 160; Layout.topMargin: 4; implicitHeight: 8
+                                    radius: 4; color: root.t.bd
+                                    Accessible.role: Accessible.Indicator; Accessible.name: step.modelData.hint
+                                    Rectangle { width: parent.width * Math.min(step.modelData.meter || 0, 2) / 2; height: 8; radius: 4; color: root.t.resolved.fg }
+                                }
+                                Label {
+                                    visible: text !== ""; Layout.fillWidth: true; wrapMode: Text.Wrap
+                                    text: step.modelData.hint; font.pointSize: root.smallSize; color: root.t.muted
+                                }
+                            }
+                        }
+                    }
+                }
+                Rectangle {   // the fixer never confirms their own fix
+                    visible: why.card.never !== ""
+                    Layout.fillWidth: true
+                    implicitHeight: neverRow.implicitHeight + 12
+                    radius: 6; color: root.t.dangerBg; border.color: root.t.dangerBd
+                    RowLayout {
+                        id: neverRow
+                        anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; leftMargin: 10; rightMargin: 10 }
+                        spacing: 8
+                        Icon { Layout.alignment: Qt.AlignTop; Layout.topMargin: 1; name: "warn"; size: 15; color: root.t.danger }
+                        Label { Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.RichText; text: why.card.never; font.pointSize: root.smallSize }
+                    }
+                }
+            }
+        }
+    }
+
+    // A muted heading over a wrapping row of actions: "For stewards", "For everyone", ...
+    component ActionGroup: ColumnLayout {
+        id: group
+        property string title
+        default property alias content: acts.data
+        Layout.fillWidth: true
+        spacing: 6
+        Label { Layout.topMargin: 6; text: group.title; font.pointSize: root.smallSize; font.weight: Font.DemiBold; color: root.t.muted }
+        Flow { id: acts; Layout.fillWidth: true; spacing: 8 }
     }
 
     // ---- layout pieces ----
@@ -665,9 +887,15 @@ Item {
     component FormRow: ColumnLayout {
         id: form
         property string label
+        property string sub          // a muted aside after a bold label: "Note (what was seen, done or why)"
+        property bool strong: sub !== ""   // the pane's bold 14 px labels (step 6 brings the rest)
         Layout.fillWidth: true
         spacing: 4
-        Label { visible: form.label !== ""; text: form.label; font.pointSize: root.smallSize }
+        Label {
+            visible: form.label !== ""; Layout.fillWidth: true; wrapMode: Text.Wrap
+            textFormat: Text.RichText; font.weight: form.strong ? Font.DemiBold : Font.Normal; font.pointSize: form.strong ? root.baseSize : root.smallSize
+            text: root.esc(form.label) + (form.sub ? " <span style='font-weight:400;font-size:" + root.smallSize + "pt;color:" + root.t.muted + "'>" + root.esc(form.sub) + "</span>" : "")
+        }
     }
 
     // A full-width notice: wrapped text, and optionally one button on the right.
@@ -1229,7 +1457,7 @@ Item {
                                             placeText: root.place(modelData)
                                             hintText: root.hint(modelData)
                                             flags: root.flagLines(modelData)
-                                            needsMe: modelData.status === "AwaitingConfirmation" && modelData.reporter === root.me.key
+                                            needsMe: root.needsMe(modelData)
                                             current: !!root.selected && root.selected.issue.id === modelData.id
                                             stage: root.stageStyle(modelData.status)
                                             onOpened: root.openIssue(modelData.id)
@@ -1240,18 +1468,30 @@ Item {
                         }
                     }
 
-                    // Timeline: every step anyone took, and the actions allowed from here
-                    ColumnLayout {
+                    // The issue pane: header, the report, why it isn't closed yet, the timeline, then the
+                    // actions grouped by who they are for and what isn't available (and why). It scrolls whole.
+                    ScrollView {
                         id: detail
                         visible: root.selected !== null
                         Layout.fillWidth: root.narrow   // wide: a fixed pane beside the board; narrow: it takes over
-                        Layout.preferredWidth: root.narrow ? -1 : 340
+                        Layout.preferredWidth: root.narrow ? -1 : 400
                         Layout.minimumWidth: 260
                         Layout.fillHeight: true
+                        contentWidth: availableWidth
+                        clip: true
+                        leftPadding: root.narrow ? 0 : 16
+                        background: Rectangle {
+                            color: root.t.page
+                            Rectangle { visible: !root.narrow; width: 1; height: parent.height; color: root.t.bd }
+                        }
                         property var issue: root.selected ? root.selected.issue : ({})
                         property string st: issue.status || ""
                         property bool mine: issue.reporter === root.me.key
-                        property bool claimant: issue.claimant === root.me.key
+                        readonly property var stage: root.stageStyle(st)
+                        // The rules (root.stewardWhy/confirmWhy/reopenWhy): "" = this viewer may.
+                        readonly property bool steward: root.stewardWhy(issue) === ""
+                        readonly property bool canConfirm: root.confirmWhy(issue) === ""
+                        readonly property bool canReopen: root.reopenWhy(issue) === ""
                         Keys.onEscapePressed: root.closeIssue()
                         property bool hasNote: note.text.trim() !== ""   // the core rejects these without one
                         readonly property int etaHours: parseInt(eta.text) || 0
@@ -1259,104 +1499,204 @@ Item {
                             root.run("act", [issue.id, a, note.text, nextStep.text, eta | 0],
                                      function () { note.text = ""; nextStep.text = "" })
                         }
-                        RowLayout {
-                            Layout.fillWidth: true
-                            Label {
-                                text: detail.issue.category + " · " + root.place(detail.issue) + " · " + detail.issue.stage
-                                    + (detail.issue.location_renamed_from ? " (place renamed from " + detail.issue.location_renamed_from + ")" : "")
-                                font.bold: true; wrapMode: Text.Wrap; Layout.fillWidth: true
+                        ColumnLayout {
+                            x: (detail.availableWidth - width) / 2
+                            width: Math.min(detail.availableWidth, 760)
+                            spacing: 0
+                            RowLayout {
+                                Layout.fillWidth: true; Layout.bottomMargin: 8
+                                Item { visible: !root.narrow; Layout.fillWidth: true }
+                                FramedButton { text: root.narrow ? "← Board" : "Close"; onClicked: root.closeIssue() }
                             }
-                            FramedButton { text: root.narrow ? "← Board" : "Close"; onClicked: root.closeIssue() }
-                        }
-                        Label { text: detail.issue.text || ""; wrapMode: Text.Wrap; Layout.fillWidth: true }
-                        ListView {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            clip: true
-                            spacing: 6
-                            model: root.selected ? root.selected.events : []
-                            delegate: TimelineRow {
-                                required property var modelData
-                                alertColor: root.t.danger
-                                rejected: !!modelData.rejected
-                                lineText: root.when(modelData.ts) + "  " + modelData.kind + " by " + root.who(modelData.author, modelData.author_name)
-                                          + (modelData.body ? ": " + modelData.body : "")
-                                          + (modelData.rejected ? "  [rejected: " + modelData.rejected + "]" : "")
-                                          + (modelData.anchored_tx ? "  anchor ref " + String(modelData.anchored_tx).substr(0, 16)
-                                             + "… recorded by " + root.who(modelData.anchored_by, modelData.anchored_by_name) : "")
-                            }
-                        }
-                        FormRow {
-                            label: "Note (what was seen, done or why)"
-                            FramedField { id: note; Layout.fillWidth: true; maximumLength: 500; Accessible.name: "Note"; placeholderText: "e.g. Pump checked, handle is loose"; onAccepted: comment.submit() }
-                        }
-                        RowLayout {
-                            visible: root.staff && root.isActionable(detail.st)
-                            spacing: 8
-                            FormRow {
-                                label: "Next step (for updates)"
-                                FramedField { id: nextStep; Layout.fillWidth: true; maximumLength: 500; Accessible.name: "Next step"; placeholderText: "e.g. Plumber visits tomorrow" }
-                            }
-                            FormRow {
-                                label: "ETA (hours)"
-                                Layout.fillWidth: false
-                                FramedField {
-                                    id: eta
-                                    Layout.preferredWidth: 80
-                                    text: "4"
-                                    placeholderText: "e.g. 4"
-                                    inputMethodHints: Qt.ImhDigitsOnly
-                                    validator: IntValidator { bottom: 0; top: 168 }
-                                    Accessible.name: "ETA in hours"
-                                }
-                            }
-                        }
-                        Flow {
-                            Layout.fillWidth: true
-                            enabled: !root.syncing
-                            spacing: 6
-                            ActionButton { visible: root.staff && detail.st === "Open"; text: "Acknowledge"; onClicked: detail.act("acknowledge", detail.etaHours) }
-                            ActionButton { visible: root.staff && root.isActionable(detail.st); allowed: detail.hasNote; text: "Post update"; onClicked: detail.act("update", detail.etaHours) }
-                            ActionButton { visible: root.staff && root.isActionable(detail.st); allowed: detail.hasNote; text: "Claim fixed (say what was done)"; onClicked: detail.act("claim_resolved", 0) }
-                            ActionButton { visible: root.staff && root.isActionable(detail.st); allowed: detail.hasNote; text: "Won't fix (reason)"; onClicked: detail.act("close_wontfix", 0) }
-                            ActionButton {
-                                visible: detail.st === "AwaitingConfirmation" && !detail.claimant && (detail.mine || root.me.role === "Resident")
-                                text: detail.mine ? "Confirm it's fixed" : "Confirm (" + detail.issue.confirms + " of 2 residents so far)"
-                                onClicked: detail.act("confirm", 0)
-                            }
-                            ActionButton {
-                                visible: ["AwaitingConfirmation", "ConfirmedResolved", "ClosedWontfix", "Duplicate"].indexOf(detail.st) >= 0 && (detail.mine || root.me.role === "Resident")
-                                allowed: detail.hasNote
-                                text: "Reopen (reason)" + (detail.issue.reopen_count > 0 ? ", reopened " + detail.issue.reopen_count + "×" : "")
-                                onClicked: detail.act("reopen", 0)
-                            }
-                            ActionButton { id: comment; allowed: detail.hasNote; text: "Comment"; onClicked: detail.act("comment", 0) }
-                            RowLayout {   // staff: close this one as a duplicate of another open issue
-                                visible: root.staff && root.isActionable(detail.st)
-                                width: parent.width
+                            Flow {   // code, stage, reopens, the reporter's call to action, category
+                                Layout.fillWidth: true; Layout.bottomMargin: 4
                                 spacing: 6
-                                FramedCombo {
-                                    // The model is rebuilt on every 2 s refresh, which resets currentIndex,
-                                    // so the user's pick is kept in `target`, never read from currentIndex.
-                                    id: dupOf
-                                    Accessible.name: "Duplicate of another report"
-                                    property string target: ""
-                                    property string targetLabel: ""
-                                    property string forIssue: detail.issue.id || ""
-                                    onForIssueChanged: target = ""
-                                    Layout.fillWidth: true
-                                    Layout.preferredWidth: 260
-                                    textRole: "label"
-                                    valueRole: "id"
-                                    displayText: target ? targetLabel : "Duplicate of…"
-                                    model: root.duplicateTargets(detail.issue.id)
-                                    onActivated: function (index) { target = valueAt(index); targetLabel = textAt(index) }
+                                Label { height: 24; verticalAlignment: Text.AlignVCenter; textFormat: Text.RichText; text: root.mono(root.placeCode(detail.issue)) }
+                                StatusChip { label: detail.issue.stage || ""; stage: detail.stage; icon: root.stageIcon(detail.st); maxWidth: parent.width }
+                                StatusChip {
+                                    visible: detail.issue.reopen_count > 0; maxWidth: parent.width
+                                    label: "Reopened " + detail.issue.reopen_count + "×"; stage: root.t.closed; icon: "reopen"
                                 }
-                                ActionButton {
-                                    text: "Mark duplicate"
-                                    allowed: dupOf.target !== ""
-                                    onClicked: root.run("act", [detail.issue.id, "mark_duplicate", dupOf.target, "", 0],
-                                                        function () { dupOf.target = "" })
+                                StatusChip {
+                                    visible: detail.mine && detail.canConfirm; maxWidth: parent.width; strong: true
+                                    label: "Needs your confirmation"; icon: "bell"
+                                    stage: ({ fg: root.t.onPrimary, bg: root.t.primary, bd: root.t.primary })
+                                }
+                                Label { height: 24; verticalAlignment: Text.AlignVCenter; text: "· " + (detail.issue.category || ""); font.pointSize: root.smallSize; color: root.t.muted }
+                            }
+                            Label {
+                                Layout.fillWidth: true; Layout.topMargin: 4; wrapMode: Text.Wrap
+                                text: !detail.issue.location ? "" : root.placeName(detail.issue) || root.placeCode(detail.issue)
+                                font.pointSize: root.baseSize * 17 / 14; font.weight: Font.DemiBold
+                            }
+                            Label {
+                                visible: !!detail.issue.location_renamed_from
+                                Layout.fillWidth: true; wrapMode: Text.Wrap
+                                text: "Place renamed from " + detail.issue.location_renamed_from; font.pointSize: root.smallSize; color: root.t.muted
+                            }
+                            Rectangle {   // the report itself, as the reporter wrote it
+                                Layout.fillWidth: true; Layout.topMargin: 6; Layout.bottomMargin: 14
+                                implicitHeight: quote.implicitHeight + 2
+                                radius: 6; color: root.t.page; border.color: root.t.bd
+                                ColumnLayout {
+                                    id: quote
+                                    x: 1; y: 1; width: parent.width - 2
+                                    spacing: 0
+                                    Label {
+                                        Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.RichText
+                                        leftPadding: 12; rightPadding: 12; topPadding: 6; bottomPadding: 6
+                                        font.pointSize: root.smallSize; color: root.t.muted
+                                        text: "Reported by " + root.esc(root.who(detail.issue.reporter, detail.issue.reporter_name)) + " "
+                                              + root.mono(String(detail.issue.reporter).substr(0, 6)) + " · " + root.when(detail.issue.reported_ts)
+                                        background: Rectangle {
+                                            color: root.t.well; topLeftRadius: 5; topRightRadius: 5
+                                            Rectangle { width: parent.width; height: 1; anchors.bottom: parent.bottom; color: root.t.bd }
+                                        }
+                                    }
+                                    Label {
+                                        Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
+                                        leftPadding: 12; rightPadding: 12; topPadding: 8; bottomPadding: 8
+                                        text: detail.issue.text || ""; font.pointSize: root.baseSize * 16 / 14
+                                    }
+                                }
+                            }
+                            WhyCard {
+                                readonly property var plan: root.whyCard(detail.issue)
+                                visible: plan !== null
+                                Layout.fillWidth: true; Layout.bottomMargin: 16
+                                card: plan || ({ intro: "", steps: [], never: "" }); stage: detail.stage
+                            }
+                            Label { Layout.bottomMargin: 8; text: "Timeline"; font.pointSize: root.smallSize; font.weight: Font.DemiBold; color: root.t.muted }
+                            Item {   // the events on one spine
+                                Layout.fillWidth: true; Layout.bottomMargin: 16
+                                implicitHeight: events.implicitHeight
+                                Rectangle { x: 13; y: 6; width: 2; height: Math.max(0, parent.height - 12); color: root.t.bd }
+                                ColumnLayout {
+                                    id: events
+                                    width: parent.width
+                                    spacing: 12
+                                    Repeater {
+                                        model: root.selected ? root.selected.events : []
+                                        delegate: TimelineRow {
+                                            required property var modelData
+                                            Layout.fillWidth: true
+                                            event: modelData
+                                            byReporter: modelData.author === detail.issue.reporter
+                                        }
+                                    }
+                                }
+                            }
+                            Rectangle { Layout.fillWidth: true; Layout.bottomMargin: 14; implicitHeight: 1; color: root.t.bd }
+                            FormRow {
+                                label: "Note"; sub: "(what was seen, done or why)"
+                                FramedField { id: note; Layout.fillWidth: true; maximumLength: 500; Accessible.name: "Note"; placeholderText: "e.g. Pump checked, handle is loose"; onAccepted: comment.submit() }
+                            }
+                            RowLayout {
+                                visible: detail.steward
+                                Layout.topMargin: 10
+                                spacing: 8
+                                FormRow {
+                                    label: "Next step"; sub: "(for updates)"
+                                    FramedField { id: nextStep; Layout.fillWidth: true; maximumLength: 500; Accessible.name: "Next step"; placeholderText: "e.g. Plumber visits tomorrow" }
+                                }
+                                FormRow {
+                                    label: "ETA (hours)"; strong: true
+                                    Layout.fillWidth: false
+                                    FramedField {
+                                        id: eta
+                                        Layout.preferredWidth: 96
+                                        text: "4"
+                                        placeholderText: "e.g. 4"
+                                        inputMethodHints: Qt.ImhDigitsOnly
+                                        validator: IntValidator { bottom: 0; top: 168 }
+                                        Accessible.name: "ETA in hours"
+                                    }
+                                }
+                            }
+                            ColumnLayout {
+                                Layout.fillWidth: true; Layout.topMargin: 6
+                                enabled: !root.syncing
+                                spacing: 6
+                                ActionGroup {
+                                    title: "For stewards"
+                                    visible: detail.steward
+                                    ActionButton { visible: detail.st === "Open"; kind: "primary"; text: "Acknowledge"; onClicked: detail.act("acknowledge", detail.etaHours) }
+                                    ActionButton { allowed: detail.hasNote; text: "Post update"; onClicked: detail.act("update", detail.etaHours) }
+                                    ActionButton {
+                                        allowed: detail.hasNote; kind: detail.st === "Open" ? "default" : "primary"
+                                        text: "Claim fixed (say what was done)"; onClicked: detail.act("claim_resolved", 0)
+                                    }
+                                    ActionButton { allowed: detail.hasNote; kind: "danger"; text: "Won't fix (reason)"; onClicked: detail.act("close_wontfix", 0) }
+                                    RowLayout {   // close this one as a duplicate of another open issue
+                                        width: parent.width
+                                        spacing: 8
+                                        FramedCombo {
+                                            // The model is rebuilt on every 2 s refresh, which resets currentIndex,
+                                            // so the user's pick is kept in `target`, never read from currentIndex.
+                                            id: dupOf
+                                            Accessible.name: "Duplicate of another report"
+                                            property string target: ""
+                                            property string targetLabel: ""
+                                            property string forIssue: detail.issue.id || ""
+                                            onForIssueChanged: target = ""
+                                            Layout.fillWidth: true
+                                            Layout.preferredWidth: 260
+                                            textRole: "label"
+                                            valueRole: "id"
+                                            displayText: target ? targetLabel : "Duplicate of…"
+                                            model: root.duplicateTargets(detail.issue.id)
+                                            onActivated: function (index) { target = valueAt(index); targetLabel = textAt(index) }
+                                        }
+                                        ActionButton {
+                                            text: "Mark duplicate"
+                                            allowed: dupOf.target !== ""
+                                            onClicked: root.run("act", [detail.issue.id, "mark_duplicate", dupOf.target, "", 0],
+                                                                function () { dupOf.target = "" })
+                                        }
+                                    }
+                                }
+                                ActionGroup {
+                                    // the reporter decides alone; another resident's confirm or reopen is one of two votes
+                                    title: detail.mine ? "For the person who reported it" : "For residents"
+                                    visible: detail.canConfirm || detail.canReopen
+                                    ActionButton {
+                                        visible: detail.canConfirm; kind: "primary"
+                                        text: detail.mine ? "Confirm it's fixed" : "Confirm (" + detail.issue.confirms + " of 2 residents so far)"
+                                        onClicked: detail.act("confirm", 0)
+                                    }
+                                    ActionButton {
+                                        visible: detail.canReopen
+                                        kind: detail.canConfirm ? "default" : "primary"
+                                        allowed: detail.hasNote
+                                        text: "Reopen (reason)" + (detail.issue.reopen_count > 0 ? ", reopened " + detail.issue.reopen_count + "×" : "")
+                                        onClicked: detail.act("reopen", 0)
+                                    }
+                                }
+                                ActionGroup {
+                                    title: "For everyone"
+                                    ActionButton { id: comment; allowed: detail.hasNote; text: "Comment"; onClicked: detail.act("comment", 0) }
+                                }
+                            }
+                            Rectangle {   // what this viewer can't do here, and why (the same rules as above)
+                                id: na
+                                readonly property var lines: root.unavailable(detail.issue, detail.hasNote)
+                                visible: lines.length > 0
+                                Layout.fillWidth: true; Layout.topMargin: 14; Layout.bottomMargin: 16
+                                implicitHeight: naCol.implicitHeight + 20
+                                radius: 6; color: root.t.well; border.color: root.t.bd
+                                Column {
+                                    id: naCol
+                                    x: 12; y: 10; width: parent.width - 24
+                                    spacing: 2
+                                    Label { text: "Not available to you:"; font.pointSize: root.smallSize; font.weight: Font.DemiBold }
+                                    Repeater {
+                                        model: na.lines
+                                        delegate: Label {
+                                            required property string modelData
+                                            width: naCol.width; wrapMode: Text.Wrap
+                                            text: modelData; font.pointSize: root.smallSize; color: root.t.muted
+                                        }
+                                    }
                                 }
                             }
                         }
