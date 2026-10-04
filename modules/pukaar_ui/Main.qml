@@ -1821,7 +1821,7 @@ Item {
                     spacing: 16
                     FormRow {
                         label: "Site name"
-                        FramedField { id: siteName; Layout.fillWidth: true; maximumLength: 500; Accessible.name: "Site name"; placeholderText: "e.g. Dhun relief camp" }
+                        FramedField { id: siteName; Layout.fillWidth: true; maximumLength: 500; Accessible.name: "Site name"; placeholderText: "e.g. Dhun Camp" }
                     }
                     FormRow {   // staff are always named: this goes into the genesis as the admin's name
                         label: "Your name, as residents will see it"
