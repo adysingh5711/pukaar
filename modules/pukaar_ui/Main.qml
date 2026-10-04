@@ -36,46 +36,74 @@ Item {
     readonly property bool narrow: width < 1040
 
     // ---- design tokens: the only place a colour or the stage->colour map is spelled out ----
-    // One light theme. A dark theme means swapping the values of this block, nothing else.
-    readonly property color surfaceColor: "#ffffff"       // page, fields, list rows
-    readonly property color surfaceAltColor: "#f3f4f6"    // buttons, tabs, cards, group headers
-    readonly property color hoverColor: "#e8eaed"         // pointer over a row or a menu item
-    readonly property color textColor: "#1f2328"          // 15:1 on surface
-    readonly property color mutedColor: "#57606a"         // 6:1 on white (plain "gray" was 3.95:1)
-    readonly property color borderColor: "#8c959f"        // 3:1 on white: the box edge is a UI boundary
-    readonly property color accentColor: "#1d6fd8"        // focus ring, selected tab, selection
-    readonly property color accentSoftColor: "#dbe8f9"    // the picked row
-    readonly property color accentTextColor: "#ffffff"    // text on accent or on a stage chip
-    readonly property color dangerColor: "#d73a49"
+    // Two sets (design/proposal/NOTES.md section 1): light = Primer, dark = Logos neutrals with
+    // Primer's stage hues. Everything reads root.t, which follows the system colour scheme live.
+    // Names match the mockup's CSS variables; the sb*/tip* roles are for the sidebar (step 5).
+    readonly property bool dark: Application.styleHints.colorScheme === Qt.Dark
+    readonly property var lightTokens: ({
+        fg: "#1f2328", muted: "#59636e", ph: "#6e7781", disabled: "#818b98",
+        page: "#ffffff", well: "#f6f8fa", card: "#ffffff", field: "#ffffff", hover: "#eff2f5", btn: "#f6f8fa",
+        bd: "#d1d9e0", ctlBd: "#818b98", btnBd: "#d1d9e0",
+        accent: "#0969da", accentBg: "#ddf4ff", accentBd: "#54aeff99", focus: "#0969da",
+        primary: "#0969da", primaryHover: "#0860ca", onPrimary: "#ffffff",
+        danger: "#d1242f", dangerBg: "#ffebe9", dangerBd: "#ff818299",
+        okDot: "#1a7f37", connDot: "#9a6700",
+        reported: { fg: "#bc4c00", bg: "#fff1e5", bd: "#fb8f4499", edge: "#bc4c00" },
+        progress: { fg: "#0969da", bg: "#ddf4ff", bd: "#54aeff99", edge: "#0969da" },
+        awaiting: { fg: "#8250df", bg: "#fbefff", bd: "#c297ff99", edge: "#8250df" },
+        resolved: { fg: "#1a7f37", bg: "#dafbe1", bd: "#4ac26b99", edge: "#1a7f37" },
+        closed: { fg: "#59636e", bg: "#eff1f3", bd: "#d1d9e0", edge: "#818b98" },
+        sb: "#f6f8fa", sbCard: "#ffffff", sbHover: "#eaeef2", sbFg: "#1f2328", sbMuted: "#59636e", sbIcon: "#59636e",
+        sbEdge: "#d1d9e0", sbLine: "#d1d9e0", sbCtl: "#818b98", sbActBg: "#c8e6ff", sbActFg: "#0550ae", sbActIcon: "#0550ae",
+        sbDisabled: "#59636e", sbOk: "#1a7f37", sbConn: "#9a6700", sbOff: "#d1242f", sbDanger: "#d1242f",
+        tipBg: "#25292e", tipFg: "#ffffff", tipBd: "#25292e"
+    })
+    readonly property var darkTokens: ({
+        fg: "#ffffff", muted: "#a4a4a4", ph: "#8c92a0", disabled: "#7a7a7a",
+        page: "#171717", well: "#1c1c1c", card: "#232323", field: "#262626", hover: "#2b2b2b", btn: "#2b2b2b",
+        bd: "#434343", ctlBd: "#808080", btnBd: "#4d4d4d",
+        accent: "#6aa8f0", accentBg: "#1f2d3d", accentBd: "#4a90e2", focus: "#6aa8f0",
+        primary: "#2563c9", primaryHover: "#2f6fd0", onPrimary: "#ffffff",
+        danger: "#ff8a82", dangerBg: "#2e1f1f", dangerBd: "#fb3748",
+        okDot: "#49f563", connDot: "#febc2e",
+        reported: { fg: "#ff9a2e", bg: "#3b2814", bd: "#ff8800", edge: "#ff8800" },
+        progress: { fg: "#6aa8f0", bg: "#1f2d3d", bd: "#4a90e2", edge: "#4a90e2" },
+        awaiting: { fg: "#b794f6", bg: "#2f2840", bd: "#a07bea", edge: "#a07bea" },
+        resolved: { fg: "#6ccc93", bg: "#22362b", bd: "#6ccc93", edge: "#6ccc93" },
+        closed: { fg: "#b5b5b5", bg: "#2f2f2f", bd: "#808080", edge: "#808080" },
+        sb: "#141414", sbCard: "#1c1c1c", sbHover: "#262626", sbFg: "#ebebeb", sbMuted: "#a4a4a4", sbIcon: "#a4a4a4",
+        sbEdge: "#2c2c2c", sbLine: "#343434", sbCtl: "#808080", sbActBg: "#243b55", sbActFg: "#ffffff", sbActIcon: "#6aa8f0",
+        sbDisabled: "#8a8a8a", sbOk: "#49f563", sbConn: "#febc2e", sbOff: "#ff736a", sbDanger: "#ff8a82",
+        tipBg: "#3a3a3a", tipFg: "#ffffff", tipBd: "#808080"
+    })
+    readonly property var t: dark ? darkTokens : lightTokens
     // Every control reads these roles. Set once on the root, so nothing falls back to the
     // system palette (a dark OS would otherwise give light-on-light or dark-on-dark controls).
     // Same value in the disabled and inactive groups: disabled controls fade with `opacity`.
     palette {
-        window: root.surfaceColor; windowText: root.textColor
-        base: root.surfaceColor; alternateBase: root.surfaceAltColor; text: root.textColor
-        button: root.surfaceAltColor; buttonText: root.textColor; brightText: root.accentTextColor
-        placeholderText: root.mutedColor
-        highlight: root.accentColor; highlightedText: root.accentTextColor
-        link: root.accentColor; linkVisited: root.accentColor
-        toolTipBase: root.surfaceColor; toolTipText: root.textColor
-        light: root.surfaceColor; midlight: root.hoverColor; mid: root.borderColor
-        dark: root.mutedColor; shadow: root.textColor
+        window: root.t.page; windowText: root.t.fg
+        base: root.t.field; alternateBase: root.t.well; text: root.t.fg
+        button: root.t.btn; buttonText: root.t.fg; brightText: root.t.onPrimary
+        placeholderText: root.t.ph
+        highlight: root.t.primary; highlightedText: root.t.onPrimary
+        link: root.t.accent; linkVisited: root.t.accent
+        toolTipBase: root.t.tipBg; toolTipText: root.t.tipFg
+        light: root.t.page; midlight: root.t.hover; mid: root.t.ctlBd
+        dark: root.t.muted; shadow: root.t.fg
     }
     // Sizes follow the user's system font instead of fixed pixels.
     FontMetrics { id: systemFont }       // default font = the application's
     readonly property real baseSize: systemFont.font.pointSize > 0 ? systemFont.font.pointSize : 10
     readonly property real smallSize: baseSize * 0.85
     readonly property real titleSize: baseSize * 1.6
-    readonly property var stageColors: ({
-        Open: "#b45309",
-        Acknowledged: "#b45309",
-        InProgress: accentColor,
-        AwaitingConfirmation: "#7c3aed",
-        ConfirmedResolved: "#15803d",
-        ClosedWontfix: mutedColor,
-        Duplicate: mutedColor
+    // Stage -> {fg, bg, bd, edge}: text, tint, border, strip. The only orange is Reported.
+    readonly property var stageGroup: ({
+        Open: "reported", Acknowledged: "reported", InProgress: "progress", AwaitingConfirmation: "awaiting",
+        ConfirmedResolved: "resolved", ClosedWontfix: "closed", Duplicate: "closed"
     })
-    function stageColor(status) { return root.stageColors[status] || root.dangerColor }
+    function stageStyle(status) {
+        return t[stageGroup[status]] || { fg: t.danger, bg: t.dangerBg, bd: t.dangerBd, edge: t.danger }
+    }
     // Statuses a steward can still act on (acknowledge / update / claim / won't-fix).
     function isActionable(status) { return ["Open", "Acknowledged", "InProgress"].indexOf(status) >= 0 }
 
@@ -277,17 +305,17 @@ Item {
     // field, button, combo or box is ever borderless whatever style the host uses ----
     component Frame: Rectangle {
         property bool ring: false          // keyboard/typing focus: thicker, blue
-        property color fill: root.surfaceColor
+        property color fill: root.t.field
         color: fill
         radius: 4
         border.width: ring ? 2 : 1
-        border.color: ring ? root.accentColor : root.borderColor
+        border.color: ring ? root.t.focus : root.t.ctlBd
     }
     component FramedField: TextField {
         id: field
         selectByMouse: true
         leftPadding: 8; rightPadding: 8
-        placeholderTextColor: root.mutedColor
+        placeholderTextColor: root.t.muted
         opacity: enabled ? 1 : 0.5
         background: Frame { ring: field.activeFocus }
     }
@@ -295,7 +323,7 @@ Item {
         id: fb
         leftPadding: 12; rightPadding: 12; topPadding: 6; bottomPadding: 6
         opacity: enabled ? 1 : 0.5
-        background: Frame { ring: fb.visualFocus; fill: fb.down ? Qt.darker(root.surfaceAltColor, 1.12) : root.surfaceAltColor }
+        background: Frame { ring: fb.visualFocus; fill: fb.down ? Qt.darker(root.t.btn, 1.12) : root.t.btn }
     }
     component FramedCombo: ComboBox {
         id: combo
@@ -313,7 +341,7 @@ Item {
             width: ListView.view.width
             text: model[combo.textRole]
             highlighted: combo.highlightedIndex === index
-            background: Rectangle { color: option.highlighted ? root.hoverColor : root.surfaceColor }
+            background: Rectangle { color: option.highlighted ? root.t.hover : root.t.field }
             contentItem: Label { text: option.text; verticalAlignment: Text.AlignVCenter; font.bold: combo.currentIndex === option.index }
         }
     }
@@ -330,8 +358,8 @@ Item {
     component PageTab: TabButton {
         id: tab
         background: Frame {
-            fill: tab.checked ? root.surfaceColor : root.surfaceAltColor
-            Rectangle { visible: tab.checked; width: parent.width; height: 3; anchors.bottom: parent.bottom; color: root.accentColor }
+            fill: tab.checked ? root.t.page : root.t.well
+            Rectangle { visible: tab.checked; width: parent.width; height: 3; anchors.bottom: parent.bottom; color: root.t.accent }
         }
         contentItem: Label {
             text: tab.text; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
@@ -342,22 +370,23 @@ Item {
 
     // ---- reusable pieces (props in, signals out; no reach into the enclosing scope) ----
 
-    // Small coloured pill for an issue's stage. Colour always comes from stageColor() above.
+    // Small coloured pill for an issue's stage. Colours come from stageStyle() above.
     component StatusChip: Rectangle {
         id: chip
         required property string label
-        required property color tint
+        required property var stage     // stageStyle(): {fg, bg, bd, edge}
         implicitWidth: chipText.implicitWidth + 12
         implicitHeight: chipText.implicitHeight + 4
         radius: height / 2
-        color: chip.tint
+        color: chip.stage.bg
+        border.width: 1; border.color: chip.stage.bd
         Label {   // elides when the parent narrows the chip below its natural width
             id: chipText; anchors.centerIn: parent; width: Math.min(implicitWidth, chip.width - 12)
-            elide: Text.ElideRight; text: chip.label; color: root.accentTextColor; font.pointSize: root.smallSize
+            elide: Text.ElideRight; text: chip.label; color: chip.stage.fg; font.pointSize: root.smallSize
         }
     }
 
-    // One board card. All text is pre-computed by the caller (place/hint/stageColor),
+    // One board card. All text is pre-computed by the caller (place/hint/stage),
     // so this stays a pure presentational piece reusable across all four columns.
     component IssueCard: ItemDelegate {
         id: card
@@ -366,13 +395,13 @@ Item {
         required property string hintText
         required property bool overdue
         required property bool current       // the issue open in the timeline pane
-        required property color tint
+        required property var stage
         required property color alertColor
         required property color mutedColor
         signal opened()
         width: ListView.view.width
         padding: 8
-        background: Frame { ring: card.visualFocus || card.current; fill: card.down ? Qt.darker(root.surfaceAltColor, 1.06) : root.surfaceAltColor }
+        background: Frame { ring: card.visualFocus || card.current; fill: card.down ? Qt.darker(root.t.card, 1.06) : root.t.card }
         Accessible.name: card.placeText + ": " + card.issue.text
         Accessible.description: card.issue.stage + ". " + card.hintText
         contentItem: Column {
@@ -381,7 +410,7 @@ Item {
             Label { width: parent.width; wrapMode: Text.Wrap; font.bold: true; text: card.placeText }
             Label { width: parent.width; wrapMode: Text.Wrap; text: card.issue.text }
             // Stacked, not side by side: a wide chip must never squeeze the hint to a sliver.
-            StatusChip { width: Math.min(implicitWidth, parent.width); label: card.issue.stage; tint: card.tint }
+            StatusChip { width: Math.min(implicitWidth, parent.width); label: card.issue.stage; stage: card.stage }
             Label {
                 width: parent.width
                 wrapMode: Text.Wrap
@@ -401,7 +430,7 @@ Item {
         required property color alertColor
         width: ListView.view.width
         wrapMode: Text.Wrap
-        color: row.rejected ? row.alertColor : root.textColor
+        color: row.rejected ? row.alertColor : root.t.fg
         text: row.lineText
     }
 
@@ -446,7 +475,7 @@ Item {
             onClicked: { section.open = !section.open; section.toggled() }
             Keys.onReturnPressed: clicked()
             Keys.onEnterPressed: clicked()
-            background: Frame { ring: header.visualFocus; fill: header.hovered ? root.hoverColor : root.surfaceAltColor }
+            background: Frame { ring: header.visualFocus; fill: header.hovered ? root.t.hover : root.t.well }
             contentItem: RowLayout {
                 spacing: 8
                 Label { text: section.open ? "\u25be" : "\u25b8"; font.pointSize: root.baseSize * 1.15 }
@@ -469,7 +498,7 @@ Item {
             validator: RegularExpressionValidator { regularExpression: /[0-9]*/ }
             Accessible.name: rule.label
         }
-        Note { text: rule.hint; color: root.mutedColor; font.pointSize: root.smallSize }
+        Note { text: rule.hint; color: root.t.muted; font.pointSize: root.smallSize }
     }
 
     // A visible label above whatever is put inside (every field has one, not only a placeholder).
@@ -485,7 +514,7 @@ Item {
     component Banner: RowLayout {
         id: banner
         property string text
-        property color tint: root.textColor
+        property color tint: root.t.fg
         property bool bold: false
         property string buttonText
         property string buttonName: buttonText     // what a screen reader says for the button
@@ -528,7 +557,7 @@ Item {
                 readOnly: fta.readOnly
                 selectByMouse: true
                 wrapMode: TextEdit.WrapAnywhere
-                placeholderTextColor: root.mutedColor
+                placeholderTextColor: root.t.muted
                 padding: 8
                 background: null
                 Accessible.name: fta.name
@@ -563,7 +592,7 @@ Item {
         property alias fieldEnabled: field.enabled
         property string name: label
         property string caption
-        property color captionColor: root.textColor
+        property color captionColor: root.t.fg
         property int indent: 0              // side margin, for rows inside a framed list
         property string buttonText: "Go"
         property bool buttonEnabled: true
@@ -591,8 +620,8 @@ Item {
         required property string section
         width: ListView.view.width
         height: title.implicitHeight + 8
-        color: root.surfaceAltColor
-        Label { id: title; x: 8; anchors.verticalCenter: parent.verticalCenter; text: parent.section; font.bold: true; color: root.mutedColor }
+        color: root.t.well
+        Label { id: title; x: 8; anchors.verticalCenter: parent.verticalCenter; text: parent.section; font.bold: true; color: root.t.muted }
     }
 
     // One selectable row of the Report picker. A retired place is greyed and never becomes the
@@ -607,7 +636,7 @@ Item {
         opacity: retired ? 0.55 : 1
         Accessible.role: Accessible.RadioButton
         Accessible.checked: choice.picked
-        background: Rectangle { color: choice.picked ? root.accentSoftColor : choice.hovered ? root.hoverColor : root.surfaceColor }
+        background: Rectangle { color: choice.picked ? root.t.accentBg : choice.hovered ? root.t.hover : root.t.page }
         contentItem: Label { text: choice.text; elide: Text.ElideRight; font.bold: choice.picked; font.italic: choice.retired }
     }
 
@@ -647,7 +676,7 @@ Item {
         }
         Label {
             font.pointSize: root.smallSize
-            color: root.mutedColor
+            color: root.t.muted
             text: pb.places.length === 0 ? "No places match. Clear the search or pick another group."
                                          : pb.places.length + " of " + pb.total + " places"
         }
@@ -684,7 +713,7 @@ Item {
 
     Timer { interval: 2000; running: true; repeat: true; triggeredOnStart: true; onTriggered: root.refresh() }
 
-    Rectangle { anchors.fill: parent; color: root.surfaceColor }     // the page never shows the host's window colour
+    Rectangle { anchors.fill: parent; color: root.t.page }     // the page never shows the host's window colour
 
     ColumnLayout {
         anchors.fill: parent
@@ -695,12 +724,12 @@ Item {
             Layout.fillWidth: true
             spacing: 12
             Label { text: "Pukaar"; font.pointSize: root.titleSize; font.bold: true }
-            Label { Layout.fillWidth: true; elide: Text.ElideRight; text: root.inSite ? (root.info.name || "") : "not in a site yet"; color: root.mutedColor }
+            Label { Layout.fillWidth: true; elide: Text.ElideRight; text: root.inSite ? (root.info.name || "") : "not in a site yet"; color: root.t.muted }
             Label {   // Delivery bring-up status from pukaar_core; errors stay visible until it recovers
                 Layout.maximumWidth: root.width / 2
                 elide: Text.ElideRight
                 text: "delivery: " + root.deliveryLabel(root.me.delivery)
-                color: root.failed(root.me.delivery) ? root.dangerColor : root.mutedColor
+                color: root.failed(root.me.delivery) ? root.t.danger : root.t.muted
             }
         }
         RowLayout {
@@ -714,7 +743,7 @@ Item {
                       + (root.me.role || "pending: read your fingerprint at the kiosk")
             }
             // the 64-hex id is long: show the short form, Copy puts the full one on the clipboard
-            Label { text: "site " + root.shortId(root.me.site || ""); font.pointSize: root.smallSize; color: root.mutedColor }
+            Label { text: "site " + root.shortId(root.me.site || ""); font.pointSize: root.smallSize; color: root.t.muted }
             FramedButton {
                 text: "Copy"
                 Accessible.name: "Copy the full site id"
@@ -723,13 +752,13 @@ Item {
         }
         Banner {   // the last refused action; stays until dismissed or the next action replaces it
             visible: root.message !== ""
-            text: root.message; tint: root.dangerColor
+            text: root.message; tint: root.t.danger
             buttonText: "×"; buttonName: "Dismiss this error"
             onActivated: root.message = ""
         }
         Banner {   // forks: someone signed two versions of their log (the threat model says: flag it)
             visible: root.inSite && root.info.forks > 0
-            tint: root.dangerColor; bold: true
+            tint: root.t.danger; bold: true
             text: "Integrity warning: " + root.info.forks + " conflicting history pair(s) found. Someone signed two versions of their log, so devices may show different boards."
         }
         Banner {   // joined, but the genesis hasn't arrived: wrong id, or nobody online yet
@@ -740,7 +769,7 @@ Item {
         }
         Banner {
             visible: root.inSite && root.syncing
-            tint: root.dangerColor
+            tint: root.t.danger
             text: "Restoring your earlier reports from the network. Actions are paused until they arrive, so your new ones can't conflict with them."
             buttonText: "Skip waiting (history lost)"
             onActivated: root.run("skip_history_sync", [])
@@ -802,15 +831,15 @@ Item {
                 FormRow {
                     label: "Places (" + setup.places.count + ")"
                     Note {
-                        color: root.mutedColor
+                        color: root.t.muted
                         text: "Each place has a group (for the picker), a short code people can say aloud, and a name. Codes can't change later."
                     }
                     RowLayout {   // column titles: the placeholders vanish once a row is filled
                         visible: setup.places.count > 0
                         spacing: 6
-                        Label { Layout.preferredWidth: 170; text: "Group"; font.pointSize: root.smallSize; color: root.mutedColor }
-                        Label { Layout.preferredWidth: 90; text: "Code"; font.pointSize: root.smallSize; color: root.mutedColor }
-                        Label { text: "Name"; font.pointSize: root.smallSize; color: root.mutedColor }
+                        Label { Layout.preferredWidth: 170; text: "Group"; font.pointSize: root.smallSize; color: root.t.muted }
+                        Label { Layout.preferredWidth: 90; text: "Code"; font.pointSize: root.smallSize; color: root.t.muted }
+                        Label { text: "Name"; font.pointSize: root.smallSize; color: root.t.muted }
                     }
                     Repeater {
                         model: setup.places
@@ -847,7 +876,7 @@ Item {
                     id: advanced
                     title: "Advanced: edit the settings as JSON"
                     onToggled: if (open) advancedJson.text = setup.genesisJson()
-                    Note { color: root.mutedColor; text: "Starts from the form above and replaces it while this section is open. Close it to go back to the form." }
+                    Note { color: root.t.muted; text: "Starts from the form above and replaces it while this section is open. Close it to go back to the form." }
                     FramedTextArea { id: advancedJson; name: "Site settings, JSON"; boxHeight: 160 }
                 }
                 ActionButton {
@@ -856,7 +885,7 @@ Item {
                     onClicked: root.run("site_create", [advanced.open ? setup.withAdmin(advancedJson.text) : setup.genesisJson()], null,
                                         "Start with fewer places, then add the rest after creating, via Members \u2192 Add a location.")
                 }
-                Note { visible: !advanced.open && setup.problem !== ""; color: root.mutedColor; text: setup.problem }
+                Note { visible: !advanced.open && setup.problem !== ""; color: root.t.muted; text: setup.problem }
                 // The draft and its checks. The core repeats every check (it is the authority); these
                 // only say what's missing before anyone presses the button.
                 QtObject {
@@ -965,7 +994,7 @@ Item {
                 Note {   // an empty board says why, and what to do
                     visible: root.boardCount === 0
                     Layout.bottomMargin: 6
-                    color: root.mutedColor
+                    color: root.t.muted
                     text: root.onlyMine ? "You haven't reported anything yet. Use the Report tab to raise a problem."
                                         : "No reports yet. Use the Report tab to raise the first one."
                 }
@@ -1006,9 +1035,9 @@ Item {
                                         hintText: root.hint(modelData)
                                         overdue: root.flagged(modelData)
                                         current: !!root.selected && root.selected.issue.id === modelData.id
-                                        tint: root.stageColor(modelData.status)
-                                        alertColor: root.dangerColor
-                                        mutedColor: root.mutedColor
+                                        stage: root.stageStyle(modelData.status)
+                                        alertColor: root.t.danger
+                                        mutedColor: root.t.muted
                                         onOpened: root.openIssue(modelData.id)
                                     }
                                 }
@@ -1053,7 +1082,7 @@ Item {
                             model: root.selected ? root.selected.events : []
                             delegate: TimelineRow {
                                 required property var modelData
-                                alertColor: root.dangerColor
+                                alertColor: root.t.danger
                                 rejected: !!modelData.rejected
                                 lineText: root.when(modelData.ts) + "  " + modelData.kind + " by " + root.who(modelData.author, modelData.author_name)
                                           + (modelData.body ? ": " + modelData.body : "")
@@ -1200,7 +1229,7 @@ Item {
                     }
                 }
                 Note {
-                    color: root.mutedColor
+                    color: root.t.muted
                     text: reportPage.pick === "" ? "No place picked yet."
                         : reportPage.pick === "other" ? "Other place: describe it below."
                         : "Picked: " + root.placeLabel(reportPage.pick)
@@ -1221,7 +1250,7 @@ Item {
                     onClicked: root.run("report", [category.currentText, reportPage.pick, landmark.text, reportText.text],
                                         function () { reportText.text = ""; landmark.text = ""; reportPage.pick = ""; tabs.currentIndex = 0 })
                 }
-                Note { visible: root.approved && reportPage.missing !== ""; color: root.mutedColor; text: reportPage.missing }
+                Note { visible: root.approved && reportPage.missing !== ""; color: root.t.muted; text: reportPage.missing }
                 Heading { visible: !root.staff; text: "Your name" }
                 Note {
                     visible: !root.staff
@@ -1244,7 +1273,7 @@ Item {
                 readonly property var renamed: root.locations.filter(function (l) { return !!l.renamed_from })
                 Heading { text: "Waiting for approval"; Layout.topMargin: 0 }
                 Note { text: "Grant a role only after the person reads this fingerprint aloud." }
-                Note { visible: root.pending.length === 0; color: root.mutedColor; text: "No one is waiting." }
+                Note { visible: root.pending.length === 0; color: root.t.muted; text: "No one is waiting." }
                 Repeater {
                     model: root.pending
                     delegate: RowLayout {
@@ -1354,7 +1383,7 @@ Item {
                                     Layout.fillWidth: true
                                     elide: Text.ElideRight
                                     font.family: "monospace"; textFormat: Text.PlainText
-                                    color: locRow.st === "active" ? root.textColor : root.mutedColor
+                                    color: locRow.st === "active" ? root.t.fg : root.t.muted
                                     text: locRow.modelData.code + "  " + locRow.modelData.label
                                         + (locRow.st === "retired" ? "  (retired: " + locRow.modelData.retired_reason + ")" : "")
                                         + (locRow.pending ? "  (" + root.placeState(locRow.modelData) + ": " + locRow.modelData.removal_reason + ")" : "")
@@ -1424,12 +1453,12 @@ Item {
                 }
                 Heading { text: "Change log" }
                 Note {
-                    color: root.mutedColor
+                    color: root.t.muted
                     text: "Removed places are hidden from every list, retired ones included. Removed means hidden: the signed events stay in everyone's log."
                 }
                 Note {
                     visible: root.removedLocations.length === 0 && membersPage.renamed.length === 0
-                    color: root.mutedColor
+                    color: root.t.muted
                     text: "Nothing removed or renamed yet."
                 }
                 Repeater {
@@ -1488,7 +1517,7 @@ Item {
                 Heading { text: "Back up your identity"; Layout.topMargin: 0 }
                 Note {
                     text: "Keep this and your password safe. Anyone with both can act as you. Never run the same identity on two devices at once."
-                    color: root.dangerColor
+                    color: root.t.danger
                 }
                 FormRow {
                     label: "Password (at least 8 characters)"
