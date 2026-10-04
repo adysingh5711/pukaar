@@ -1,6 +1,7 @@
 // Pukaar view. QML-only: every call goes to pukaar_core through the host's
 // `logos` bridge, and the view re-reads state every 2 s (no module events at L1).
 pragma ComponentBehavior: Bound
+import QtCore
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
@@ -32,9 +33,24 @@ Item {
     readonly property bool isAdmin: me.role === "Admin"
     // A restored identity waits for its own history before signing anything (core refuses meanwhile).
     readonly property bool syncing: !!me.syncing_own_history
-    // Four board columns (160 each) + the 340 timeline pane + gaps and margins need ~1040 px;
-    // below that the pane replaces the board instead of squeezing it.
-    readonly property bool narrow: width < 1040
+    // ---- shell (design/proposal/NOTES.md section 3) ----
+    property int page: 0                 // StackLayout index: 0 Board, 1 Report, 2 Members, 3 Anchor, 4 Identity
+    // The sidebar is expanded (216 px) from 1100 px of window, an 80 px icon rail below; the user's
+    // toggle ("expanded" / "collapsed", "" = never pressed) wins at every width and is remembered.
+    // Below 930 px the rail never grows (four 160 px columns would not fit): Expand opens the
+    // full sidebar over the board for now (overlayOpen, not remembered).
+    Settings { id: prefs; category: "pukaar"; property string sidebar: "" }
+    readonly property bool overlay: width < 930
+    property bool overlayOpen: false
+    onOverlayChanged: overlayOpen = false
+    readonly property bool sidebarOpen: overlay ? overlayOpen : prefs.sidebar !== "" ? prefs.sidebar === "expanded" : width >= 1100
+    readonly property int sidebarWidth: sidebarOpen && !overlay ? 216 : 80     // what the content gives up
+    function toggleSidebar() { if (overlay) overlayOpen = !overlayOpen; else prefs.sidebar = sidebarOpen ? "collapsed" : "expanded" }
+    function openPage(i) { page = i; overlayOpen = false }
+    // Four board columns (160 each, 12 apart) + the 400 px pane, its 8 px gap and the content's 16 px
+    // margins need 1116 px of content; below that the pane replaces the board instead of squeezing it.
+    readonly property int columnsWidth: 4 * 160 + 3 * 12
+    readonly property bool narrow: width - sidebarWidth < columnsWidth + 8 + 400 + 2 * 16
 
     // ---- design tokens: the only place a colour or the stage->colour map is spelled out ----
     // Two sets (design/proposal/NOTES.md section 1): light = Primer, dark = Logos neutrals with
@@ -57,7 +73,7 @@ Item {
         closed: { fg: "#59636e", bg: "#eff1f3", bd: "#d1d9e0", edge: "#818b98" },
         sb: "#f6f8fa", sbCard: "#ffffff", sbHover: "#eaeef2", sbFg: "#1f2328", sbMuted: "#59636e", sbIcon: "#59636e",
         sbEdge: "#d1d9e0", sbLine: "#d1d9e0", sbCtl: "#818b98", sbActBg: "#c8e6ff", sbActFg: "#0550ae", sbActIcon: "#0550ae",
-        sbDisabled: "#59636e", sbOk: "#1a7f37", sbConn: "#9a6700", sbOff: "#d1242f", sbDanger: "#d1242f",
+        sbDisabled: "#59636e", sbAv: "#dde3ea", sbOk: "#1a7f37", sbConn: "#9a6700", sbOff: "#d1242f", sbDanger: "#d1242f",
         tipBg: "#25292e", tipFg: "#ffffff", tipBd: "#25292e"
     })
     readonly property var darkTokens: ({
@@ -75,7 +91,7 @@ Item {
         closed: { fg: "#b5b5b5", bg: "#2f2f2f", bd: "#808080", edge: "#808080" },
         sb: "#141414", sbCard: "#1c1c1c", sbHover: "#262626", sbFg: "#ebebeb", sbMuted: "#a4a4a4", sbIcon: "#a4a4a4",
         sbEdge: "#2c2c2c", sbLine: "#343434", sbCtl: "#808080", sbActBg: "#243b55", sbActFg: "#ffffff", sbActIcon: "#6aa8f0",
-        sbDisabled: "#8a8a8a", sbOk: "#49f563", sbConn: "#febc2e", sbOff: "#ff736a", sbDanger: "#ff8a82",
+        sbDisabled: "#8a8a8a", sbAv: "#2b303b", sbOk: "#49f563", sbConn: "#febc2e", sbOff: "#ff736a", sbDanger: "#ff8a82",
         tipBg: "#3a3a3a", tipFg: "#ffffff", tipBd: "#808080"
     })
     readonly property var t: dark ? darkTokens : lightTokens
@@ -223,7 +239,7 @@ Item {
         })
     }
     readonly property int boardCount: issues.filter(function (i) { return !onlyMine || i.reporter === me.key }).length
-    // Clipboard via a hidden TextEdit (QML has no direct clipboard API); header Copy and FramedTextArea share it.
+    // Clipboard via a hidden TextEdit (QML has no direct clipboard API); the sidebar Copy and FramedTextArea share it.
     TextEdit { id: clip; visible: false }
     function copyText(t) { clip.text = t; clip.selectAll(); clip.copy() }
     function shortId(hex) { return String(hex).substr(0, 8) + "…" + String(hex).substr(-4) }
@@ -528,17 +544,55 @@ Item {
         }
         contentItem: Label { text: check.text; color: root.ink(check.enabled); leftPadding: check.indicator.width + 8; verticalAlignment: Text.AlignVCenter }
     }
-    component PageTab: TabButton {
-        id: tab
-        background: Frame {
-            fill: tab.checked ? root.t.page : root.t.well
-            Rectangle { visible: tab.checked; width: parent.width; height: 3; anchors.bottom: parent.bottom; color: root.t.accent }
+    // The sidebar's tooltip: right of its parent, on the sidebar's tooltip tokens.
+    component SideTip: ToolTip {
+        id: tip
+        delay: 300
+        x: parent.width + 10; y: (parent.height - height) / 2
+        contentItem: Label { text: tip.text; color: root.t.tipFg; font.pointSize: root.smallSize; font.weight: Font.Medium; wrapMode: Text.Wrap }
+        background: Rectangle { radius: 6; color: root.t.tipBg; border.color: root.t.tipBd }
+    }
+    // One sidebar entry: a fill, bold text and an accent icon when current (no bar). `note` makes it
+    // a locked entry (grey, still focusable so the reason is reachable by keyboard); `compact` is the
+    // icon-only rail, where the tooltip carries the label.
+    component NavItem: AbstractButton {
+        id: nav
+        property string glyph
+        property bool current: false
+        property bool compact: false
+        property string badge: ""         // short reason shown under the label; "" = openable
+        property string lockWhy: ""       // the full reason, for the tooltip and screen readers
+        readonly property bool locked: badge !== ""
+        readonly property color ink: current ? root.t.sbActFg : locked ? root.t.sbDisabled : root.t.sbFg
+        readonly property color iconInk: current ? root.t.sbActIcon : locked ? root.t.sbDisabled : root.t.sbIcon
+        Layout.fillWidth: true
+        implicitHeight: 44
+        leftPadding: compact ? 6 : 12; rightPadding: leftPadding; topPadding: 6; bottomPadding: 6
+        hoverEnabled: true
+        focusPolicy: Qt.StrongFocus
+        Accessible.name: locked ? text + ", " + badge.toLowerCase() + ": " + lockWhy : text
+        HoverHandler { cursorShape: nav.locked ? Qt.ForbiddenCursor : Qt.PointingHandCursor }
+        SideTip { text: nav.locked ? nav.text + ": " + nav.lockWhy : nav.text; visible: (nav.compact || nav.locked) && (nav.hovered || nav.visualFocus) }
+        background: Rectangle {
+            radius: 8
+            color: nav.current ? root.t.sbActBg : nav.hovered && !nav.locked ? root.t.sbHover : "transparent"
+            border.width: nav.visualFocus ? 2 : 0; border.color: root.t.focus
+            Icon {
+                visible: nav.locked; name: "lock"; color: root.t.sbDisabled
+                size: nav.compact ? 12 : 16
+                x: parent.width - width - (nav.compact ? 6 : 10)
+                y: nav.compact ? parent.height - height - 5 : (parent.height - height) / 2
+            }
         }
-        contentItem: Label {
-            text: tab.text; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
-            font.bold: tab.checked
+        contentItem: Item {
+            Icon { name: nav.glyph; size: 20; color: nav.iconInk; anchors.verticalCenter: parent.verticalCenter; x: nav.compact ? (parent.width - width) / 2 : 0 }
+            Column {
+                visible: !nav.compact
+                x: 32; width: parent.width - 32 - (nav.locked ? 20 : 0); anchors.verticalCenter: parent.verticalCenter
+                Label { width: parent.width; text: nav.text; color: nav.ink; elide: Text.ElideRight; font.weight: nav.current ? Font.DemiBold : Font.Medium }
+                Label { visible: nav.locked; width: parent.width; text: nav.badge; color: root.t.sbMuted; font.pointSize: root.smallSize }
+            }
         }
-        opacity: enabled ? 1 : 0.5
     }
 
     // ---- reusable pieces (props in, signals out; no reach into the enclosing scope) ----
@@ -1103,41 +1157,212 @@ Item {
 
     Rectangle { anchors.fill: parent; color: root.t.page }     // the page never shows the host's window colour
 
+    // ---------- sidebar: replaces the old header and tab bar ----------
+    Rectangle {
+        id: sidebar
+        z: 5
+        width: root.sidebarOpen ? 216 : 80; height: parent.height
+        color: root.t.sb
+        readonly property bool open: root.sidebarOpen
+        // the toggle sits on the site-name line: card top + border and padding + half the first line
+        readonly property real nameY: siteCard.parent.y + siteCard.y + (open ? 11 : 9) + siteTitle.contentHeight / siteTitle.lineCount / 2
+        readonly property string deliveryText: root.deliveryLabel(root.me.delivery)
+        readonly property color on: root.t.sbFg
+        readonly property string fp: root.me.fingerprint || ""
+        Rectangle { anchors.right: parent.right; width: 1; height: parent.height; color: root.t.sbEdge }
+        Rectangle {   // the overlay's shadow
+            visible: root.overlay && root.overlayOpen
+            x: parent.width; width: 14; height: parent.height
+            gradient: Gradient { orientation: Gradient.Horizontal; GradientStop { position: 0; color: "#40000000" } GradientStop { position: 1; color: "transparent" } }
+        }
+        ColumnLayout {
+            anchors { fill: parent; leftMargin: sidebar.open ? 12 : 6; rightMargin: sidebar.open ? 21 : 7; topMargin: sidebar.open ? 16 : 12; bottomMargin: sidebar.open ? 16 : 12 }
+            spacing: sidebar.open ? 16 : 12
+            RowLayout {   // brand
+                Layout.alignment: sidebar.open ? Qt.AlignLeft : Qt.AlignHCenter
+                Layout.leftMargin: sidebar.open ? 4 : 0
+                spacing: 10
+                Item {
+                    implicitWidth: 28; implicitHeight: 28
+                    Accessible.ignored: true
+                    Rectangle { anchors.fill: parent; radius: 7; color: "#0969da" }
+                    Shape {
+                        width: 24; height: 24; scale: 28 / 24; transformOrigin: Item.TopLeft
+                        preferredRendererType: Shape.CurveRenderer
+                        ShapePath { strokeColor: "transparent"; fillColor: "#ffffff"; PathSvg { path: root.circ(8, 12, 2) } }
+                        ShapePath {
+                            strokeColor: "#ffffff"; strokeWidth: 1.8; fillColor: "transparent"; capStyle: ShapePath.RoundCap
+                            PathSvg { path: "M12.5 8.2a5.4 5.4 0 0 1 0 7.6M15.8 5.6a9.4 9.4 0 0 1 0 12.8" }
+                        }
+                    }
+                }
+                Label { visible: sidebar.open; text: "Pukaar"; color: sidebar.on; font.pointSize: root.baseSize * 18 / 14; font.bold: true }
+            }
+            Rectangle {   // site card
+                id: siteCard
+                Layout.fillWidth: sidebar.open
+                Layout.preferredWidth: sidebar.open ? -1 : 40
+                Layout.alignment: Qt.AlignHCenter
+                implicitHeight: cardCol.implicitHeight + (sidebar.open ? 22 : 18)
+                radius: 8; color: root.t.sbCard; border.color: root.t.sbLine
+                ColumnLayout {
+                    id: cardCol
+                    anchors { fill: parent; leftMargin: sidebar.open ? 12 : 1; rightMargin: sidebar.open ? 12 : 1; topMargin: sidebar.open ? 11 : 9; bottomMargin: sidebar.open ? 11 : 9 }
+                    spacing: 2
+                    Label {
+                        id: siteTitle
+                        Layout.fillWidth: true
+                        text: !root.inSite ? "not in a site yet" : root.info.name || (sidebar.open ? "Waiting for site data…" : "Site…")
+                        color: sidebar.on; font.weight: Font.DemiBold
+                        wrapMode: Text.WrapAnywhere; maximumLineCount: sidebar.open ? 1000 : 3; elide: Text.ElideRight
+                        horizontalAlignment: sidebar.open ? Text.AlignLeft : Text.AlignHCenter
+                        font.pointSize: sidebar.open ? root.baseSize : root.smallSize; lineHeight: sidebar.open ? 1 : 1.3
+                    }
+                    Label {
+                        visible: sidebar.open && root.inSite
+                        Layout.fillWidth: true
+                        text: "site  " + root.shortId(root.me.site || "")
+                        color: root.t.sbMuted; font.pointSize: root.smallSize; font.family: "monospace"
+                    }
+                    Button {   // Copy puts the full 64-hex id on the clipboard
+                        id: copyBtn
+                        visible: sidebar.open && root.inSite
+                        Layout.topMargin: 4
+                        implicitHeight: 36; leftPadding: 14; rightPadding: 14; topPadding: 0; bottomPadding: 0
+                        Accessible.name: "Copy the full site id"
+                        onClicked: root.copyText(root.me.site)
+                        contentItem: Row {
+                            spacing: 6
+                            Icon { name: "copy"; size: 16; color: root.t.sbFg; anchors.verticalCenter: parent.verticalCenter }
+                            Label { text: "Copy"; color: root.t.sbFg; font.pointSize: root.smallSize; font.weight: Font.Medium; anchors.verticalCenter: parent.verticalCenter }
+                        }
+                        background: Rectangle {
+                            radius: 6; color: copyBtn.hovered ? root.t.sbHover : "transparent"
+                            border.width: copyBtn.visualFocus ? 2 : 1; border.color: copyBtn.visualFocus ? root.t.focus : root.t.sbCtl
+                        }
+                    }
+                }
+            }
+            ColumnLayout {   // sections; History joins in step 9 (page 5) between Board and Report
+                visible: root.inSite
+                Layout.fillWidth: true
+                spacing: 4
+                Repeater {
+                    model: [
+                        { label: "Board", icon: "board", page: 0 },
+                        { label: "Report", icon: "report", page: 1 },
+                        { label: "Members", icon: "members", page: 2, adminOnly: true },
+                        { label: "Anchor", icon: "anchor", page: 3 },
+                        { label: "Identity", icon: "identity", page: 4 }
+                    ]
+                    delegate: NavItem {
+                        id: entry
+                        required property var modelData
+                        text: modelData.label; glyph: modelData.icon
+                        current: root.page === modelData.page; compact: !sidebar.open
+                        badge: modelData.adminOnly && !root.isAdmin ? "Admin only" : ""
+                        lockWhy: "only the site admin can open it"
+                        onClicked: if (!locked) root.openPage(modelData.page)
+                    }
+                }
+            }
+            Item { Layout.fillHeight: true }
+            Rectangle { Layout.fillWidth: true; height: 1; color: root.t.sbLine }   // foot
+            ColumnLayout {
+                Layout.fillWidth: true; Layout.topMargin: -4
+                spacing: 12
+                GridLayout {   // delivery: a dot and the status, the reason in red when it failed
+                    Layout.fillWidth: true
+                    columns: sidebar.open ? 3 : 1; columnSpacing: 8; rowSpacing: 4
+                    Rectangle {
+                        Layout.alignment: Qt.AlignHCenter | Qt.AlignTop; Layout.topMargin: sidebar.open ? 3 : 0
+                        implicitWidth: 10; implicitHeight: 10; radius: 5
+                        color: root.failed(root.me.delivery) ? root.t.sbOff : sidebar.deliveryText === "online" ? root.t.sbOk : root.t.sbConn
+                    }
+                    Label { Layout.alignment: sidebar.open ? Qt.AlignTop : Qt.AlignHCenter; text: "delivery:"; color: root.t.sbMuted; font.pointSize: root.smallSize }
+                    Label {
+                        Layout.fillWidth: true; Layout.alignment: Qt.AlignTop
+                        text: sidebar.deliveryText; wrapMode: Text.Wrap
+                        horizontalAlignment: sidebar.open ? Text.AlignLeft : Text.AlignHCenter
+                        color: root.failed(root.me.delivery) ? root.t.sbDanger : sidebar.on
+                        font.pointSize: root.smallSize; font.weight: Font.Medium
+                    }
+                }
+                GridLayout {   // you: name, fingerprint, role
+                    visible: root.inSite
+                    Layout.fillWidth: true
+                    columns: sidebar.open ? 2 : 1; columnSpacing: 10; rowSpacing: 4
+                    Rectangle {
+                        Layout.alignment: Qt.AlignHCenter | Qt.AlignTop
+                        implicitWidth: 32; implicitHeight: 32; radius: 16; color: root.t.sbAv
+                        Label {
+                            anchors.centerIn: parent; visible: !!root.me.name
+                            text: (root.me.name || "").split(/[\s\-_]+/).filter(Boolean).slice(0, 2).map(function (w) { return w[0] }).join("").toUpperCase()
+                            color: root.t.sbFg; font.pointSize: root.smallSize; font.bold: true
+                        }
+                        Icon { anchors.centerIn: parent; visible: !root.me.name; name: "user"; size: 18; color: root.t.sbFg }
+                    }
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 2
+                        readonly property int align: sidebar.open ? Qt.AlignLeft : Qt.AlignHCenter
+                        Label { visible: sidebar.open; text: "you:"; color: root.t.sbMuted; font.pointSize: root.smallSize }
+                        Label {
+                            visible: sidebar.open; Layout.fillWidth: true
+                            text: root.me.name || "pseudonym"; color: root.t.sbFg; wrapMode: Text.WrapAnywhere
+                            font.pointSize: root.smallSize; font.weight: Font.DemiBold
+                        }
+                        Label {
+                            Layout.alignment: parent.align; Layout.maximumWidth: parent.width; wrapMode: Text.WrapAnywhere
+                            text: sidebar.fp; color: root.t.sbFg; font.pointSize: root.smallSize; font.family: "monospace"
+                        }
+                        Rectangle {   // role chip; a key with no role yet is "pending"
+                            readonly property bool pending: !root.me.role
+                            Layout.alignment: parent.align; Layout.maximumWidth: parent.width
+                            implicitWidth: roleText.implicitWidth + (sidebar.open ? 16 : 12); implicitHeight: roleText.implicitHeight
+                            radius: 12; color: "transparent"; border.color: pending ? root.t.sbDanger : root.t.sbCtl
+                            Label {
+                                id: roleText
+                                width: parent.width; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap
+                                lineHeight: 20; lineHeightMode: Text.FixedHeight
+                                text: root.me.role || (sidebar.open ? "pending: read your fingerprint at the kiosk" : "Pending")
+                                color: parent.pending ? root.t.sbDanger : root.t.sbFg; font.pointSize: root.smallSize
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Rectangle {   // the scrim behind the overlaid sidebar: a click closes it
+        visible: root.overlay && root.overlayOpen
+        z: 4; x: 216; width: parent.width - 216; height: parent.height
+        color: "#4d000000"
+        MouseArea { anchors.fill: parent; onClicked: root.overlayOpen = false }
+    }
+    Shortcut { sequence: "Escape"; enabled: root.overlayOpen; onActivated: root.overlayOpen = false }
+    Button {   // the collapse toggle: a 28 px knob in a 36 px hit area, on the divider and the site-name line
+        id: toggle
+        z: 20
+        x: sidebar.width - 20; y: sidebar.nameY - 18
+        width: 36; height: 36; padding: 4
+        hoverEnabled: true
+        Accessible.name: sidebar.open ? "Collapse sidebar" : "Expand sidebar"
+        onClicked: root.toggleSidebar()
+        SideTip { text: toggle.Accessible.name; visible: toggle.hovered || toggle.visualFocus }
+        background: Rectangle { radius: 18; color: "transparent"; border.width: toggle.visualFocus ? 2 : 0; border.color: root.t.focus }
+        contentItem: Rectangle {
+            radius: 14; color: toggle.hovered ? root.t.sbHover : root.t.page; border.color: root.t.sbCtl
+            Icon { anchors.centerIn: parent; name: sidebar.open ? "chevl" : "chev"; size: 16; color: root.t.sbFg }
+        }
+    }
+
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 12
+        anchors.margins: 16
+        anchors.leftMargin: root.sidebarWidth + 16
         spacing: 8
 
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: 12
-            Label { text: "Pukaar"; font.pointSize: root.titleSize; font.bold: true }
-            Label { Layout.fillWidth: true; elide: Text.ElideRight; text: root.inSite ? (root.info.name || "") : "not in a site yet"; color: root.t.muted }
-            Label {   // Delivery bring-up status from pukaar_core; errors stay visible until it recovers
-                Layout.maximumWidth: root.width / 2
-                elide: Text.ElideRight
-                text: "delivery: " + root.deliveryLabel(root.me.delivery)
-                color: root.failed(root.me.delivery) ? root.t.danger : root.t.muted
-            }
-        }
-        RowLayout {
-            visible: root.inSite
-            Layout.fillWidth: true
-            spacing: 8
-            Label {
-                Layout.fillWidth: true
-                elide: Text.ElideRight
-                text: "you: " + (root.me.name || "pseudonym") + " · " + (root.me.fingerprint || "") + " · "
-                      + (root.me.role || "pending: read your fingerprint at the kiosk")
-            }
-            // the 64-hex id is long: show the short form, Copy puts the full one on the clipboard
-            Label { text: "site " + root.shortId(root.me.site || ""); font.pointSize: root.smallSize; color: root.t.muted }
-            FramedButton {
-                text: "Copy"
-                Accessible.name: "Copy the full site id"
-                onClicked: root.copyText(root.me.site)
-            }
-        }
         Banner {   // the last refused action; stays until dismissed or the next action replaces it
             visible: root.message !== ""
             text: root.message; tint: root.t.danger
@@ -1358,27 +1583,15 @@ Item {
         }
 
         // ---------- in a site ----------
-        TabBar {
-            id: tabs
-            visible: root.inSite
-            Layout.fillWidth: true
-            background: null
-            PageTab { text: "Board" }
-            PageTab { text: "Report" }
-            PageTab { text: "Members"; enabled: root.isAdmin }
-            PageTab { text: "Anchor" }
-            PageTab { text: "Identity" }
-        }
-
         StackLayout {
             visible: root.inSite
-            currentIndex: tabs.currentIndex
+            currentIndex: root.page
             Layout.fillWidth: true
             Layout.fillHeight: true
 
             // Board (the brief's three stages) + timeline
             ColumnLayout {
-                FramedCheck { text: "Only my reports"; checked: root.onlyMine; onToggled: root.onlyMine = checked }
+                FramedCheck { visible: !(root.narrow && root.selected); text: "Only my reports"; checked: root.onlyMine; onToggled: root.onlyMine = checked }
                 Rectangle {   // an empty board says why, and what to do
                     visible: root.boardCount === 0
                     Layout.fillWidth: true; Layout.bottomMargin: 8
@@ -1394,7 +1607,7 @@ Item {
                             text: root.onlyMine ? "You haven't reported anything yet. Use the Report tab to raise a problem."
                                                 : "No reports yet. Use the Report tab to raise the first one."
                         }
-                        FramedButton { text: "Report a problem"; onClicked: tabs.currentIndex = 1 }
+                        FramedButton { text: "Report a problem"; onClicked: root.page = 1 }
                     }
                 }
                 RowLayout {
@@ -1783,7 +1996,7 @@ Item {
                     text: "Report"
                     allowed: root.approved && reportPage.missing === ""
                     onClicked: root.run("report", [category.currentText, reportPage.pick, landmark.text, reportText.text],
-                                        function () { reportText.text = ""; landmark.text = ""; reportPage.pick = ""; tabs.currentIndex = 0 })
+                                        function () { reportText.text = ""; landmark.text = ""; reportPage.pick = ""; root.page = 0 })
                 }
                 Note { visible: root.approved && reportPage.missing !== ""; color: root.t.muted; text: reportPage.missing }
                 Heading { visible: !root.staff; text: "Your name" }
