@@ -84,6 +84,15 @@ const HEADS_EVERY: Duration = Duration::from_secs(60);
 const ANSWER_EVERY: Duration = Duration::from_secs(10);
 /// Received events reach the disk at most this often (see `Shared::save_due`).
 const SAVE_EVERY: Duration = Duration::from_secs(2);
+/// Bound on each Delivery call. A healthy one answers in 10-50 ms, but the protocol default is
+/// 20 s, which is ALSO the UI's whole budget for a call to us: this module runs one call at a
+/// time, so while Delivery was unreachable every poll's flush() blocked 20 s and any call queued
+/// behind it (an import, a report) timed out. Seen in Basecamp: "no listener at
+/// local:logos_delivery_module_…" every 20 s, then `import_identity timed out after 20000ms`.
+const DELIVERY_TIMEOUT: Duration = Duration::from_secs(5);
+/// After a Delivery failure, flush() leaves Delivery alone this long, so a dead Delivery costs
+/// one DELIVERY_TIMEOUT stall per window instead of one per call.
+const RETRY_AFTER: Duration = Duration::from_secs(10);
 
 /// Delivery bring-up, advanced one step per flush(). Not done in on_context_ready: the host
 /// authorises our calls to delivery_module only after that returns, so a createNode/start made
@@ -114,6 +123,8 @@ struct Shared {
     link: Link,
     /// Last Delivery failure, shown as `"delivery": "error: …"` until a later step succeeds.
     link_error: Option<String>,
+    /// Set by a failed step: no Delivery call before then (see RETRY_AFTER).
+    retry_at: Option<Instant>,
     /// Events arrived (on_wire) since the last save.
     dirty: bool,
     last_save: Instant,
@@ -191,15 +202,20 @@ fn delivered_once(
     delivered(method, r).or_else(|e| e.contains("already ").then_some(()).ok_or(e))
 }
 
-/// Record the outcome of a bring-up step. An error keeps the link where it is: the next flush retries.
+/// Record the outcome of a bring-up step. An error keeps the link where it is: the first flush
+/// after RETRY_AFTER retries.
 fn advance(r: Result<Link, String>) {
     if let Some(sh) = SHARED.lock().unwrap().as_mut() {
         match r {
             Ok(l) => {
                 sh.link = sh.link.max(l);
                 sh.link_error = None;
+                sh.retry_at = None;
             }
-            Err(e) => sh.link_error = Some(e),
+            Err(e) => {
+                sh.link_error = Some(e);
+                sh.retry_at = Some(Instant::now() + RETRY_AFTER);
+            }
         }
     }
 }
@@ -234,12 +250,18 @@ fn create_and_listen() -> Result<(), String> {
     // PUKAAR_DELIVERY_CFG overrides the network (LAN entry-node, L2).
     let cfg = std::env::var("PUKAAR_DELIVERY_CFG")
         .unwrap_or_else(|_| r#"{"mode":"Edge","preset":"logos.test"}"#.to_string());
-    delivered_once("createNode", modules().delivery_module.create_node(&cfg))?;
+    delivered_once(
+        "createNode",
+        modules()
+            .delivery_module
+            .create_node_with_timeout(&cfg, DELIVERY_TIMEOUT),
+    )?;
     listen(
         modules().delivery_module.on_node_started(),
         D::decode_node_started,
         |ev| {
-            // A failed start (e.g. the node was already running) still lets us try the channel.
+            // A failed start (e.g. the node was already running) still lets us try the channel
+            // (after RETRY_AFTER).
             advance(Ok(Link::Started));
             if !ev.success {
                 advance(Err(format!("nodeStarted: {}", ev.message)));
@@ -258,9 +280,12 @@ fn open_channel(site_hex: &str, me_hex: &str) -> Result<(), String> {
     // An existing channel (our earlier load, or a failed channelClose) already carries our site.
     delivered_once(
         "channelCreate",
-        modules()
-            .delivery_module
-            .channel_create(site_hex, &topic, me_hex),
+        modules().delivery_module.channel_create_with_timeout(
+            site_hex,
+            &topic,
+            me_hex,
+            DELIVERY_TIMEOUT,
+        ),
     )
 }
 
@@ -330,14 +355,19 @@ fn send_queued(site: &str) -> Result<(), String> {
         }
         std::mem::take(outbox)
     };
-    // try every message, keep the last failure; a lost one comes back through anti-entropy
+    // try every message, keep the last failure; a lost one comes back through anti-entropy.
+    // Stop at the first call Delivery didn't answer: each further one would stall another timeout.
     let mut r = Ok(());
     for msg in &out {
-        if let Err(e) = delivered(
-            "channelSend",
-            modules().delivery_module.channel_send(site, msg),
-        ) {
+        let sent = modules()
+            .delivery_module
+            .channel_send_with_timeout(site, msg, DELIVERY_TIMEOUT);
+        let unreachable = sent.is_err();
+        if let Err(e) = delivered("channelSend", sent) {
             r = Err(e);
+            if unreachable {
+                break;
+            }
         }
     }
     r
@@ -352,6 +382,9 @@ fn flush() {
             return;
         };
         sh.save_due(false); // the poll is the clock for debounced saves
+        if sh.retry_at.is_some_and(|t| Instant::now() < t) {
+            return; // Delivery just failed: don't stall this call on it again (the outbox waits)
+        }
         let ids = sh
             .node
             .as_ref()
@@ -360,9 +393,13 @@ fn flush() {
     };
     advance(match (link, ids) {
         (Link::Down, _) => create_and_listen().map(|()| Link::Listening),
-        (Link::Listening, _) => {
-            delivered("start", modules().delivery_module.start()).map(|()| Link::Starting)
-        }
+        (Link::Listening, _) => delivered(
+            "start",
+            modules()
+                .delivery_module
+                .start_with_timeout(DELIVERY_TIMEOUT),
+        )
+        .map(|()| Link::Starting),
         (Link::Started, Some((site, me))) => open_channel(&site, &me).map(|()| Link::Open),
         (Link::Open, Some((site, _))) => send_queued(&site).map(|()| Link::Open),
         _ => return, // waiting for nodeStarted, or no site yet
@@ -489,7 +526,9 @@ impl PukaarCoreModule for Pukaar {
             Ok(open) => {
                 // best effort: on_wire ignores other channels anyway
                 if let Some(site) = open {
-                    let _ = modules().delivery_module.channel_close(&site);
+                    let _ = modules()
+                        .delivery_module
+                        .channel_close_with_timeout(&site, DELIVERY_TIMEOUT);
                 }
                 "ok".into()
             }
@@ -656,6 +695,7 @@ impl PukaarCoreModule for Pukaar {
             last_answer: None,
             link: Link::Down,
             link_error: None,
+            retry_at: None,
             dirty: false,
             last_save: Instant::now(),
         });

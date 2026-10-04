@@ -25,6 +25,30 @@ fn export_then_import_restores_key_and_site() {
     assert_eq!(site, s.asha.store.site);
 }
 
+/// Made by v0.2.0 (key = [7; 32], site = [9; 32], password PW). Every backup a user holds must
+/// keep importing: changing the KDF or the layout means a new version prefix, not this one.
+const V1_BACKUP: &str = "pukaar-id-1:b1332844aff36cca3fb8e05bc8c48c776c5ff90fa5b5f4e06b4e51982b6c69be37a11d42b9c72290c1e041db800009f6f2851a61a6afedce695238e2533402efc8ef35f279e9275caba9968119fe1175f97802fd9863e7b2a7bc80004cda98886390744a016b32c202a5f29453c82df9884b4acb43dcb36f";
+
+#[test]
+fn an_existing_v1_backup_still_imports() {
+    let (key, site) = import_identity(V1_BACKUP, PW).unwrap();
+    assert_eq!(key.to_bytes(), [7; 32]);
+    assert_eq!(site, [9; 32]);
+}
+
+/// The UI gives a core call 20 s in all; the import's own work (Argon2id, ~15 ms here) must stay
+/// a small slice of it. Generous for slow CI, still far under the budget.
+#[test]
+fn import_fits_the_ui_call_budget() {
+    let t = std::time::Instant::now();
+    import_identity(V1_BACKUP, PW).unwrap();
+    let took = t.elapsed();
+    assert!(
+        took < std::time::Duration::from_secs(2),
+        "import took {took:?}"
+    );
+}
+
 #[test]
 fn the_blob_does_not_contain_the_key() {
     let s = Site::new();
