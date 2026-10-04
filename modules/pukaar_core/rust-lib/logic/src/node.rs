@@ -638,6 +638,8 @@ fn issue_json(s: &State, i: &Issue, now: u64) -> Value {
         "confirms": i.confirms.len(),
         "reopen_count": i.reopen_count,
         "reported_ts": i.reported_ts,
+        "acked_ts": i.acked_ts,
+        "claimed_ts": i.claimed_ts,
         "ack_overdue": i.status == Status::Open && past(now, i.reported_ts, s.config.sla_ack_h),
         "fix_overdue": i.status.awaits_staff()
             && past(now, i.reported_ts, s.config.sla_fix_h),

@@ -83,7 +83,22 @@ fn claim_reopen_claim_confirm() {
     s.sync();
     for n in s.nodes() {
         assert_eq!(status(n, i), Status::ConfirmedResolved);
+        // History's SLA scars: the first acknowledge and the first fix claim, the same on every
+        // replica; the terminal event's time stays in progress.ts
+        let v = &issues(n, 20)[0];
+        assert_eq!(
+            (&v["acked_ts"], &v["claimed_ts"], &v["progress"]["ts"]),
+            (&11.into(), &12.into(), &15.into())
+        );
     }
+}
+
+#[test]
+fn an_unanswered_report_has_no_ack_or_claim_time() {
+    let mut s = Site::new();
+    report(&mut s.asha);
+    let v = &issues(&s.asha, 20)[0];
+    assert!(v["acked_ts"].is_null() && v["claimed_ts"].is_null());
 }
 
 #[test]

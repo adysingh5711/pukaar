@@ -60,6 +60,9 @@ pub struct Issue {
     pub reopen_count: u32,
     pub duplicate_of: Option<Id>,
     pub reported_ts: u64,
+    /// First applied acknowledge and fix claim: History's SLA scars (a reopen keeps them).
+    pub acked_ts: Option<u64>,
+    pub claimed_ts: Option<u64>,
     pub timeline: Vec<Id>, // every event that touched this issue, applied or rejected
 }
 
@@ -485,6 +488,8 @@ fn apply(s: &mut State, e: &Event) -> Result<(), String> {
                     reopen_count: 0,
                     duplicate_of: None,
                     reported_ts: e.u.ts,
+                    acked_ts: None,
+                    claimed_ts: None,
                     timeline: vec![e.id],
                 },
             );
@@ -523,6 +528,7 @@ fn apply(s: &mut State, e: &Event) -> Result<(), String> {
                     require(st == Open, not_permitted(st))?;
                     i.status = Acknowledged;
                     i.progress = progress(note, "", *eta_h);
+                    i.acked_ts.get_or_insert(e.u.ts);
                 }
                 Update {
                     note,
@@ -549,6 +555,7 @@ fn apply(s: &mut State, e: &Event) -> Result<(), String> {
                     i.progress = progress(note, "reporter or two residents confirm", 0);
                     i.status = AwaitingConfirmation;
                     i.claimant = Some(a);
+                    i.claimed_ts.get_or_insert(e.u.ts);
                     i.confirms.clear();
                     i.reopen_votes.clear();
                 }
