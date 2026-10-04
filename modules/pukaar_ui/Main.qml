@@ -112,6 +112,10 @@ Item {
     }
     // Sizes follow the user's system font instead of fixed pixels.
     FontMetrics { id: systemFont }       // default font = the application's
+    // Hindi in user text needs no code here: Qt falls back per glyph to any system Devanagari font
+    // (Kohinoor on macOS, Noto Sans Devanagari / Lohit on Linux). A kiosk with none installed needs
+    // the fonts-noto-core package: the module builder ships only Main.qml and the icon, so a font
+    // file cannot travel inside the .lgx.
     readonly property real baseSize: systemFont.font.pointSize > 0 ? systemFont.font.pointSize : 10
     readonly property real smallSize: baseSize * 13 / 14      // meta text: 13 px when the body is 14
     readonly property real titleSize: baseSize * 1.6
@@ -1253,7 +1257,7 @@ Item {
         property bool picked: false
         property bool retired: false
         property bool explains: false
-        implicitHeight: 40
+        implicitHeight: Math.max(40, implicitContentHeight + topPadding + bottomPadding)   // a long (Hindi) name wraps
         topPadding: 5; bottomPadding: 5; leftPadding: 12; rightPadding: 12
         enabled: !retired || explains
         Accessible.role: Accessible.RadioButton
@@ -1271,7 +1275,7 @@ Item {
                 color: choice.retired ? root.t.muted : root.t.fg
             }
             Label {
-                Layout.fillWidth: true; text: choice.text; elide: Text.ElideRight
+                Layout.fillWidth: true; text: choice.text; wrapMode: Text.Wrap
                 font.weight: choice.picked ? Font.DemiBold : Font.Normal; font.italic: choice.retired
                 color: choice.retired ? root.t.muted : root.t.fg
             }
@@ -2177,7 +2181,7 @@ Item {
                 readonly property string missing: reportText.text.trim() === "" ? "Describe the problem in one line."
                     : pick === "" ? "Pick where it is."
                     : pick === "other" && landmark.text.trim() === "" ? "Describe the place." : ""
-                Rectangle {   // a key with no role yet: read-only until the admin approves it
+                Rectangle {   // a key with no role yet: may draft a report, but Report stays off until the admin approves it
                     visible: !root.approved
                     Layout.fillWidth: true; Layout.bottomMargin: 8
                     implicitHeight: waitCol.implicitHeight + 2
@@ -2214,7 +2218,7 @@ Item {
                 PageHead { title: "What's wrong?"; lede: "A line or two is enough. A steward will see it on the board." }
                 FormRow {
                     label: "Category"
-                    FramedCombo { id: category; enabled: root.approved; Accessible.name: "What is wrong (category)"; model: root.categories; Layout.fillWidth: true; Layout.maximumWidth: 372 }
+                    FramedCombo { id: category; Accessible.name: "What is wrong (category)"; model: root.categories; Layout.fillWidth: true; Layout.maximumWidth: 372 }
                 }
                 // maximumLength counts characters; the core's 500 limit is bytes (Hindi is 3 B/char),
                 // so a long non-Latin line comes back as "error: too long" instead. Return sends,
@@ -2223,7 +2227,6 @@ Item {
                     label: "In a line or two"
                     FramedTextArea {
                         id: reportText
-                        enabled: root.approved
                         boxHeight: 76; maxLength: 500; enterAccepts: true
                         wrap: TextEdit.WrapAtWordBoundaryOrAnywhere
                         placeholder: "e.g. Tap near tent 4 gives no water"
