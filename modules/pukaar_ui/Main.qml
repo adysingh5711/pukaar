@@ -266,6 +266,7 @@ Item {
     // Clipboard via a hidden TextEdit (QML has no direct clipboard API); the sidebar Copy and FramedTextArea share it.
     TextEdit { id: clip; visible: false }
     function copyText(t) { clip.text = t; clip.selectAll(); clip.copy() }
+    function initials(name) { return String(name || "").split(/[\s\-_]+/).filter(Boolean).slice(0, 2).map(function (w) { return w[0] }).join("").toUpperCase() }
     function shortId(hex) { return String(hex).substr(0, 8) + "…" + String(hex).substr(-4) }
     function who(key, name) { return name ? name : "pseudonym " + String(key).substr(0, 6) }
     function when(ts, format) { return new Date(ts * 1000).toLocaleString(Qt.locale(), format || "d MMM HH:mm") }
@@ -830,15 +831,13 @@ Item {
         required property color tint
         required property int count
         width: parent.width; spacing: 2; bottomPadding: 8
-        Flow {
+        RowLayout {   // the title wraps, the count chip stays beside it
             width: parent.width; spacing: 8
-            Row {
-                spacing: 8
-                Icon { anchors.verticalCenter: parent.verticalCenter; name: head.icon; size: 16; color: head.tint }
-                Label { text: head.title; font.weight: Font.DemiBold }
-            }
+            Icon { Layout.alignment: Qt.AlignTop; Layout.topMargin: 2; name: head.icon; size: 16; color: head.tint }
+            Label { Layout.fillWidth: true; text: head.title; font.weight: Font.DemiBold; wrapMode: Text.Wrap }
             Rectangle {
-                width: Math.max(22, countText.implicitWidth + 14); height: 20; radius: 10; color: root.t.closed.bg
+                Layout.alignment: Qt.AlignTop
+                implicitWidth: Math.max(22, countText.implicitWidth + 14); implicitHeight: 20; radius: 10; color: root.t.closed.bg
                 Label { id: countText; anchors.centerIn: parent; text: head.count; font.pointSize: root.smallSize; font.weight: Font.DemiBold }
             }
         }
@@ -1607,11 +1606,13 @@ Item {
                     Label {
                         id: siteTitle
                         Layout.fillWidth: true
-                        text: !root.inSite ? "not in a site yet" : root.info.name || (sidebar.open ? "Waiting for site data…" : "Site…")
+                        readonly property string full: !root.inSite ? "not in a site yet" : root.info.name || "Waiting for site data…"
+                        text: sidebar.open ? full : root.initials(root.inSite ? root.info.name : "") || "…"   // the 40 px card cannot hold a name: initials, the tooltip has the rest
                         color: sidebar.on; font.weight: Font.DemiBold
-                        wrapMode: Text.WrapAnywhere; maximumLineCount: sidebar.open ? 1000 : 3; elide: Text.ElideRight
+                        wrapMode: Text.WrapAnywhere
                         horizontalAlignment: sidebar.open ? Text.AlignLeft : Text.AlignHCenter
-                        font.pointSize: sidebar.open ? root.baseSize : root.smallSize; lineHeight: sidebar.open ? 1 : 1.3
+                        HoverHandler { id: cardHover }
+                        SideTip { parent: siteCard; text: siteTitle.full; visible: !sidebar.open && cardHover.hovered }
                     }
                     Label {
                         visible: sidebar.open && root.inSite
@@ -1693,13 +1694,13 @@ Item {
                         implicitWidth: 32; implicitHeight: 32; radius: 16; color: root.t.sbAv
                         Label {
                             anchors.centerIn: parent; visible: !!root.me.name
-                            text: (root.me.name || "").split(/[\s\-_]+/).filter(Boolean).slice(0, 2).map(function (w) { return w[0] }).join("").toUpperCase()
+                            text: root.initials(root.me.name)
                             color: root.t.sbFg; font.pointSize: root.smallSize; font.bold: true
                         }
                         Icon { anchors.centerIn: parent; visible: !root.me.name; name: "user"; size: 18; color: root.t.sbFg }
                     }
                     ColumnLayout {
-                        Layout.fillWidth: true
+                        Layout.fillWidth: true; Layout.preferredWidth: 0; Layout.minimumWidth: 0   // the rail sets the width: a long fingerprint or role must wrap, not widen the column
                         spacing: 2
                         readonly property int align: sidebar.open ? Qt.AlignLeft : Qt.AlignHCenter
                         Label { visible: sidebar.open; text: "you:"; color: root.t.sbMuted; font.pointSize: root.smallSize }
