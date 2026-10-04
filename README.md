@@ -140,6 +140,7 @@ A one-instruction [SPEL](https://github.com/logos-co/spel) program ([source](pro
 - Rust 1.96+ (`rustup`)
 - For the chain program: Docker, [`logos-scaffold`](https://github.com/logos-co/scaffold) (`cargo install logos-scaffold`, which provides `lgs`), and the RISC Zero toolchain (`rzup install rust`, `rzup install r0vm`)
 - For the Basecamp modules: Nix with flakes, and [Logos Basecamp 0.3.1](https://github.com/logos-co/logos-basecamp/releases/tag/0.3.1)
+- Hindi text in reports uses the system's Devanagari font, so a bare Linux kiosk should install `fonts-noto-core`
 
 ### Run the rules engine tests
 
