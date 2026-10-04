@@ -267,10 +267,7 @@ static LISTENING: AtomicBool = AtomicBool::new(false);
 /// Note a channel send's final outcome (see `Shared::send_error`).
 fn sent(error: Option<String>) {
     if let Some(sh) = SHARED.lock().unwrap().as_mut() {
-        // Delivery says only "one or more segments failed"; the cause seen live is RLN
-        sh.send_error = error.map(|e| {
-            format!("messages aren't reaching the network ({e}): is this profile's RLN membership active?")
-        });
+        sh.send_error = error.map(|e| format!("messages aren't reaching the network ({e})"));
     }
 }
 
@@ -279,9 +276,12 @@ fn sent(error: Option<String>) {
 // listener (harmless: advance, on_wire and sent are idempotent); split the step if that matters.
 fn create_and_listen() -> Result<(), String> {
     use delivery_module::DeliveryModuleClient as D;
-    // PUKAAR_DELIVERY_CFG overrides the network (LAN entry-node, L2).
+    // PUKAAR_DELIVERY_CFG overrides the network (LAN entry-node, L2). logos.dev, not logos.test:
+    // since Delivery 0.3.0 logos.test sends only with a funded on-chain RLN membership (Basecamp's
+    // RLN module waits for 2x10^8 LEZ on the payer), so without one nothing left either profile.
+    // logos.dev (cluster 3) runs no RLN. Both ends must be on the same preset.
     let cfg = std::env::var("PUKAAR_DELIVERY_CFG")
-        .unwrap_or_else(|_| r#"{"mode":"Edge","preset":"logos.test"}"#.to_string());
+        .unwrap_or_else(|_| r#"{"mode":"Edge","preset":"logos.dev"}"#.to_string());
     delivered_once(
         "createNode",
         modules()

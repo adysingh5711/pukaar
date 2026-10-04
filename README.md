@@ -220,7 +220,9 @@ spel --idl idl/pukaar_registry.json --program <PROGRAM_ID> -- anchor \
 2. In Basecamp 0.3.1: **Package Manager → Install Local Package**. Install the core package first, then the UI package.
 3. Open Pukaar. Everyone except the admin pastes the site id under **Join a site**, then reads their fingerprint aloud at the kiosk so the admin can approve them. The admin opens **Create a site** instead, fills in the form, and clicks **Create site**. **Restore your identity** brings back an exported identity on a new install.
 
-If the sidebar says **offline: messages aren't reaching the network**, Delivery takes Pukaar's messages but can't get them out. The usual cause: the RLN modules are installed, so Delivery signs every message with an RLN proof, and this profile has no active RLN membership. Register one in Basecamp's RLN membership UI on every profile (the Delivery app shows the membership state). Until then nothing a profile sends leaves the device, so joins wait and restores don't finish.
+Pukaar talks over Delivery's `logos.dev` network, which needs no RLN membership. Every device of a site must run a Pukaar build on the same network: builds before this one used `logos.test`, where Delivery 0.3.0 sends nothing until the profile holds a funded on-chain RLN membership. After installing a new Pukaar, quit Basecamp fully and start it again: Delivery keeps the network it was first started with until then.
+
+If the sidebar says **offline: messages aren't reaching the network**, Delivery takes Pukaar's messages but can't get them out. Check Basecamp's log for `Failed to send message`.
 
 One Basecamp profile holds one Pukaar identity. To run several people on one machine, give each its own Basecamp data directory, side by side:
 
