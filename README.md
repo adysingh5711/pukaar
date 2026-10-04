@@ -9,7 +9,7 @@
 | | |
 |---|---|
 | Demo video | To be added in later version |
-| Screenshots | To be added in later version |
+| Screenshots | [See the walkthrough](#screenshots) |
 | Latest release | [v0.2.1](https://github.com/adysingh5711/pukaar/releases/tag/v0.2.1): signed `.lgx` packages for Logos Basecamp 0.3.1 |
 
 ---
@@ -18,6 +18,7 @@
 
 - [Why](#why)
 - [How it works](#how-it-works)
+- [Screenshots](#screenshots)
 - [Features](#features)
 - [Project status](#project-status)
 - [Architecture](#architecture)
@@ -63,6 +64,58 @@ Pukaar takes that power away from the operator:
 - **Transport.** Live events go over `delivery_module` Reliable Channels on the content topic `/pukaar/1/site-<site_hex>/proto`. Catch-up is heads-based anti-entropy with a capped resend, not Store queries, so late joiners, restarts and LAN-only sites work without a store node.
 - **Forks.** If one identity ever signs two different events at the same position (one person on two devices, or a cheat), every replica keeps the **same** branch: at each position the event with the lowest id wins, whatever order the copies arrive in. The losing branch is kept and saved as evidence, never applied, and the board shows a fork warning.
 - **Checkpoints.** A Merkle root (RFC 6962 style) over every author's chain head, signed by a member under `logos:pukaar:cp:1\0` and anchored with one SPEL instruction on LEZ. Anyone can recompute the root from their own replica and compare.
+
+## Screenshots
+
+Pukaar running in Logos Basecamp, in the order you would meet the screens.
+
+### The board
+
+![Pukaar board with four columns of fault reports and overdue warnings](public/images/01-board.png)
+
+Pukaar's board for the Dhun site, with four columns: reported, in progress, resolved and closed without fix. Cards that no steward has acknowledged within 12 h, or that are past their target, are marked in red, so a stalled report is visible to everyone. The "Fix claimed, awaiting confirmation" card is still in progress, not resolved.
+
+### Why a report isn't closed yet
+
+![Issue detail showing the three steps to closure and the report timeline](public/images/02-why-not-closed-yet.png)
+
+An open report with its timeline and a "Why it isn't closed yet" card. The card lists three steps: a steward acknowledges, a steward claims a fix and says what was done, then the reporter or two other residents confirm. A fix claim isn't resolution, and the screen says who still has to act. The timeline lists every event, and the note field asks what was seen, done or why.
+
+### How a report was closed
+
+![Resolved issue showing who confirmed the fix, with a rejected fix claim and a reopen in the timeline](public/images/03-how-it-was-closed.png)
+
+A resolved report with a "How it was closed" card and its full timeline. The card says who confirmed the fix and that the report was reopened once before the fix held. The timeline keeps a rejected fix claim ("a fix claim needs a note: what was done") marked as rejected rather than hiding it.
+
+### History
+
+![History screen listing resolved and closed issues with filters](public/images/04-history.png)
+
+Every resolved and closed issue, with search and filters for place, status and time. The board shows resolved issues for 14 days and closed ones for 30. After that they live here, and the page says nothing is deleted and any issue can be reopened.
+
+### Report a fault
+
+![Report form with category, description and a searchable grouped list of places](public/images/05-report-a-fault.png)
+
+The report form: a category, a line or two of description, and a place. Anyone on the site can file a report in a few fields. Places come from the site's own grouped list, or "Other" with a description.
+
+### Members
+
+![Members screen with approvals, member roles and an add-a-location form](public/images/06-members.png)
+
+Approve people, manage roles and the list of places. A banner reminds the admin to grant a role only after the person reads their fingerprint aloud. Each member shows a short id and a role (admin, steward or resident). The admin can revoke a member with a reason, but not themselves. The form below adds a location.
+
+### Back up your identity
+
+![Identity backup form with a warning and two password fields](public/images/07-back-up-identity.png)
+
+Export the identity key on this device, protected by a password. Your identity is a key on this device, and a backup lets you continue as the same person after a reinstall. The warning says anyone with the backup and the password can act as you, and the same identity must never run on two devices at once.
+
+### Anchor
+
+![Anchor screen with three steps: compute the checkpoint, run the command, record the anchor](public/images/08-anchor.png)
+
+Write a fingerprint of everyone's history to the Logos blockchain (LEZ). Three steps: compute the checkpoint, run the generated command, then record the anchor reference it prints. Once anchored, no one, not even the admin, can quietly rewrite past events, and anyone can recompute the fingerprint from their own copy and compare.
 
 ## Features
 
