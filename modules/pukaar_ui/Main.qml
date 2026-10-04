@@ -4,6 +4,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
+import QtQuick.Shapes
 
 Item {
     id: root
@@ -42,7 +43,7 @@ Item {
     readonly property bool dark: Application.styleHints.colorScheme === Qt.Dark
     readonly property var lightTokens: ({
         fg: "#1f2328", muted: "#59636e", ph: "#6e7781", disabled: "#818b98",
-        page: "#ffffff", well: "#f6f8fa", card: "#ffffff", field: "#ffffff", hover: "#eff2f5", btn: "#f6f8fa",
+        page: "#ffffff", well: "#f6f8fa", card: "#ffffff", field: "#ffffff", hover: "#eff2f5", btn: "#f6f8fa", btnOff: "#f6f8fa",
         bd: "#d1d9e0", ctlBd: "#818b98", btnBd: "#d1d9e0",
         accent: "#0969da", accentBg: "#ddf4ff", accentBd: "#54aeff99", focus: "#0969da",
         primary: "#0969da", primaryHover: "#0860ca", onPrimary: "#ffffff",
@@ -60,7 +61,7 @@ Item {
     })
     readonly property var darkTokens: ({
         fg: "#ffffff", muted: "#a4a4a4", ph: "#8c92a0", disabled: "#7a7a7a",
-        page: "#171717", well: "#1c1c1c", card: "#232323", field: "#262626", hover: "#2b2b2b", btn: "#2b2b2b",
+        page: "#171717", well: "#1c1c1c", card: "#232323", field: "#262626", hover: "#2b2b2b", btn: "#2b2b2b", btnOff: "#1f1f1f",
         bd: "#434343", ctlBd: "#808080", btnBd: "#4d4d4d",
         accent: "#6aa8f0", accentBg: "#1f2d3d", accentBd: "#4a90e2", focus: "#6aa8f0",
         primary: "#2563c9", primaryHover: "#2f6fd0", onPrimary: "#ffffff",
@@ -79,7 +80,8 @@ Item {
     readonly property var t: dark ? darkTokens : lightTokens
     // Every control reads these roles. Set once on the root, so nothing falls back to the
     // system palette (a dark OS would otherwise give light-on-light or dark-on-dark controls).
-    // Same value in the disabled and inactive groups: disabled controls fade with `opacity`.
+    // Same value in the disabled and inactive groups: disabled controls use the `disabled` /
+    // `btnOff` tokens (ink() below), never opacity, so their contrast is checked like the rest.
     palette {
         window: root.t.page; windowText: root.t.fg
         base: root.t.field; alternateBase: root.t.well; text: root.t.fg
@@ -301,37 +303,121 @@ Item {
     }
     function openIssuesText(n) { return plural(n, "open issue") }
 
+    // ---- icons: the mockup's 20x20 stroke set (1.6 stroke, round caps), as SVG path data.
+    // `icons` is stroked, `iconFills` adds a filled part, `iconDashes` a dashed one. ----
+    function circ(cx, cy, r) { return "M" + (cx - r) + " " + cy + "a" + r + " " + r + " 0 1 0 " + 2 * r + " 0a" + r + " " + r + " 0 1 0 " + -2 * r + " 0" }
+    function box(x, y, w, h, r) {
+        const a = "a" + r + " " + r + " 0 0 1 "
+        return "M" + (x + r) + " " + y + "h" + (w - 2 * r) + a + r + " " + r + "v" + (h - 2 * r) + a + -r + " " + r
+             + "h" + (2 * r - w) + a + -r + " " + -r + "v" + (2 * r - h) + a + r + " " + -r + "z"
+    }
+    readonly property var icons: ({
+        board: box(2, 3, 4.5, 14, 1) + box(7.75, 3, 4.5, 10, 1) + box(13.5, 3, 4.5, 7, 1),
+        report: "M3 8.5v3h2.5l6 4v-11l-6 4z" + "M14.5 7.5a3.5 3.5 0 0 1 0 5",
+        members: circ(7.5, 7, 3) + "M2 17c.6-3 2.8-4.5 5.5-4.5S12.4 14 13 17" + circ(14, 6.5, 2.3) + "M14.5 11c1.9.3 3 1.7 3.5 4",
+        anchor: circ(10, 4.5, 2) + "M10 6.5V17M6.5 9.5h7M3.5 11.5a6.5 6.5 0 0 0 13 0",
+        identity: circ(7, 10, 3.5) + "M10.5 10H18M15 10v3M17.5 10v2.2",
+        lock: box(4.5, 9, 11, 8, 1.5) + "M7 9V6.5a3 3 0 0 1 6 0V9",
+        signal: "M10 11.5v6" + circ(10, 10, 1.5) + "M6.5 6.5a5 5 0 0 0 0 7M13.5 6.5a5 5 0 0 1 0 7M4 4a8.5 8.5 0 0 0 0 12M16 4a8.5 8.5 0 0 1 0 12",
+        user: circ(10, 6.5, 3.2) + "M3.5 17.5c.7-3.5 3.3-5.3 6.5-5.3s5.8 1.8 6.5 5.3",
+        copy: box(7, 7, 10, 10, 1.5) + "M13 7V4.5A1.5 1.5 0 0 0 11.5 3h-7A1.5 1.5 0 0 0 3 4.5v7A1.5 1.5 0 0 0 4.5 13H7",
+        dup: box(3, 3, 10, 10, 1.5) + box(7, 7, 10, 10, 1.5),
+        chev: "M7.5 4.5l5.5 5.5-5.5 5.5", chevl: "M12.5 4.5L7 10l5.5 5.5", chevd: "M5 8l5 5 5-5",
+        back: "M16 10H4.5M9 5l-5 5 5 5", x: "M5 5l10 10M15 5L5 15", plus: "M10 4v12M4 10h12", tick: "M5 10.5l3.2 3.2L15 6.5",
+        warn: "M10 2.5l8 14H2z" + "M10 8v4M10 14.2v.1",
+        info: circ(10, 10, 7.5) + "M10 9v5M10 6.2v.1",
+        bell: "M5 14V9a5 5 0 0 1 10 0v5l1.5 1.5h-13z" + "M8.5 17.5a1.6 1.6 0 0 0 3 0",
+        rep: circ(10, 10, 7.5), prog: circ(10, 10, 7.5), await: "M10 6v4.5l3 1.8",
+        res: circ(10, 10, 7.5) + "M6.5 10.3l2.4 2.4 4.6-5",
+        clo: circ(10, 10, 7.5) + "M5.2 14.8l9.6-9.6",
+        reject: circ(10, 10, 7.5) + "M7 7l6 6M13 7l-6 6",
+        radio: circ(10, 10, 7), radioOn: circ(10, 10, 7),
+        cmt: "M3 4h14v9.5H9.5L5.5 17v-3.5H3z",
+        reopen: "M4 10a6 6 0 1 0 2-4.5" + "M4 3v4h4",
+        flag: "M5 18V3M5 3.5h10l-2.5 3.5L15 10.5H5",
+        eye: "M1.5 10S4.5 4.5 10 4.5 18.5 10 18.5 10 15.5 15.5 10 15.5 1.5 10 1.5 10z" + circ(10, 10, 2.5),
+        update: "M16 4v4h-4" + "M15.5 8A6 6 0 1 0 16 12",
+        search: circ(8.5, 8.5, 5) + "M12.5 12.5L17 17",
+        shield: "M10 2.5l6.5 2.5v5c0 4-3 6.5-6.5 7.5C6.5 16.5 3.5 14 3.5 10V5z",
+        mega: "M3 8v4h2l7 4V4L5 8z" + "M15 7.5v5",
+        hist: "M3.5 10a6.5 6.5 0 1 0 1.9-4.6" + "M3.5 3.5v3h3" + "M10 6.5V10l2.5 1.5",
+        pin: "M10 18s-5.5-5.2-5.5-9.5a5.5 5.5 0 0 1 11 0C15.5 12.8 10 18 10 18z" + circ(10, 8.5, 2)
+    })
+    readonly property var iconFills: ({ rep: circ(10, 10, 2), prog: "M10 5a5 5 0 0 1 0 10z", radioOn: circ(10, 10, 3.5) })
+    readonly property var iconDashes: ({ await: circ(10, 10, 7.5) })
+    // A named icon, `size` px square, drawn in `color`.
+    component Icon: Item {
+        id: icon
+        property string name
+        property real size: 16
+        property color color: root.t.fg
+        implicitWidth: size; implicitHeight: size
+        Accessible.ignored: true
+        Shape {
+            width: 20; height: 20
+            scale: icon.size / 20; transformOrigin: Item.TopLeft
+            preferredRendererType: Shape.CurveRenderer
+            ShapePath {
+                strokeColor: icon.color; strokeWidth: 1.6; fillColor: "transparent"
+                capStyle: ShapePath.RoundCap; joinStyle: ShapePath.RoundJoin
+                PathSvg { path: root.icons[icon.name] || "" }
+            }
+            ShapePath { strokeColor: "transparent"; fillColor: icon.color; PathSvg { path: root.iconFills[icon.name] || "" } }
+            ShapePath {     // dash and gap are in stroke widths: 3 and 2.2 px of the 20 px box
+                strokeColor: icon.color; strokeWidth: 1.6; fillColor: "transparent"
+                capStyle: ShapePath.RoundCap; strokeStyle: ShapePath.DashLine; dashPattern: [1.9, 1.4]
+                PathSvg { path: root.iconDashes[icon.name] || "" }
+            }
+        }
+    }
+
     // ---- controls: one frame (border token, blue when focused) shared by every control, so no
     // field, button, combo or box is ever borderless whatever style the host uses ----
+    function ink(on) { return on ? t.fg : t.disabled }       // text colour of a control
     component Frame: Rectangle {
         property bool ring: false          // keyboard/typing focus: thicker, blue
-        property color fill: root.t.field
+        property bool off: false           // a disabled control: flat, quiet border
+        property color fill: off ? root.t.well : root.t.field
+        property color edge: off ? root.t.bd : root.t.ctlBd
+        implicitHeight: 36                 // the minimum touch target of every control
         color: fill
-        radius: 4
+        radius: 6
         border.width: ring ? 2 : 1
-        border.color: ring ? root.t.focus : root.t.ctlBd
+        border.color: ring ? root.t.focus : edge
     }
     component FramedField: TextField {
         id: field
         selectByMouse: true
-        leftPadding: 8; rightPadding: 8
-        placeholderTextColor: root.t.muted
-        opacity: enabled ? 1 : 0.5
-        background: Frame { ring: field.activeFocus }
+        leftPadding: 10; rightPadding: 10; topPadding: 6; bottomPadding: 6
+        color: root.ink(enabled)
+        placeholderTextColor: root.t.ph
+        background: Frame { ring: field.activeFocus; off: !field.enabled }
     }
+    // kind: "default", "primary" (the one main action) or "danger" (red text). Label wraps.
     component FramedButton: Button {
         id: fb
-        leftPadding: 12; rightPadding: 12; topPadding: 6; bottomPadding: 6
-        opacity: enabled ? 1 : 0.5
-        background: Frame { ring: fb.visualFocus; fill: fb.down ? Qt.darker(root.t.btn, 1.12) : root.t.btn }
+        property string kind: "default"
+        readonly property bool solid: kind === "primary" && enabled
+        leftPadding: 14; rightPadding: 14; topPadding: 6; bottomPadding: 6
+        font.weight: Font.Medium
+        contentItem: Label {
+            text: fb.text; font: fb.font; wrapMode: Text.Wrap
+            horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+            color: !fb.enabled ? root.t.disabled : fb.solid ? root.t.onPrimary : fb.kind === "danger" ? root.t.danger : root.t.fg
+        }
+        background: Frame {
+            ring: fb.visualFocus
+            fill: !fb.enabled ? root.t.btnOff : fb.solid ? (fb.hovered || fb.down ? root.t.primaryHover : root.t.primary)
+                  : fb.down ? Qt.darker(root.t.btn, 1.12) : fb.hovered ? root.t.hover : root.t.btn
+            edge: !fb.enabled ? root.t.bd : fb.solid ? root.t.primary : root.t.btnBd
+        }
     }
     component FramedCombo: ComboBox {
         id: combo
-        leftPadding: 10; rightPadding: 28; topPadding: 6; bottomPadding: 6
-        opacity: enabled ? 1 : 0.5
-        background: Frame { ring: combo.visualFocus }
-        contentItem: Label { text: combo.displayText; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }
-        indicator: Label { x: combo.width - width - 10; y: (combo.height - height) / 2; text: "\u25be" }
+        leftPadding: 10; rightPadding: 32; topPadding: 6; bottomPadding: 6
+        background: Frame { ring: combo.visualFocus; off: !combo.enabled }
+        contentItem: Label { text: combo.displayText; color: root.ink(combo.enabled); elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }
+        indicator: Icon { x: combo.width - width - 10; y: (combo.height - height) / 2; name: "chevd"; size: 14; color: combo.enabled ? root.t.muted : root.t.disabled }
         // The style's own row paints its highlight from palette roles that are not meant for it
         // (invisible text on some palettes); this one reads the tokens.
         delegate: ItemDelegate {
@@ -347,13 +433,16 @@ Item {
     }
     component FramedCheck: CheckBox {
         id: check
-        opacity: enabled ? 1 : 0.5
+        implicitHeight: Math.max(36, implicitContentHeight + topPadding + bottomPadding)
         indicator: Frame {
             ring: check.visualFocus
+            fill: !check.checked ? (check.enabled ? root.t.field : root.t.well) : check.enabled ? root.t.primary : root.t.disabled
+            edge: check.checked ? fill : check.enabled ? root.t.ctlBd : root.t.bd
+            implicitHeight: 18
             x: check.leftPadding; y: (check.height - height) / 2; width: 18; height: 18
-            Label { anchors.centerIn: parent; text: "\u2713"; visible: check.checked }
+            Icon { anchors.centerIn: parent; visible: check.checked; name: "tick"; size: 16; color: root.t.onPrimary }
         }
-        contentItem: Label { text: check.text; leftPadding: check.indicator.width + 8; verticalAlignment: Text.AlignVCenter }
+        contentItem: Label { text: check.text; color: root.ink(check.enabled); leftPadding: check.indicator.width + 8; verticalAlignment: Text.AlignVCenter }
     }
     component PageTab: TabButton {
         id: tab
@@ -557,7 +646,7 @@ Item {
                 readOnly: fta.readOnly
                 selectByMouse: true
                 wrapMode: TextEdit.WrapAnywhere
-                placeholderTextColor: root.t.muted
+                placeholderTextColor: root.t.ph
                 padding: 8
                 background: null
                 Accessible.name: fta.name
@@ -577,7 +666,7 @@ Item {
         property bool allowed: true
         property bool shown: true   // false hides it but keeps its slot, so a row's columns line up
         enabled: shown && allowed && !root.busy
-        opacity: shown ? (enabled ? 1 : 0.5) : 0
+        opacity: shown ? 1 : 0
         Accessible.ignored: !shown
         function submit() { if (enabled) clicked() }
     }
