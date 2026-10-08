@@ -23,3 +23,9 @@ modules/pukaar_core/rust-lib/logic/fuzz/Cargo.lock
 idea-docs/
 plan.md
 next-steps.md
+
+
+graphify-out/cache/
+graphify-out/manifest.json
+graphify-out/graph.html
+graphify-out/.graphify_*
