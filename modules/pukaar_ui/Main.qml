@@ -36,7 +36,8 @@ Item {
     // A restored identity waits for its own history before signing anything (core refuses meanwhile).
     readonly property bool syncing: !!me.syncing_own_history
     // ---- shell (design/proposal/NOTES.md section 3) ----
-    property int page: 0                 // StackLayout index: 0 Board, 1 Report, 2 Members, 3 Anchor, 4 Identity, 5 History
+    readonly property var pages: ["board", "report", "members", "anchor", "identity", "history"]   // the StackLayout's children, in order
+    property string page: "board"
     // The sidebar is expanded (216 px) from 1100 px of window, an 80 px icon rail below; the user's
     // toggle ("expanded" / "collapsed", "" = never pressed) wins at every width and is remembered.
     // Below 930 px the rail never grows (four 160 px columns would not fit): Expand opens the
@@ -48,10 +49,10 @@ Item {
     readonly property bool sidebarOpen: overlay ? overlayOpen : prefs.sidebar !== "" ? prefs.sidebar === "expanded" : width >= 1100
     readonly property int sidebarWidth: sidebarOpen && !overlay ? 216 : 80     // what the content gives up
     function toggleSidebar() { if (overlay) overlayOpen = !overlayOpen; else prefs.sidebar = sidebarOpen ? "collapsed" : "expanded" }
-    function openPage(i) { page = i; overlayOpen = false }
-    function showPlace(code) { historyPlace = code; openPage(5) }   // a place code's link: that place in History
+    function openPage(name) { page = name; overlayOpen = false }
+    function showPlace(code) { historyPlace = code; openPage("history") }   // a place code's link: that place in History
     // The issue pane sits beside the Board and History pages (both open issues); narrow, it replaces them.
-    readonly property bool paneOpen: selected !== null && (page === 0 || page === 5)
+    readonly property bool paneOpen: selected !== null && (page === "board" || page === "history")
     // Four board columns (160 each, 12 apart) + the 400 px pane, its 8 px gap and the content's 16 px
     // margins need 1116 px of content; below that the pane replaces the board instead of squeezing it.
     readonly property int columnsWidth: 4 * 160 + 3 * 12
@@ -1642,12 +1643,12 @@ Item {
                 spacing: 4
                 Repeater {
                     model: [
-                        { label: "Board", icon: "board", page: 0 },
-                        { label: "History", icon: "hist", page: 5 },
-                        { label: "Report", icon: "report", page: 1 },
-                        { label: "Members", icon: "members", page: 2, adminOnly: true },
-                        { label: "Anchor", icon: "anchor", page: 3 },
-                        { label: "Identity", icon: "identity", page: 4 }
+                        { label: "Board", icon: "board", page: "board" },
+                        { label: "History", icon: "hist", page: "history" },
+                        { label: "Report", icon: "report", page: "report" },
+                        { label: "Members", icon: "members", page: "members", adminOnly: true },
+                        { label: "Anchor", icon: "anchor", page: "anchor" },
+                        { label: "Identity", icon: "identity", page: "identity" }
                     ]
                     delegate: NavItem {
                         id: entry
@@ -2043,7 +2044,7 @@ Item {
             spacing: 8
             StackLayout {
                 visible: !(root.narrow && root.paneOpen)   // narrow: the pane takes the page's place
-                currentIndex: root.page
+                currentIndex: root.pages.indexOf(root.page)
                 Layout.fillWidth: true
                 Layout.fillHeight: true
 
@@ -2072,7 +2073,7 @@ Item {
                         text: root.onlyMine ? "You haven't reported anything yet. Use the Report tab to raise a problem."
                                             : "No reports yet. Use the Report tab to raise the first one."
                         buttonText: "Report a problem"
-                        onActivated: root.page = 1
+                        onActivated: root.openPage("report")
                     }
                     RowLayout {   // the four columns
                         spacing: 12
@@ -2316,7 +2317,7 @@ Item {
                             Layout.preferredHeight: 40
                             allowed: root.approved && reportPage.missing === ""
                             onClicked: root.run("report", [category.currentText, reportPage.pick, landmark.text, reportText.text],
-                                                function () { reportText.text = ""; landmark.text = ""; reportPage.pick = ""; root.page = 0 })
+                                                function () { reportText.text = ""; landmark.text = ""; reportPage.pick = ""; root.openPage("board") })
                         }
                         Help { visible: root.approved && reportPage.missing !== ""; text: reportPage.missing }
                     }
@@ -2927,7 +2928,7 @@ Item {
                             return
                         }
                         root.notice = code + " is back on the board, in Reported. It carries its whole history and shows Reopened " + (i.reopen_count + 1) + "×."
-                        root.openPage(0)
+                        root.openPage("board")
                     })
                 }
                 ColumnLayout {
@@ -2937,7 +2938,7 @@ Item {
                     RowLayout {
                         Layout.fillWidth: true; Layout.bottomMargin: 8
                         Item { visible: !root.narrow; Layout.fillWidth: true }
-                        FramedButton { text: !root.narrow ? "Close" : root.page === 5 ? "← History" : "← Board"; onClicked: root.closeIssue() }
+                        FramedButton { text: !root.narrow ? "Close" : root.page === "history" ? "← History" : "← Board"; onClicked: root.closeIssue() }
                     }
                     Flow {   // code, stage, reopens, the reporter's call to action, category
                         Layout.fillWidth: true; Layout.bottomMargin: 4

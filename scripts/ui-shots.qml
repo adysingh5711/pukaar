@@ -12,8 +12,6 @@ Window {
     readonly property var widths: [800, 1280, 1400]
     readonly property var states: ["none", "pending", "resident", "steward", "admin"]
     readonly property var pages: ["board", "history", "report", "members", "anchor", "identity", "issue"]
-    // Main.qml before named pages kept a StackLayout index; strings after.
-    readonly property var pageIndex: ({ board: 0, report: 1, members: 2, anchor: 3, identity: 4, history: 5 })
 
     QtObject {
         id: logos
@@ -125,7 +123,6 @@ Window {
         return out
     }
     property int job: -1
-    function go(name) { var p = typeof view.item.page === "number" ? pageIndex[name] : name; view.item.openPage(p) }
     function next() {
         if (++job >= jobs.length) { Qt.quit(); return }
         var j = jobs[job], v = view.item
@@ -137,8 +134,8 @@ Window {
         }
         width = j.width
         v.closeIssue()
-        if (j.page === "issue") { go("board"); v.openIssue(logos.issues[3].id) }
-        else if (j.page !== "first-run") go(j.page)
+        if (j.page === "issue") { v.openPage("board"); v.openIssue(logos.issues[3].id) }
+        else if (j.page !== "first-run") v.openPage(j.page)
         if (j.page === "anchor") v.checkpoint = logos.reply("checkpoint_now")
         focusSink.forceActiveFocus()
         shot.start()
