@@ -37,7 +37,7 @@ Item {
     // A restored identity waits for its own history before signing anything (core refuses meanwhile).
     readonly property bool syncing: !!me.syncing_own_history
     // ---- shell (design/proposal/NOTES.md section 3) ----
-    readonly property var pages: ["board", "report", "members", "site", "anchor", "profile", "history"]   // the StackLayout's children, in order
+    readonly property var pages: ["board", "report", "members", "site", "proof", "profile", "history"]   // the StackLayout's children, in order
     property string page: "board"
     // The sidebar is expanded (216 px) from 1100 px of window, an 80 px icon rail below; the user's
     // toggle ("expanded" / "collapsed", "" = never pressed) wins at every width and is remembered.
@@ -288,6 +288,9 @@ Item {
     // place() without its code, which the card sets apart; "Other" shows its landmark bare.
     function placeName(i) { return i.location === "other" ? (i.landmark || "") : place(i).substr(i.location.length + 1) }
     function plural(n, word) { return n + " " + word + (n === 1 ? "" : "s") }
+    // The trust status the sidebar, History, Site and Proof show. site_info does not report anchors
+    // yet, so "last anchored" waits for a core change; conflicts are the forks the core found.
+    readonly property string conflicts: info.forks > 0 ? plural(info.forks, "conflict") : "no conflicts"
     // A place that takes no reports, in words: "retired" or "removes in 12 days" ("" = active).
     function placeState(l) {
         if (l.state === "pending_removal")
@@ -747,6 +750,12 @@ Item {
         text: code; mono: true
         Accessible.name: "History of " + code
         onClicked: root.showPlace(code)
+    }
+    // The trust status as a link to Proof (History and Site; the sidebar has its own trust line).
+    component ProofLink: LinkButton {
+        text: "Proof of history · " + root.conflicts + "  ›"
+        Accessible.name: "Open Proof of history, " + root.conflicts
+        onClicked: root.openPage("proof")
     }
 
     // One issue card: on the board, or `flat` as a History row (no frame, a rule under it, the code
@@ -1622,8 +1631,7 @@ Item {
                     model: [
                         { label: "Board", icon: "board", page: "board" },
                         { label: "Report", icon: "report", page: "report" },
-                        { label: "History", icon: "hist", page: "history" },
-                        { label: "Anchor", icon: "anchor", page: "anchor" }
+                        { label: "History", icon: "hist", page: "history" }
                     ].filter(function (e) { return root.approved || e.page !== "report" })   // a pending key cannot report
                      .concat(root.isAdmin ? [{ label: "Members", icon: "members", page: "members", admin: true },   // admin: the heading and the waiting count
                                              { label: "Site", icon: "pin", page: "site" }] : [])
@@ -1673,6 +1681,14 @@ Item {
                         color: root.failed(root.me.delivery) ? root.t.sbDanger : sidebar.on
                         font.pointSize: root.smallSize; font.weight: Font.Medium
                     }
+                }
+                NavItem {   // trust: the record's status; opens Proof
+                    visible: root.inSite
+                    Layout.leftMargin: sidebar.open ? -6 : 0; Layout.rightMargin: Layout.leftMargin; leftPadding: 6   // expanded, the icon lines up with the delivery dot
+                    text: "Proof · " + root.conflicts; glyph: "anchor"
+                    current: root.page === "proof"; compact: !sidebar.open
+                    Accessible.name: "Proof of history, " + root.conflicts + ". Open Proof"
+                    onClicked: root.openPage("proof")
                 }
                 AbstractButton {   // you: name, fingerprint, role; opens Profile
                     id: you
@@ -2617,17 +2633,24 @@ Item {
                             }
                         }
                     }
+                    ProofLink { Layout.topMargin: 8 }
                 }
 
-                // Anchor: compute, run the printed spel command in a terminal, record the reference
+                // Proof (from the trust line, History and Site): the record's status, then the three
+                // anchor steps for any member: compute, run the printed spel command, record the reference
                 TabPage {
                     enabled: !root.syncing
                     PageHead {
-                        title: "Anchor"
-                        lede: "An anchor writes a fingerprint of everyone's history to the Logos blockchain (LEZ), so no one, "
-                            + "not even the admin, can quietly rewrite or delete past events. Anyone can recompute it from their own copy and compare."
+                        title: "Proof of history"
+                        lede: "Anyone can check that the record was not changed after the fact. An anchor writes a fingerprint of everyone's "
+                            + "history to the Logos blockchain (LEZ), so no one, not even the admin, can quietly rewrite or delete past events."
                     }
+                    Note { text: root.plural(root.info.events || 0, "event") + " · " + root.conflicts; font.weight: Font.DemiBold }
+                    Help { visible: !root.approved; text: "Members can anchor the record. After approval you can do this too." }
+                    Heading { visible: root.approved; text: "Anchor now" }
+                    Help { visible: root.approved; text: "Needs a terminal and a LEZ account." }
                     Step {
+                        visible: root.approved
                         n: 1; title: "Compute the checkpoint"
                         ActionButton { text: "Compute checkpoint"; kind: "primary"; onClicked: root.run("checkpoint_now", [], function (r) { if (r && r.heads_root) root.checkpoint = r }) }
                         Label {
@@ -2636,8 +2659,9 @@ Item {
                         }
                     }
                     Step {
-                        n: 2; title: "Run the command"
-                        Help { text: "Copy this command and run it from programs/pukaar_registry/ in a terminal. Replace <YOUR_PUBLIC_ACCOUNT> with your LEZ account." }
+                        visible: root.approved
+                        n: 2; title: "Copy the command"
+                        Help { text: "Run it in programs/pukaar_registry/ in a terminal. Replace <YOUR_PUBLIC_ACCOUNT> with your LEZ account." }
                         FramedTextArea {
                             readOnly: true; mono: true; boxHeight: 112
                             name: "spel anchor command"
@@ -2646,14 +2670,15 @@ Item {
                         }
                     }
                     Step {
-                        n: 3; title: "Record the anchor"
-                        Help { text: "Paste the tx hash or pda:<id> that spel prints, then record it." }
+                        visible: root.approved
+                        n: 3; title: "Record the reference"
+                        Help { text: "Paste the reference the command prints, then record it." }
                         LabelledField {
                             id: anchorField
-                            label: "Anchor reference"
-                            placeholder: "e.g. 0x9f2c…e1 or pda:<account id> printed by spel"
+                            label: "Reference"
+                            placeholder: "e.g. 0x9f2c…e1 or pda:<account id>"
                             mono: true
-                            buttonText: "Record anchor"
+                            buttonText: "Record"
                             buttonEnabled: !!root.checkpoint && anchorField.text.trim() !== ""
                             onSubmitted: {
                                 root.run("record_anchor", [JSON.stringify(root.checkpoint.heads), anchorField.text],
@@ -2798,6 +2823,7 @@ Item {
                             : "Every resolved and closed issue, newest first. The board shows resolved issues for 14 days and closed ones for 30; "
                               + "after that they are only here. <b>Nothing is deleted</b>, and any of them can be reopened."
                     }
+                    ProofLink {}
                     RowLayout {
                         Layout.fillWidth: true; Layout.topMargin: 8
                         spacing: 12

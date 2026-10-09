@@ -11,7 +11,7 @@ Window {
     readonly property var args: Qt.application.arguments.slice(Qt.application.arguments.indexOf("--") + 1)
     readonly property var widths: [800, 1280, 1400]
     readonly property var states: ["none", "pending", "resident", "steward", "admin"]
-    readonly property var pages: ["board", "history", "report", "members", "site", "anchor", "profile", "issue"]
+    readonly property var pages: ["board", "history", "report", "members", "site", "proof", "profile", "issue"]
 
     QtObject {
         id: logos
@@ -136,7 +136,7 @@ Window {
         v.closeIssue()
         if (j.page === "issue") { v.openPage("board"); v.openIssue(logos.issues[3].id) }
         else if (j.page !== "first-run") v.openPage(j.page)
-        if (j.page === "anchor") v.checkpoint = logos.reply("checkpoint_now")
+        if (j.page === "proof") v.checkpoint = logos.reply("checkpoint_now")
         focusSink.forceActiveFocus()
         shot.start()
     }
