@@ -29,3 +29,5 @@ graphify-out/cache/
 graphify-out/manifest.json
 graphify-out/graph.html
 graphify-out/.graphify_*
+
+bug-report/

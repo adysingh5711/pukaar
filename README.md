@@ -134,7 +134,7 @@ Write a fingerprint of everyone's history to the Logos blockchain (LEZ). Three s
 
 | Component | Path | Status |
 |---|---|---|
-| Rules engine (`pukaar_logic`): events, chains, reducer, sync, checkpoints, persistence, identity backup | `modules/pukaar_core/rust-lib/logic/` | **Done.** 111 tests, clippy `-D warnings` clean, fuzzed in CI |
+| Rules engine (`pukaar_logic`): events, chains, reducer, sync, checkpoints, persistence, identity backup | `modules/pukaar_core/rust-lib/logic/` | **Done.** 116 tests, clippy `-D warnings` clean, fuzzed in CI |
 | Checkpoint registry (`pukaar_registry`), a SPEL program on LEZ | `programs/pukaar_registry/` | **Done.** Deployed and anchored on localnet ([record](programs/pukaar_registry/ANCHOR.md)) |
 | Logos core module (`pukaar_core`), a Rust cdylib plus Delivery glue | `modules/pukaar_core/` | **Done.** Runs in the standalone Logos host and inside Basecamp 0.3.1 |
 | QML UI module (`pukaar_ui`) | `modules/pukaar_ui/` | **Done.** Board, Report, Members, Anchor and Identity tabs |
@@ -199,7 +199,7 @@ A one-instruction [SPEL](https://github.com/logos-co/spel) program ([source](pro
 
 ```bash
 cd modules/pukaar_core/rust-lib/logic
-cargo test                                   # 111 tests
+cargo test                                   # 116 tests
 cargo clippy --all-targets -- -D warnings
 cargo +nightly fuzz run decode -- -max_total_time=60   # needs cargo-fuzz
 ```
@@ -316,7 +316,7 @@ scripts/                   demo.sh, window.sh, basecamp.sh
 - **v0.1.1:** guided site setup, edit and remove locations (30-day pending removal), a change log, service rules as form fields, deterministic fork resolution.
 - **v0.2.0:** UI revamp: light and dark themes, a collapsible sidebar, redesigned board, cards and issue pane (with a "Why it isn't closed yet" card), a board history window with a History page, and Hindi user content.
 - **v0.2.1:** fix: calls no longer hang for 20 s when Logos Delivery is unreachable (5 s Delivery timeouts plus a 10 s back-off), and clearer error text when the core does not answer.
-- **v0.2.2:** fix: sync works again (Pukaar turns off Delivery's SDS causal-history wait; [upstream report](bug-report/sds-incoming-buffer-never-expires-on-missing-dependencies.md)), moved to the `logos.dev` network, recovery after a Delivery restart, and names an admin gives residents now show on both sides.
+- **v0.2.2:** fix: sync works again (Pukaar turns off Delivery's SDS causal-history wait), moved to the `logos.dev` network, recovery after a Delivery restart, and names an admin gives residents now show on both sides.
 - **L1+:** anchoring from the app's Anchor tab on localnet and a testnet anchor; an "identity active on another device" warning; Heads messages that carry head ids, so anti-entropy also repairs equal-length forks.
 - **L2:** LAN relay for sites without internet, a password-sealed key file, a site-health view (category level only, no per-person ranking), export and verify bundles, evidence photos on Logos Storage (EXIF stripped), UI tests, and a steward guide in Hindi and English.
 - **L3:** an anonymous reporting lane with an RLN rate limit, a phone path, and 2-of-3 admin grants.
