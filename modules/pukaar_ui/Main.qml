@@ -37,7 +37,7 @@ Item {
     // A restored identity waits for its own history before signing anything (core refuses meanwhile).
     readonly property bool syncing: !!me.syncing_own_history
     // ---- shell (design/proposal/NOTES.md section 3) ----
-    readonly property var pages: ["board", "report", "members", "anchor", "profile", "history"]   // the StackLayout's children, in order
+    readonly property var pages: ["board", "report", "members", "site", "anchor", "profile", "history"]   // the StackLayout's children, in order
     property string page: "board"
     // The sidebar is expanded (216 px) from 1100 px of window, an 80 px icon rail below; the user's
     // toggle ("expanded" / "collapsed", "" = never pressed) wins at every width and is remembered.
@@ -51,7 +51,7 @@ Item {
     readonly property int sidebarWidth: sidebarOpen && !overlay ? 216 : 80     // what the content gives up
     function toggleSidebar() { if (overlay) overlayOpen = !overlayOpen; else prefs.sidebar = sidebarOpen ? "collapsed" : "expanded" }
     function openPage(name) { page = name; overlayOpen = false }
-    onIsAdminChanged: if (!isAdmin && page === "members") { openPage("board"); notice = "Your admin role was removed, so Members is closed." }
+    onIsAdminChanged: if (!isAdmin && (page === "members" || page === "site")) { openPage("board"); notice = "Your admin role was removed, so the admin pages are closed." }
     function showPlace(code) { historyPlace = code; openPage("history") }   // a place code's link: that place in History
     // The issue pane sits beside the Board and History pages (both open issues); narrow, it replaces them.
     readonly property bool paneOpen: selected !== null && (page === "board" || page === "history")
@@ -498,6 +498,7 @@ Item {
         cmt: "M3 4h14v9.5H9.5L5.5 17v-3.5H3z",
         reopen: "M4 10a6 6 0 1 0 2-4.5" + "M4 3v4h4",
         flag: "M5 18V3M5 3.5h10l-2.5 3.5L15 10.5H5",
+        pin: "M10 18s-5.5-5.2-5.5-9.5a5.5 5.5 0 0 1 11 0C15.5 12.8 10 18 10 18z" + circ(10, 8.5, 2),
         eye: "M1.5 10S4.5 4.5 10 4.5 18.5 10 18.5 10 15.5 15.5 10 15.5 1.5 10 1.5 10z" + circ(10, 10, 2.5),
         update: "M16 4v4h-4" + "M15.5 8A6 6 0 1 0 16 12",
         search: circ(8.5, 8.5, 5) + "M12.5 12.5L17 17",
@@ -1624,7 +1625,8 @@ Item {
                         { label: "History", icon: "hist", page: "history" },
                         { label: "Anchor", icon: "anchor", page: "anchor" }
                     ].filter(function (e) { return root.approved || e.page !== "report" })   // a pending key cannot report
-                     .concat(root.isAdmin ? [{ label: "Members", icon: "members", page: "members", admin: true }] : [])
+                     .concat(root.isAdmin ? [{ label: "Members", icon: "members", page: "members", admin: true },   // admin: the heading and the waiting count
+                                             { label: "Site", icon: "pin", page: "site" }] : [])
                     delegate: ColumnLayout {
                         id: entry
                         required property var modelData
@@ -1822,7 +1824,7 @@ Item {
             }
             CollapsibleSection {
                 title: "Create a site"; aside: "(site admin only)"
-                Help { text: "Nothing is published until you press Create site. Places can be added later too, in Members." }
+                Help { text: "Nothing is published until you press Create site. Places can be added later too, on the Site page." }
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 16
@@ -1957,7 +1959,7 @@ Item {
                         Layout.preferredHeight: 40
                         allowed: advanced.open ? adminName.text.trim() !== "" : setup.problem === ""
                         onClicked: root.run("site_create", [advanced.open ? setup.withAdmin(advancedJson.text) : setup.genesisJson()], null,
-                                            "Start with fewer places, then add the rest after creating, via Members → Add a location.")
+                                            "Start with fewer places, then add the rest after creating, via Site → Add a place.")
                     }
                     Help { visible: !advanced.open && setup.problem !== ""; text: setup.problem }
                 }
@@ -2306,15 +2308,13 @@ Item {
                     }
                 }
 
-                // Members (admin): grant pending keys after the fingerprint is read aloud. Five boxes,
+                // Members (admin): grant pending keys after the fingerprint is read aloud. Two boxes,
                 // only "Waiting for approval" open at first (also when it is empty).
                 TabPage {
                     id: membersPage
                     maxWidth: 1040
                     enabled: !root.syncing
-                    readonly property var renamed: root.locations.filter(function (l) { return !!l.renamed_from })
-                    readonly property int retiredCount: root.locations.filter(function (l) { return l.state === "retired" }).length
-                    PageHead { title: "Members"; lede: "Approve people, manage roles and the list of places." }
+                    PageHead { title: "Members"; lede: "Approve people and manage their roles." }
                     CollapsibleSection {
                         title: "Waiting for approval"; aside: "· " + root.pending.length
                         open: true; pad: 0
@@ -2419,60 +2419,81 @@ Item {
                             }
                         }
                     }
+                }
+
+                // Site (admin): the places, one list with its add form, and their change log.
+                TabPage {
+                    id: sitePage
+                    maxWidth: 1040
+                    enabled: !root.syncing
+                    property bool adding: false    // "Add a place" was pressed: its form shows above the list
+                    readonly property var renamed: root.locations.filter(function (l) { return !!l.renamed_from })
+                    readonly property int retiredCount: root.locations.filter(function (l) { return l.state === "retired" }).length
+                    PageHead { title: "Site"; lede: "Add, edit, retire and remove places, and see what changed." }
                     CollapsibleSection {
-                        title: "Add a location"
-                        Help { text: "For a place found on the site walk. It joins the list straight away." }
+                        title: "Places"
+                        aside: "· " + root.locations.length + " places" + (sitePage.retiredCount > 0 ? ", " + sitePage.retiredCount + " retired" : "")
+                        open: true; pad: 0
                         RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 16
-                            FormRow {
-                                label: "Group"
-                                Layout.fillWidth: false
-                                FramedCombo {
-                                    id: locGroup
-                                    Layout.preferredWidth: 240
-                                    Accessible.name: "Group for the new location"
-                                    model: root.groupNames.concat(["New group…"])
-                                    onActivated: locNewGroup.text = ""     // each "New group…" starts blank
+                            Layout.fillWidth: true; Layout.margins: 16; Layout.bottomMargin: 8
+                            spacing: 12
+                            Help {
+                                text: "Nothing is deleted. A retired place takes no new reports; one with open issues can't be retired. "
+                                    + "A place nobody ever reported can be removed: it is hidden after 30 days (undo until then), and its signed events stay in everyone's log. "
+                                    + "Edit changes a place's name and group; its code never changes."
+                            }
+                            FramedButton {
+                                Layout.alignment: Qt.AlignTop
+                                text: sitePage.adding ? "Cancel" : "Add a place"; iconName: sitePage.adding ? "x" : "plus"
+                                onClicked: sitePage.adding = !sitePage.adding
+                            }
+                        }
+                        ColumnLayout {
+                            visible: sitePage.adding
+                            Layout.fillWidth: true; Layout.margins: 16; Layout.topMargin: 0
+                            spacing: 12
+                            Help { text: "For a place found on the site walk. It joins the list straight away." }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 16
+                                FormRow {
+                                    label: "Group"
+                                    Layout.fillWidth: false
+                                    FramedCombo {
+                                        id: locGroup
+                                        Layout.preferredWidth: 240
+                                        Accessible.name: "Group for the new location"
+                                        model: root.groupNames.concat(["New group…"])
+                                        onActivated: locNewGroup.text = ""     // each "New group…" starts blank
+                                    }
+                                }
+                                FormRow {
+                                    visible: locGroup.currentIndex === root.groupNames.length
+                                    label: "New group name"
+                                    FramedField { id: locNewGroup; Layout.fillWidth: true; maximumLength: 500; Accessible.name: "New group name"; placeholderText: "e.g. Kitchens" }
                                 }
                             }
-                            FormRow {
-                                visible: locGroup.currentIndex === root.groupNames.length
-                                label: "New group name"
-                                FramedField { id: locNewGroup; Layout.fillWidth: true; maximumLength: 500; Accessible.name: "New group name"; placeholderText: "e.g. Kitchens" }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 12
+                                FormRow {
+                                    label: "Code"
+                                    Layout.fillWidth: false
+                                    FramedField { id: locCode; Layout.preferredWidth: 140; maximumLength: 500; Accessible.name: "Code"; placeholderText: "e.g. W-04" }
+                                }
+                                FormRow {
+                                    label: "Name"
+                                    FramedField { id: locLabel; Layout.fillWidth: true; maximumLength: 500; Accessible.name: "Name"; placeholderText: "e.g. Tap behind tent 4"; onAccepted: addLoc.submit() }
+                                }
                             }
-                        }
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 12
-                            FormRow {
-                                label: "Code"
-                                Layout.fillWidth: false
-                                FramedField { id: locCode; Layout.preferredWidth: 140; maximumLength: 500; Accessible.name: "Code"; placeholderText: "e.g. W-04" }
+                            ActionButton {
+                                id: addLoc
+                                text: "Add place"; kind: "primary"
+                                readonly property string group: locGroup.currentIndex === root.groupNames.length ? locNewGroup.text.trim() : locGroup.currentText
+                                allowed: locCode.text.trim() !== "" && locLabel.text.trim() !== "" && group !== ""
+                                onClicked: root.run("add_location", [locCode.text, locLabel.text, group],
+                                                    function () { locCode.text = ""; locLabel.text = ""; locNewGroup.text = "" })
                             }
-                            FormRow {
-                                label: "Name"
-                                FramedField { id: locLabel; Layout.fillWidth: true; maximumLength: 500; Accessible.name: "Name"; placeholderText: "e.g. Tap behind tent 4"; onAccepted: addLoc.submit() }
-                            }
-                        }
-                        ActionButton {
-                            id: addLoc
-                            text: "Add location"; kind: "primary"
-                            readonly property string group: locGroup.currentIndex === root.groupNames.length ? locNewGroup.text.trim() : locGroup.currentText
-                            allowed: locCode.text.trim() !== "" && locLabel.text.trim() !== "" && group !== ""
-                            onClicked: root.run("add_location", [locCode.text, locLabel.text, group],
-                                                function () { locCode.text = ""; locLabel.text = ""; locNewGroup.text = "" })
-                        }
-                    }
-                    CollapsibleSection {
-                        title: "Locations"
-                        aside: "· " + root.locations.length + " places" + (membersPage.retiredCount > 0 ? ", " + membersPage.retiredCount + " retired" : "")
-                        pad: 0
-                        Help {
-                            Layout.margins: 16; Layout.bottomMargin: 8
-                            text: "Nothing is deleted. A retired place takes no new reports; one with open issues can't be retired. "
-                                + "A place nobody ever reported can be removed: it is hidden after 30 days (undo until then), and its signed events stay in everyone's log. "
-                                + "Edit changes a place's name and group; its code never changes."
                         }
                         PlaceBrowser {
                             bare: true
@@ -2568,14 +2589,14 @@ Item {
                         }
                     }
                     CollapsibleSection {
-                        title: "Change log"; aside: "· " + (root.removedLocations.length + membersPage.renamed.length)
+                        title: "Change log"; aside: "· " + (root.removedLocations.length + sitePage.renamed.length)
                         pad: 0
                         Help {
                             Layout.margins: 16; Layout.bottomMargin: 8
                             text: "Removed places are hidden from every list, retired ones included. Removed means hidden: the signed events stay in everyone's log."
                         }
                         Help {
-                            visible: root.removedLocations.length === 0 && membersPage.renamed.length === 0
+                            visible: root.removedLocations.length === 0 && sitePage.renamed.length === 0
                             Layout.margins: 16; Layout.topMargin: 0
                             text: "Nothing removed or renamed yet."
                         }
@@ -2589,7 +2610,7 @@ Item {
                             }
                         }
                         Repeater {
-                            model: membersPage.renamed
+                            model: sitePage.renamed
                             delegate: LogRow {
                                 required property var modelData
                                 text: modelData.code + "  renamed from “" + modelData.renamed_from + "” to “" + modelData.label + "”"

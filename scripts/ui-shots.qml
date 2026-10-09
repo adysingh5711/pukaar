@@ -11,7 +11,7 @@ Window {
     readonly property var args: Qt.application.arguments.slice(Qt.application.arguments.indexOf("--") + 1)
     readonly property var widths: [800, 1280, 1400]
     readonly property var states: ["none", "pending", "resident", "steward", "admin"]
-    readonly property var pages: ["board", "history", "report", "members", "anchor", "profile", "issue"]
+    readonly property var pages: ["board", "history", "report", "members", "site", "anchor", "profile", "issue"]
 
     QtObject {
         id: logos
