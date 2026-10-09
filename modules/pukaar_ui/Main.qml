@@ -32,6 +32,7 @@ Item {
     readonly property bool inSite: !!(me && me.site)
     readonly property bool staff: me.role === "Steward" || me.role === "Admin"
     readonly property bool approved: !!me.role      // a pending key has no role yet; the core rejects its reports
+    readonly property bool awaitingApproval: inSite && !approved && !!info.name   // joined, genesis here, not yet granted a role
     readonly property bool isAdmin: me.role === "Admin"
     // A restored identity waits for its own history before signing anything (core refuses meanwhile).
     readonly property bool syncing: !!me.syncing_own_history
@@ -347,9 +348,9 @@ Item {
     // "Not available to you": every action the pane hides or disables, one line per reason, in the
     // mockup's words ("Reopen and Comment need a note first."). The core refuses these without a note.
     function unavailable(i, hasNote) {
-        var note = hasNote ? "" : "note", steward = stewardWhy(i)
-        var why = [["Acknowledge", staff ? "" : steward]]
-        ;["Post update", "Claim fixed", "Won't fix"].forEach(function (a) { why.push([a, steward || note]) })
+        var note = hasNote ? "" : "note", steward = stewardWhy(i), why = []
+        // a resident's steward actions are hidden, not explained: only staff get their stage reasons
+        if (staff) ["Post update", "Claim fixed", "Won't fix"].forEach(function (a) { why.push([a, steward || note]) })
         // a finished issue's Reopen has its own reason box (Still broken? Reopen)
         why.push(["Confirm it's fixed", confirmWhy(i)], ["Reopen", reopenWhy(i) || (isTerminal(i.status) ? "" : note)], ["Comment", note])
         var reasons = [], acts = {}
@@ -1083,7 +1084,7 @@ Item {
     // "Only my reports": one switch shared by the Board and History. A Binding, not a plain binding:
     // a click writes `checked`, and the other page's box must still follow.
     component MineCheck: FramedCheck {
-        text: "Only my reports"
+        text: "Only my reports"; visible: root.approved
         Binding on checked { value: root.onlyMine }
         onToggled: root.onlyMine = checked
     }
@@ -1647,7 +1648,8 @@ Item {
                         { label: "History", icon: "hist", page: "history" },
                         { label: "Anchor", icon: "anchor", page: "anchor" },
                         { label: "Identity", icon: "identity", page: "identity" }
-                    ].concat(root.isAdmin ? [{ label: "Members", icon: "members", page: "members", admin: true }] : [])
+                    ].filter(function (e) { return root.approved || e.page !== "report" })   // a pending key cannot report
+                     .concat(root.isAdmin ? [{ label: "Members", icon: "members", page: "members", admin: true }] : [])
                     delegate: ColumnLayout {
                         id: entry
                         required property var modelData
@@ -1794,6 +1796,10 @@ Item {
             text: "Waiting for site data… If this lasts, check the site id, or wait for a member to come online."
             buttonText: "Leave this site"
             onActivated: root.leave()
+        }
+        Flash {   // joined and waiting for a role: what to do, and what comes after
+            visible: root.awaitingApproval
+            text: "Waiting for the admin to approve you. Your fingerprint: " + (root.me.fingerprint || "") + ". Read it aloud at the kiosk. After approval you can report faults, confirm fixes and comment."
         }
         Flash {
             visible: root.inSite && root.syncing
@@ -2082,9 +2088,10 @@ Item {
                     Flash {   // an empty board says why, and what to do
                         visible: root.boardCount === 0
                         Layout.bottomMargin: 8
-                        text: root.onlyMine ? "You haven't reported anything yet. Use the Report tab to raise a problem."
-                                            : "No reports yet. Use the Report tab to raise the first one."
-                        buttonText: "Report a problem"
+                        text: !root.approved ? "No reports yet."
+                            : root.onlyMine ? "You haven't reported anything yet. Use Report to raise a fault."
+                                            : "No reports yet. Use Report to raise the first one."
+                        buttonText: root.approved ? "Report a fault" : ""
                         onActivated: root.openPage("report")
                     }
                     RowLayout {   // the four columns
@@ -2222,40 +2229,6 @@ Item {
                     readonly property string missing: reportText.text.trim() === "" ? "Describe the problem in one line."
                         : pick === "" ? "Pick where it is."
                         : pick === "other" && landmark.text.trim() === "" ? "Describe the place." : ""
-                    Rectangle {   // a key with no role yet: may draft a report, but Report stays off until the admin approves it
-                        visible: !root.approved
-                        Layout.fillWidth: true; Layout.bottomMargin: 8
-                        implicitHeight: waitCol.implicitHeight + 2
-                        radius: 8; color: root.t.card; border.color: root.t.bd
-                        ColumnLayout {
-                            id: waitCol
-                            x: 1; y: 1; width: parent.width - 2
-                            spacing: 0
-                            Rectangle {
-                                Layout.fillWidth: true; implicitHeight: 48; color: root.t.well; topLeftRadius: 7; topRightRadius: 7
-                                Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: root.t.bd }
-                                RowLayout {
-                                    anchors { fill: parent; leftMargin: 16; rightMargin: 16 }
-                                    spacing: 10
-                                    Icon { name: "mega"; size: 16; color: root.t.fg }
-                                    Label { Layout.fillWidth: true; text: "Waiting for the admin to approve you"; elide: Text.ElideRight; font.weight: Font.DemiBold; font.pointSize: root.baseSize * 15 / 14 }
-                                }
-                            }
-                            RowLayout {
-                                Layout.fillWidth: true; Layout.margins: 16
-                                spacing: 16
-                                ColumnLayout {
-                                    spacing: 4
-                                    Label { text: "Your fingerprint"; font.pointSize: root.smallSize; color: root.t.muted }
-                                    Fingerprint { big: true; text: root.me.fingerprint || "" }
-                                }
-                                Label {
-                                    Layout.fillWidth: true; wrapMode: Text.Wrap
-                                    text: "Read your fingerprint aloud at the kiosk; you can report once you are approved. Until then you can read the board."
-                                }
-                            }
-                        }
-                    }
                     PageHead { title: "What's wrong?"; lede: "A line or two is enough. A steward will see it on the board." }
                     FormRow {
                         label: "Category"
@@ -2327,11 +2300,11 @@ Item {
                             id: reportBtn
                             text: "Report"; kind: "primary"
                             Layout.preferredHeight: 40
-                            allowed: root.approved && reportPage.missing === ""
+                            allowed: reportPage.missing === ""
                             onClicked: root.run("report", [category.currentText, reportPage.pick, landmark.text, reportText.text],
                                                 function () { reportText.text = ""; landmark.text = ""; reportPage.pick = ""; root.openPage("board") })
                         }
-                        Help { visible: root.approved && reportPage.missing !== ""; text: reportPage.missing }
+                        Help { visible: reportPage.missing !== ""; text: reportPage.missing }
                     }
                     Rectangle { visible: !root.staff; Layout.fillWidth: true; Layout.topMargin: 12; implicitHeight: 1; color: root.t.bd }
                     Heading { visible: !root.staff; text: "Your name" }
@@ -3080,6 +3053,7 @@ Item {
                         }
                     }
                     FormRow {
+                        visible: root.approved
                         label: "Note"; sub: "(what was seen, done or why)"
                         FramedField { id: note; Layout.fillWidth: true; maximumLength: 500; Accessible.name: "Note"; placeholderText: "e.g. Pump checked, handle is loose"; onAccepted: comment.submit() }
                     }
@@ -3166,13 +3140,14 @@ Item {
                         }
                         ActionGroup {
                             title: "For everyone"
+                            visible: root.approved
                             ActionButton { id: comment; allowed: detail.hasNote; text: "Comment"; onClicked: detail.act("comment", 0) }
                         }
                     }
                     Rectangle {   // what this viewer can't do here, and why (the same rules as above)
                         id: na
                         readonly property var lines: root.unavailable(detail.issue, detail.hasNote)
-                        visible: lines.length > 0 || detail.finished
+                        visible: root.approved && (lines.length > 0 || detail.finished)
                         Layout.fillWidth: true; Layout.topMargin: 14; Layout.bottomMargin: 16
                         implicitHeight: naCol.implicitHeight + 20
                         radius: 6; color: root.t.well; border.color: root.t.bd
