@@ -37,7 +37,7 @@ Item {
     // A restored identity waits for its own history before signing anything (core refuses meanwhile).
     readonly property bool syncing: !!me.syncing_own_history
     // ---- shell (design/proposal/NOTES.md section 3) ----
-    readonly property var pages: ["board", "report", "members", "anchor", "identity", "history"]   // the StackLayout's children, in order
+    readonly property var pages: ["board", "report", "members", "anchor", "profile", "history"]   // the StackLayout's children, in order
     property string page: "board"
     // The sidebar is expanded (216 px) from 1100 px of window, an 80 px icon rail below; the user's
     // toggle ("expanded" / "collapsed", "" = never pressed) wins at every width and is remembered.
@@ -223,7 +223,7 @@ Item {
     // Drop this device's copy of the site (the key stays); back to the first-run screen.
     function leave() {
         run("leave_site", [], function () {
-            closeIssue(); checkpoint = null; issues = []; setInfo(noInfo); seen = ({})
+            closeIssue(); page = "board"; checkpoint = null; issues = []; setInfo(noInfo); seen = ({})
         })
     }
     // Poll steps in order; the site-bound ones only once my_identity says we are in a site.
@@ -481,7 +481,6 @@ Item {
         report: "M3 8.5v3h2.5l6 4v-11l-6 4z" + "M14.5 7.5a3.5 3.5 0 0 1 0 5",
         members: circ(7.5, 7, 3) + "M2 17c.6-3 2.8-4.5 5.5-4.5S12.4 14 13 17" + circ(14, 6.5, 2.3) + "M14.5 11c1.9.3 3 1.7 3.5 4",
         anchor: circ(10, 4.5, 2) + "M10 6.5V17M6.5 9.5h7M3.5 11.5a6.5 6.5 0 0 0 13 0",
-        identity: circ(7, 10, 3.5) + "M10.5 10H18M15 10v3M17.5 10v2.2",
         signal: "M10 11.5v6" + circ(10, 10, 1.5) + "M6.5 6.5a5 5 0 0 0 0 7M13.5 6.5a5 5 0 0 1 0 7M4 4a8.5 8.5 0 0 0 0 12M16 4a8.5 8.5 0 0 1 0 12",
         user: circ(10, 6.5, 3.2) + "M3.5 17.5c.7-3.5 3.3-5.3 6.5-5.3s5.8 1.8 6.5 5.3",
         copy: box(7, 7, 10, 10, 1.5) + "M13 7V4.5A1.5 1.5 0 0 0 11.5 3h-7A1.5 1.5 0 0 0 3 4.5v7A1.5 1.5 0 0 0 4.5 13H7",
@@ -1612,29 +1611,6 @@ Item {
                         HoverHandler { id: cardHover }
                         SideTip { parent: siteCard; text: siteTitle.full; visible: !sidebar.open && cardHover.hovered }
                     }
-                    Label {
-                        visible: sidebar.open && root.inSite
-                        Layout.fillWidth: true
-                        text: "site  " + root.shortId(root.me.site || "")
-                        color: root.t.sbMuted; font.pointSize: root.smallSize; font.family: "monospace"
-                    }
-                    Button {   // Copy puts the full 64-hex id on the clipboard
-                        id: copyBtn
-                        visible: sidebar.open && root.inSite
-                        Layout.topMargin: 4
-                        implicitHeight: 36; leftPadding: 14; rightPadding: 14; topPadding: 0; bottomPadding: 0
-                        Accessible.name: "Copy the full site id"
-                        onClicked: root.copyText(root.me.site)
-                        contentItem: Row {
-                            spacing: 6
-                            Icon { name: "copy"; size: 16; color: root.t.sbFg; anchors.verticalCenter: parent.verticalCenter }
-                            Label { text: "Copy"; color: root.t.sbFg; font.pointSize: root.smallSize; font.weight: Font.Medium; anchors.verticalCenter: parent.verticalCenter }
-                        }
-                        background: Rectangle {
-                            radius: 6; color: copyBtn.hovered ? root.t.sbHover : "transparent"
-                            border.width: copyBtn.visualFocus ? 2 : 1; border.color: copyBtn.visualFocus ? root.t.focus : root.t.sbCtl
-                        }
-                    }
                 }
             }
             ColumnLayout {   // sections
@@ -1646,8 +1622,7 @@ Item {
                         { label: "Board", icon: "board", page: "board" },
                         { label: "Report", icon: "report", page: "report" },
                         { label: "History", icon: "hist", page: "history" },
-                        { label: "Anchor", icon: "anchor", page: "anchor" },
-                        { label: "Identity", icon: "identity", page: "identity" }
+                        { label: "Anchor", icon: "anchor", page: "anchor" }
                     ].filter(function (e) { return root.approved || e.page !== "report" })   // a pending key cannot report
                      .concat(root.isAdmin ? [{ label: "Members", icon: "members", page: "members", admin: true }] : [])
                     delegate: ColumnLayout {
@@ -1697,47 +1672,63 @@ Item {
                         font.pointSize: root.smallSize; font.weight: Font.Medium
                     }
                 }
-                GridLayout {   // you: name, fingerprint, role
+                AbstractButton {   // you: name, fingerprint, role; opens Profile
+                    id: you
                     visible: root.inSite
-                    Layout.fillWidth: true
-                    columns: sidebar.open ? 2 : 1; columnSpacing: 10; rowSpacing: 4
-                    Rectangle {
-                        Layout.alignment: Qt.AlignHCenter | Qt.AlignTop
-                        implicitWidth: 32; implicitHeight: 32; radius: 16; color: root.t.sbAv
-                        Label {
-                            anchors.centerIn: parent; visible: !!root.me.name
-                            text: root.initials(root.me.name)
-                            color: root.t.sbFg; font.pointSize: root.smallSize; font.bold: true
-                        }
-                        Icon { anchors.centerIn: parent; visible: !root.me.name; name: "user"; size: 18; color: root.t.sbFg }
+                    Layout.fillWidth: true; Layout.leftMargin: -6; Layout.rightMargin: -6   // the padding holds the hover fill and focus ring
+                    padding: 6
+                    hoverEnabled: true
+                    focusPolicy: Qt.StrongFocus
+                    Accessible.name: "You: " + (root.me.name || "pseudonym") + ", " + (root.me.role || "pending") + ". Open Profile"
+                    HoverHandler { cursorShape: Qt.PointingHandCursor }
+                    SideTip { text: "Profile"; visible: !sidebar.open && (you.hovered || you.visualFocus) }
+                    onClicked: root.openPage("profile")
+                    background: Rectangle {
+                        radius: 8
+                        color: root.page === "profile" ? root.t.sbActBg : you.hovered ? root.t.sbHover : "transparent"
+                        border.width: you.visualFocus ? 2 : 0; border.color: root.t.focus
                     }
-                    ColumnLayout {
-                        Layout.fillWidth: true; Layout.preferredWidth: 0; Layout.minimumWidth: 0   // the rail sets the width: a long fingerprint or role must wrap, not widen the column
-                        spacing: 2
-                        readonly property int align: sidebar.open ? Qt.AlignLeft : Qt.AlignHCenter
-                        Label { visible: sidebar.open; text: "you:"; color: root.t.sbMuted; font.pointSize: root.smallSize }
-                        Label {
-                            visible: sidebar.open; Layout.fillWidth: true
-                            text: root.me.name || "pseudonym"; color: root.t.sbFg; wrapMode: Text.WrapAnywhere
-                            font.pointSize: root.smallSize; font.weight: Font.DemiBold
-                        }
-                        Label {
-                            Layout.alignment: parent.align; Layout.maximumWidth: parent.width; wrapMode: Text.WrapAnywhere
-                            text: sidebar.fp; color: root.t.sbFg; font.pointSize: root.smallSize; font.family: "monospace"
-                        }
-                        Rectangle {   // role chip; a key with no role yet is "pending"
-                            readonly property bool pending: !root.me.role
-                            Layout.alignment: parent.align; Layout.maximumWidth: parent.width
-                            implicitWidth: roleText.implicitWidth + (sidebar.open ? 16 : 12); implicitHeight: roleText.implicitHeight
-                            radius: 12; color: "transparent"; border.color: pending ? root.t.sbDanger : root.t.sbCtl
+                    contentItem: GridLayout {
+                        columns: sidebar.open ? 3 : 1; columnSpacing: 10; rowSpacing: 4
+                        Rectangle {
+                            Layout.alignment: Qt.AlignHCenter | Qt.AlignTop
+                            implicitWidth: 32; implicitHeight: 32; radius: 16; color: root.t.sbAv
                             Label {
-                                id: roleText
-                                width: parent.width; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap
-                                lineHeight: 20; lineHeightMode: Text.FixedHeight
-                                text: root.me.role || (sidebar.open ? "pending: read your fingerprint at the kiosk" : "Pending")
-                                color: parent.pending ? root.t.sbDanger : root.t.sbFg; font.pointSize: root.smallSize
+                                anchors.centerIn: parent; visible: !!root.me.name
+                                text: root.initials(root.me.name)
+                                color: root.t.sbFg; font.pointSize: root.smallSize; font.bold: true
+                            }
+                            Icon { anchors.centerIn: parent; visible: !root.me.name; name: "user"; size: 18; color: root.t.sbFg }
+                        }
+                        ColumnLayout {
+                            Layout.fillWidth: true; Layout.preferredWidth: 0; Layout.minimumWidth: 0   // the rail sets the width: a long fingerprint or role must wrap, not widen the column
+                            spacing: 2
+                            readonly property int align: sidebar.open ? Qt.AlignLeft : Qt.AlignHCenter
+                            Label { visible: sidebar.open; text: "you:"; color: root.t.sbMuted; font.pointSize: root.smallSize }
+                            Label {
+                                visible: sidebar.open; Layout.fillWidth: true
+                                text: root.me.name || "pseudonym"; color: root.t.sbFg; wrapMode: Text.WrapAnywhere
+                                font.pointSize: root.smallSize; font.weight: Font.DemiBold
+                            }
+                            Label {
+                                Layout.alignment: parent.align; Layout.maximumWidth: parent.width; wrapMode: Text.WrapAnywhere
+                                text: sidebar.fp; color: root.t.sbFg; font.pointSize: root.smallSize; font.family: "monospace"
+                            }
+                            Rectangle {   // role chip; a key with no role yet is "pending"
+                                readonly property bool pending: !root.me.role
+                                Layout.alignment: parent.align; Layout.maximumWidth: parent.width
+                                implicitWidth: roleText.implicitWidth + (sidebar.open ? 16 : 12); implicitHeight: roleText.implicitHeight
+                                radius: 12; color: "transparent"; border.color: pending ? root.t.sbDanger : root.t.sbCtl
+                                Label {
+                                    id: roleText
+                                    width: parent.width; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap
+                                    lineHeight: 20; lineHeightMode: Text.FixedHeight
+                                    text: root.me.role || (sidebar.open ? "pending: read your fingerprint at the kiosk" : "Pending")
+                                    color: parent.pending ? root.t.sbDanger : root.t.sbFg; font.pointSize: root.smallSize
+                                }
                             }
                         }
+                        Icon { visible: sidebar.open; Layout.alignment: Qt.AlignVCenter; name: "chev"; size: 14; color: root.t.sbIcon }
                     }
                 }
             }
@@ -2029,7 +2020,7 @@ Item {
             }
             CollapsibleSection {
                 title: "Restore your identity"
-                Help { text: "Paste the backup made in the Identity tab, on your other device or before you reinstalled." }
+                Help { text: "Paste the backup made on the Profile page, on your other device or before you reinstalled." }
                 FormRow {
                     label: "Identity backup"
                     FramedTextArea {
@@ -2306,19 +2297,12 @@ Item {
                         }
                         Help { visible: reportPage.missing !== ""; text: reportPage.missing }
                     }
-                    Rectangle { visible: !root.staff; Layout.fillWidth: true; Layout.topMargin: 12; implicitHeight: 1; color: root.t.bd }
-                    Heading { visible: !root.staff; text: "Your name" }
-                    Help {
-                        visible: !root.staff
-                        text: "The admin may have named you when approving you; this replaces it. Set it empty to stay a pseudonym; the admin who granted your role can still link it. Staff are always named."
-                    }
-                    LabelledField {
-                        id: nameField
-                        visible: !root.staff
-                        label: "Display name"
-                        placeholder: "e.g. Asha (or leave empty to stay pseudonymous)"
-                        buttonText: "Set name"
-                        onSubmitted: root.run("set_profile", [nameField.text])
+                    RowLayout {   // no name yet: one line to Profile
+                        visible: !root.me.name
+                        Layout.topMargin: 8
+                        spacing: 6
+                        Help { Layout.fillWidth: false; text: "Reporting as " + root.who(root.me.key, root.me.name) + " ·" }
+                        LinkButton { text: "Set a name"; onClicked: root.openPage("profile") }
                     }
                 }
 
@@ -2658,9 +2642,32 @@ Item {
                     }
                 }
 
-                // Identity: a password-sealed backup, to continue as the same person after a reinstall
+                // Profile (the you block opens it): me on this device. Name, backup, invite, leave.
                 TabPage {
-                    PageHead { title: "Back up your identity"; lede: "Your identity is a key on this device. A backup lets you continue as the same person after a reinstall." }
+                    id: profilePage
+                    property bool leaving: false    // "Leave this site…" was pressed: Confirm and Cancel show
+                    PageHead { title: "You"; lede: root.esc(root.me.name || "pseudonym") + " · " + (root.me.role || "Pending") }
+                    FormRow {
+                        label: "Your code"; sub: root.approved ? "" : "(read it aloud at the kiosk)"
+                        Fingerprint { text: root.me.fingerprint || ""; big: !root.approved }
+                    }
+                    Heading { text: "Name" }
+                    Note { visible: root.staff; text: root.me.name || ""; font.weight: Font.DemiBold }
+                    Help { visible: root.staff; text: "Staff names are set by the admin when granting the role." }
+                    LabelledField {
+                        id: nameField
+                        visible: !root.staff
+                        label: "Display name"
+                        placeholder: "e.g. Asha (or leave empty to stay pseudonymous)"
+                        buttonText: "Set name"
+                        onSubmitted: root.run("set_profile", [nameField.text])
+                    }
+                    Help {
+                        visible: !root.staff
+                        text: "The admin may have named you when approving you; this replaces it. Set it empty to stay a pseudonym; the admin who granted your role can still link it. Staff are always named."
+                    }
+                    Heading { text: "Back up this identity" }
+                    Help { text: "Your identity is a key on this device. A backup lets you continue as the same person after a reinstall." }
                     Flash {
                         err: true
                         lead: "Keep this and your password safe."
@@ -2691,6 +2698,25 @@ Item {
                             name: "identity backup"
                             FramedButton { text: "Hide"; onClicked: exportOut.text = "" }
                         }
+                    }
+                    Heading { visible: root.approved; text: "Invite someone" }
+                    Help { visible: root.approved; text: "People join with this site id. An admin approves them after they read their code aloud." }
+                    RowLayout {
+                        visible: root.approved
+                        spacing: 8
+                        Label { text: "Site id  " + root.shortId(root.me.site || ""); font.family: "monospace" }
+                        FramedButton { text: "Copy"; iconName: "copy"; Accessible.name: "Copy the full site id"; onClicked: root.copyText(root.me.site) }
+                    }
+                    Heading { text: "Leave this site" }
+                    Help {
+                        text: profilePage.leaving ? "Leave " + (root.info.name || "this site") + " on this device? Its copy of the site is removed and you go back to the start screen. Your key stays, so you can join again as the same person."
+                                                  : "Removes this device's copy of the site. Your key stays."
+                    }
+                    RowLayout {
+                        spacing: 8
+                        ActionButton { visible: !profilePage.leaving; text: "Leave this site…"; kind: "danger"; onClicked: profilePage.leaving = true }
+                        ActionButton { visible: profilePage.leaving; text: "Confirm leave"; kind: "danger"; onClicked: { profilePage.leaving = false; root.leave() } }
+                        FramedButton { visible: profilePage.leaving; text: "Cancel"; onClicked: profilePage.leaving = false }
                     }
                 }
 
