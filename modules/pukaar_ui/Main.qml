@@ -50,6 +50,7 @@ Item {
     readonly property int sidebarWidth: sidebarOpen && !overlay ? 216 : 80     // what the content gives up
     function toggleSidebar() { if (overlay) overlayOpen = !overlayOpen; else prefs.sidebar = sidebarOpen ? "collapsed" : "expanded" }
     function openPage(name) { page = name; overlayOpen = false }
+    onIsAdminChanged: if (!isAdmin && page === "members") { openPage("board"); notice = "Your admin role was removed, so Members is closed." }
     function showPlace(code) { historyPlace = code; openPage("history") }   // a place code's link: that place in History
     // The issue pane sits beside the Board and History pages (both open issues); narrow, it replaces them.
     readonly property bool paneOpen: selected !== null && (page === "board" || page === "history")
@@ -79,7 +80,7 @@ Item {
         closed: { fg: "#59636e", bg: "#eff1f3", bd: "#d1d9e0", edge: "#818b98" },
         sb: "#f6f8fa", sbCard: "#ffffff", sbHover: "#eaeef2", sbFg: "#1f2328", sbMuted: "#59636e", sbIcon: "#59636e",
         sbEdge: "#d1d9e0", sbLine: "#d1d9e0", sbCtl: "#818b98", sbActBg: "#c8e6ff", sbActFg: "#0550ae", sbActIcon: "#0550ae",
-        sbDisabled: "#59636e", sbAv: "#dde3ea", sbOk: "#1a7f37", sbConn: "#9a6700", sbOff: "#d1242f", sbDanger: "#d1242f",
+        sbAv: "#dde3ea", sbOk: "#1a7f37", sbConn: "#9a6700", sbOff: "#d1242f", sbDanger: "#d1242f",
         tipBg: "#25292e", tipFg: "#ffffff", tipBd: "#25292e"
     })
     readonly property var darkTokens: ({
@@ -97,7 +98,7 @@ Item {
         closed: { fg: "#b5b5b5", bg: "#2f2f2f", bd: "#808080", edge: "#808080" },
         sb: "#141414", sbCard: "#1c1c1c", sbHover: "#262626", sbFg: "#ebebeb", sbMuted: "#a4a4a4", sbIcon: "#a4a4a4",
         sbEdge: "#2c2c2c", sbLine: "#343434", sbCtl: "#808080", sbActBg: "#243b55", sbActFg: "#ffffff", sbActIcon: "#6aa8f0",
-        sbDisabled: "#8a8a8a", sbAv: "#2b303b", sbOk: "#49f563", sbConn: "#febc2e", sbOff: "#ff736a", sbDanger: "#ff8a82",
+        sbAv: "#2b303b", sbOk: "#49f563", sbConn: "#febc2e", sbOff: "#ff736a", sbDanger: "#ff8a82",
         tipBg: "#3a3a3a", tipFg: "#ffffff", tipBd: "#808080"
     })
     readonly property var t: dark ? darkTokens : lightTokens
@@ -480,7 +481,6 @@ Item {
         members: circ(7.5, 7, 3) + "M2 17c.6-3 2.8-4.5 5.5-4.5S12.4 14 13 17" + circ(14, 6.5, 2.3) + "M14.5 11c1.9.3 3 1.7 3.5 4",
         anchor: circ(10, 4.5, 2) + "M10 6.5V17M6.5 9.5h7M3.5 11.5a6.5 6.5 0 0 0 13 0",
         identity: circ(7, 10, 3.5) + "M10.5 10H18M15 10v3M17.5 10v2.2",
-        lock: box(4.5, 9, 11, 8, 1.5) + "M7 9V6.5a3 3 0 0 1 6 0V9",
         signal: "M10 11.5v6" + circ(10, 10, 1.5) + "M6.5 6.5a5 5 0 0 0 0 7M13.5 6.5a5 5 0 0 1 0 7M4 4a8.5 8.5 0 0 0 0 12M16 4a8.5 8.5 0 0 1 0 12",
         user: circ(10, 6.5, 3.2) + "M3.5 17.5c.7-3.5 3.3-5.3 6.5-5.3s5.8 1.8 6.5 5.3",
         copy: box(7, 7, 10, 10, 1.5) + "M13 7V4.5A1.5 1.5 0 0 0 11.5 3h-7A1.5 1.5 0 0 0 3 4.5v7A1.5 1.5 0 0 0 4.5 13H7",
@@ -622,45 +622,44 @@ Item {
         contentItem: Label { text: tip.text; color: root.t.tipFg; font.pointSize: root.smallSize; font.weight: Font.Medium; wrapMode: Text.Wrap }
         background: Rectangle { radius: 6; color: root.t.tipBg; border.color: root.t.tipBd }
     }
-    // One sidebar entry: a fill, bold text and an accent icon when current (no bar). `note` makes it
-    // a locked entry (grey, still focusable so the reason is reachable by keyboard); `compact` is the
-    // icon-only rail, where the tooltip carries the label.
+    // One sidebar entry: a fill, bold text and an accent icon when current (no bar). `count` > 0
+    // adds a pill (people waiting); `compact` is the icon-only rail, where the tooltip carries the label.
     component NavItem: AbstractButton {
         id: nav
         property string glyph
         property bool current: false
         property bool compact: false
-        property string badge: ""         // short reason shown under the label; "" = openable
-        property string lockWhy: ""       // the full reason, for the tooltip and screen readers
-        readonly property bool locked: badge !== ""
-        readonly property color ink: current ? root.t.sbActFg : locked ? root.t.sbDisabled : root.t.sbFg
-        readonly property color iconInk: current ? root.t.sbActIcon : locked ? root.t.sbDisabled : root.t.sbIcon
+        property int count: 0
+        readonly property string waiting: count > 0 ? ", " + count + " waiting" : ""
+        readonly property color ink: current ? root.t.sbActFg : root.t.sbFg
+        readonly property color iconInk: current ? root.t.sbActIcon : root.t.sbIcon
         Layout.fillWidth: true
         implicitHeight: 44
         leftPadding: compact ? 6 : 12; rightPadding: leftPadding; topPadding: 6; bottomPadding: 6
         hoverEnabled: true
         focusPolicy: Qt.StrongFocus
-        Accessible.name: locked ? text + ", " + badge.toLowerCase() + ": " + lockWhy : text
-        HoverHandler { cursorShape: nav.locked ? Qt.ForbiddenCursor : Qt.PointingHandCursor }
-        SideTip { text: nav.locked ? nav.text + ": " + nav.lockWhy : nav.text; visible: (nav.compact || nav.locked) && (nav.hovered || nav.visualFocus) }
+        Accessible.name: text + waiting
+        HoverHandler { cursorShape: Qt.PointingHandCursor }
+        SideTip { text: nav.text + nav.waiting; visible: nav.compact && (nav.hovered || nav.visualFocus) }
         background: Rectangle {
             radius: 8
-            color: nav.current ? root.t.sbActBg : nav.hovered && !nav.locked ? root.t.sbHover : "transparent"
+            color: nav.current ? root.t.sbActBg : nav.hovered ? root.t.sbHover : "transparent"
             border.width: nav.visualFocus ? 2 : 0; border.color: root.t.focus
-            Icon {
-                visible: nav.locked; name: "lock"; color: root.t.sbDisabled
-                size: nav.compact ? 12 : 16
-                x: parent.width - width - (nav.compact ? 6 : 10)
-                y: nav.compact ? parent.height - height - 5 : (parent.height - height) / 2
+            Rectangle {   // the count pill: right of the label, or the rail icon's top-right corner
+                visible: nav.count > 0
+                width: Math.max(height, pill.implicitWidth + 10); height: nav.compact ? 18 : 20; radius: height / 2
+                color: root.t.primary
+                x: parent.width - width - (nav.compact ? 0 : 10)
+                y: nav.compact ? 2 : (parent.height - height) / 2
+                Label { id: pill; anchors.centerIn: parent; text: nav.count; color: root.t.onPrimary; font.pointSize: root.smallSize; font.weight: Font.DemiBold }
             }
         }
         contentItem: Item {
             Icon { name: nav.glyph; size: 20; color: nav.iconInk; anchors.verticalCenter: parent.verticalCenter; x: nav.compact ? (parent.width - width) / 2 : 0 }
-            Column {
+            Label {
                 visible: !nav.compact
-                x: 32; width: parent.width - 32 - (nav.locked ? 20 : 0); anchors.verticalCenter: parent.verticalCenter
-                Label { width: parent.width; text: nav.text; color: nav.ink; elide: Text.ElideRight; font.weight: nav.current ? Font.DemiBold : Font.Medium }
-                Label { visible: nav.locked; width: parent.width; text: nav.badge; color: root.t.sbMuted; font.pointSize: root.smallSize }
+                x: 32; width: parent.width - 32 - (nav.count > 0 ? 36 : 0); anchors.verticalCenter: parent.verticalCenter
+                text: nav.text; color: nav.ink; elide: Text.ElideRight; font.weight: nav.current ? Font.DemiBold : Font.Medium
             }
         }
     }
@@ -1644,20 +1643,33 @@ Item {
                 Repeater {
                     model: [
                         { label: "Board", icon: "board", page: "board" },
-                        { label: "History", icon: "hist", page: "history" },
                         { label: "Report", icon: "report", page: "report" },
-                        { label: "Members", icon: "members", page: "members", adminOnly: true },
+                        { label: "History", icon: "hist", page: "history" },
                         { label: "Anchor", icon: "anchor", page: "anchor" },
                         { label: "Identity", icon: "identity", page: "identity" }
-                    ]
-                    delegate: NavItem {
+                    ].concat(root.isAdmin ? [{ label: "Members", icon: "members", page: "members", admin: true }] : [])
+                    delegate: ColumnLayout {
                         id: entry
                         required property var modelData
-                        text: modelData.label; glyph: modelData.icon
-                        current: root.page === modelData.page; compact: !sidebar.open
-                        badge: modelData.adminOnly && !root.isAdmin ? "Admin only" : ""
-                        lockWhy: "only the site admin can open it"
-                        onClicked: if (!locked) root.openPage(modelData.page)
+                        readonly property bool admin: !!modelData.admin
+                        Layout.fillWidth: true
+                        spacing: 4
+                        Label {   // the admin items' heading; the rail shows a short rule instead
+                            visible: entry.admin && sidebar.open
+                            Layout.topMargin: 8; Layout.leftMargin: 12
+                            text: "Admin"; color: root.t.sbMuted; font.pointSize: root.smallSize; font.weight: Font.DemiBold
+                        }
+                        Rectangle {
+                            visible: entry.admin && !sidebar.open
+                            Layout.alignment: Qt.AlignHCenter; Layout.topMargin: 6; Layout.bottomMargin: 2
+                            implicitWidth: 40; implicitHeight: 1; color: root.t.sbLine
+                        }
+                        NavItem {
+                            text: entry.modelData.label; glyph: entry.modelData.icon
+                            current: root.page === entry.modelData.page; compact: !sidebar.open
+                            count: entry.admin ? root.pending.length : 0
+                            onClicked: root.openPage(entry.modelData.page)
+                        }
                     }
                 }
             }
