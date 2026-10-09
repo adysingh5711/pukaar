@@ -10,7 +10,7 @@
 |---|---|
 | Demo video | To be added in later version |
 | Screenshots | [See the walkthrough](#screenshots) |
-| Latest release | [v0.2.1](https://github.com/adysingh5711/pukaar/releases/tag/v0.2.1): signed `.lgx` packages for Logos Basecamp 0.3.1 |
+| Latest release | [v0.2.2](https://github.com/adysingh5711/pukaar/releases/tag/v0.2.2): signed `.lgx` packages for Logos Basecamp 0.3.1 |
 
 ---
 
@@ -316,6 +316,7 @@ scripts/                   demo.sh, window.sh, basecamp.sh
 - **v0.1.1:** guided site setup, edit and remove locations (30-day pending removal), a change log, service rules as form fields, deterministic fork resolution.
 - **v0.2.0:** UI revamp: light and dark themes, a collapsible sidebar, redesigned board, cards and issue pane (with a "Why it isn't closed yet" card), a board history window with a History page, and Hindi user content.
 - **v0.2.1:** fix: calls no longer hang for 20 s when Logos Delivery is unreachable (5 s Delivery timeouts plus a 10 s back-off), and clearer error text when the core does not answer.
+- **v0.2.2:** fix: sync works again (Pukaar turns off Delivery's SDS causal-history wait; [upstream report](bug-report/sds-incoming-buffer-never-expires-on-missing-dependencies.md)), moved to the `logos.dev` network, recovery after a Delivery restart, and names an admin gives residents now show on both sides.
 - **L1+:** anchoring from the app's Anchor tab on localnet and a testnet anchor; an "identity active on another device" warning; Heads messages that carry head ids, so anti-entropy also repairs equal-length forks.
 - **L2:** LAN relay for sites without internet, a password-sealed key file, a site-health view (category level only, no per-person ranking), export and verify bundles, evidence photos on Logos Storage (EXIF stripped), UI tests, and a steward guide in Hindi and English.
 - **L3:** an anonymous reporting lane with an RLN rate limit, a phone path, and 2-of-3 admin grants.
