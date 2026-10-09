@@ -1,4 +1,6 @@
-# Pukaar
+<p align="center"><img src="public/brand/pukaar-logo-color.svg" alt="Pukaar" height="120"></p>
+
+<h1 align="center">Pukaar</h1>
 
 **Civic fault reports that can't be quietly closed.** A [Logos Basecamp](https://github.com/logos-co/logos-basecamp) app for the Field Station civic reporting brief. Every action is a signed event in its author's own append-only log, synced peer-to-peer over Logos Delivery. A report only counts as resolved when the person who filed it (or two other residents) confirms. Checkpoints of all logs are anchored on the Logos Execution Zone (LEZ), so the history can't be rewritten later.
 

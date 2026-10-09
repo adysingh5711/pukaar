@@ -1584,16 +1584,8 @@ Item {
                 Item {
                     implicitWidth: 28; implicitHeight: 28
                     Accessible.ignored: true
-                    Rectangle { anchors.fill: parent; radius: 7; color: "#0969da" }
-                    Shape {
-                        width: 24; height: 24; scale: 28 / 24; transformOrigin: Item.TopLeft
-                        preferredRendererType: Shape.CurveRenderer
-                        ShapePath { strokeColor: "transparent"; fillColor: "#ffffff"; PathSvg { path: root.circ(8, 12, 2) } }
-                        ShapePath {
-                            strokeColor: "#ffffff"; strokeWidth: 1.8; fillColor: "transparent"; capStyle: ShapePath.RoundCap
-                            PathSvg { path: "M12.5 8.2a5.4 5.4 0 0 1 0 7.6M15.8 5.6a9.4 9.4 0 0 1 0 12.8" }
-                        }
-                    }
+                    // the module icon (colour bell, transparent), shipped next to Main.qml
+                    Image { anchors.fill: parent; source: "src/icons/pukaar.png"; sourceSize: Qt.size(56, 56); fillMode: Image.PreserveAspectFit }
                 }
                 Label { visible: sidebar.open; text: "Pukaar"; color: sidebar.on; font.pointSize: root.baseSize * 18 / 14; font.bold: true }
             }
