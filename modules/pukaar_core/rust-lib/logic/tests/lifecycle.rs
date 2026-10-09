@@ -423,20 +423,8 @@ fn staff_are_named_and_residents_choose() {
             2,
         )
         .unwrap();
-    let outed = s
-        .admin
-        .publish(
-            Body::RoleGrant {
-                subject: newbie.me(),
-                role: Role::Resident,
-                name: Some("Kiran".into()),
-            },
-            3,
-        )
-        .unwrap();
     let st = s.admin.state();
     assert!(st.rejected[&nameless.id].contains("staff must be named"));
-    assert!(st.rejected[&outed.id].contains("residents choose"));
     // a steward can't rename (or un-name) themselves
     s.sync();
     let hide = s
@@ -452,6 +440,40 @@ fn staff_are_named_and_residents_choose() {
         !st.names.contains_key(&s.ravi.me()),
         "residents stay pseudonymous by default"
     );
+}
+
+#[test]
+fn a_name_the_admin_gives_a_resident_shows_on_both_sides_until_they_change_it() {
+    let mut s = Site::new();
+    let mut asha = Node::join_announced(new_key(), s.admin.store.site, 5);
+    copy_all(&asha, &mut s.admin);
+    let grant = s
+        .admin
+        .publish(
+            Body::RoleGrant {
+                subject: asha.me(),
+                role: Role::Resident,
+                name: Some(" Asha ".into()),
+            },
+            6,
+        )
+        .unwrap();
+    copy_all(&s.admin, &mut asha);
+    assert!(!s.admin.state().rejected.contains_key(&grant.id));
+    let info: serde_json::Value = serde_json::from_str(&s.admin.site_info_json(0)).unwrap();
+    let me = hex::encode(asha.me());
+    let row = info["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["key"] == me.as_str());
+    assert_eq!(row.unwrap()["name"], "Asha", "the admin's Members page");
+    let mine: serde_json::Value = serde_json::from_str(&asha.identity_json()).unwrap();
+    assert_eq!(mine["name"], "Asha", "the resident's own sidebar");
+    // residents still choose: their own profile replaces or clears it
+    asha.publish(Body::Profile { display_name: None }, 7)
+        .unwrap();
+    assert!(!asha.state().names.contains_key(&asha.me()));
 }
 
 #[test]

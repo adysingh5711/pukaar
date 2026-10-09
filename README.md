@@ -43,7 +43,7 @@ Pukaar takes that power away from the operator:
 
 - **No server and no delete.** Every member holds a full replica. There's no delete event, action or button anywhere. An invalid event is kept, marked `rejected`, and shown.
 - **Two-key closure.** A steward can *claim* a fix. Only the reporter, or two distinct residents who aren't the claimant, can *confirm* it. The reporter can always reopen.
-- **Staff are named, residents choose.** Stewards and admins are always named, by the admin's grant. Residents are named or pseudonymous, and never named by the admin. Every staff update and fix claim must say what was done.
+- **Staff are named, residents choose.** Stewards and admins are always named, by the admin's grant. Residents may be named by the admin when approved, and can replace that name or clear it to stay pseudonymous. Every staff update and fix claim must say what was done.
 - **Tamper-evident history.** Per-author hash chains expose any rewrite (a fork proof). Checkpoints anchored on LEZ fix the history even for people who join later.
 
 ## How it works
@@ -122,7 +122,7 @@ Write a fingerprint of everyone's history to the Logos blockchain (LEZ). Three s
 - **Report** what's wrong and where: a category, one line, and a place picked from the site's grouped, searchable location list (or "Other" with a description).
 - **Staff workflow:** acknowledge, post updates with the next step and an ETA, claim a fix (a note is required), close as won't-fix, or mark a duplicate. Overdue and waiting-for-48 h cards are highlighted.
 - **Two-key closure:** only the reporter, or two residents who aren't the claimant, can confirm a fix. The reporter can always reopen.
-- **Members:** join with the site id; the admin approves each person after hearing their fingerprint read aloud. Staff are always named by the admin, and residents choose a name or stay pseudonymous. The admin can revoke a role, with a reason.
+- **Members:** join with the site id; the admin approves each person after hearing their fingerprint read aloud. Staff are always named by the admin; the admin may name a resident too, and residents can change that name or stay pseudonymous. The admin can revoke a role, with a reason.
 - **Site setup:** the admin creates a site from a guided form: site name, their own name, editable categories, and a places table that starts empty (or from the Dhun sample). Service rules (acknowledge and fix targets in hours, open reports per person) are plain fields with explanations.
 - **Locations:** the admin adds places and can **edit** a place's name or group (its code never changes; old issues show "renamed from …"). A place in use can be **retired** (blocked while it has open issues), and a retired place offers "Report as Other at this spot". A place nobody ever reported can be **removed**: it shows as pending for 30 days with Undo, then is hidden from every list and listed in the admin's change log. A duplicate code is refused.
 - **Identity backup:** export a password-sealed copy of your identity (Argon2id + XChaCha20-Poly1305) and restore it on a new install. A restored identity waits for its own history before it can publish, so it can't fork its own chain.

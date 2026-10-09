@@ -407,16 +407,14 @@ fn apply(s: &mut State, e: &Event) -> Result<(), String> {
             name,
         } => {
             require(admin, "only admin grants roles")?;
-            let name = name.as_deref().map(str::trim).filter(|n| !n.is_empty());
-            match (role, name) {
-                (Role::Steward | Role::Admin, None) => return Err("staff must be named".into()),
-                (Role::Resident, Some(_)) => {
-                    return Err("residents choose their own name (or none)".into())
-                }
-                (Role::Steward | Role::Admin, Some(n)) => {
+            // A resident may be named here too (the admin hears them at the kiosk); their own
+            // later Profile still replaces or clears it. Unnamed, a resident keeps their own.
+            match name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+                Some(n) => {
                     s.names.insert(*subject, n.to_string());
                 }
-                (Role::Resident, None) => {}
+                None if *role != Role::Resident => return Err("staff must be named".into()),
+                None => {}
             }
             s.roles.insert(*subject, *role);
             s.pending_members.remove(subject);

@@ -35,7 +35,7 @@ pub trait PukaarCoreModule: Send + 'static {
     /// Stop waiting for a restored identity's history (allowed 10 min after the restore).
     fn skip_history_sync(&mut self) -> String;
     fn set_profile(&mut self, display_name: String) -> String;
-    /// `name` is required for steward/admin and must be empty for residents.
+    /// `name` is required for steward/admin and optional for residents.
     fn grant_role(&mut self, subject_hex: String, role: String, name: String) -> String;
     /// Admin only (the rules reject anyone else's); `reason` is required.
     fn revoke_role(&mut self, subject_hex: String, reason: String) -> String;

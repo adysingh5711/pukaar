@@ -2332,7 +2332,7 @@ Item {
                     Heading { visible: !root.staff; text: "Your name" }
                     Help {
                         visible: !root.staff
-                        text: "Leave it empty to stay a pseudonym; the admin who granted your role can still link it. Staff are always named."
+                        text: "The admin may have named you when approving you; this replaces it. Set it empty to stay a pseudonym; the admin who granted your role can still link it. Staff are always named."
                     }
                     LabelledField {
                         id: nameField
@@ -2385,13 +2385,13 @@ Item {
                                             font.weight: pendingRow.modelData.name ? Font.DemiBold : Font.Normal
                                         }
                                     }
-                                    ActionButton { text: "Grant resident"; onClicked: root.run("grant_role", [pendingRow.modelData.key, "resident", ""]) }
+                                    ActionButton { text: "Grant resident"; onClicked: root.run("grant_role", [pendingRow.modelData.key, "resident", staffName.text]) }
                                     LabelledField {
                                         id: staffName
                                         Layout.fillWidth: root.compactRows; Layout.columnSpan: root.compactRows ? 2 : 1
                                         Layout.preferredWidth: 330
-                                        name: "Steward's real name"
-                                        placeholder: "e.g. Ravi Kumar"
+                                        name: "Name, optional for a resident"
+                                        placeholder: "Name, e.g. Ravi Kumar (a steward needs one)"
                                         buttonText: "Grant steward"
                                         buttonEnabled: staffName.text.trim().length > 0
                                         onSubmitted: root.run("grant_role", [pendingRow.modelData.key, "steward", staffName.text])

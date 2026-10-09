@@ -53,7 +53,7 @@ pub enum Body {
         sla_fix_h: u32,
         max_open_per_author: u32,
     },
-    /// `name` is required for steward/admin (staff are always named) and must be None for residents.
+    /// `name` is required for steward/admin (staff are always named) and optional for residents.
     RoleGrant {
         subject: Key,
         role: Role,
