@@ -12,6 +12,7 @@ use pukaar_logic::persist;
 use pukaar_logic::store::Accept;
 use pukaar_logic::sync::{
     heads_msg, lost_node, send_queue, should_answer, to_resend, to_resend_own, SendError, Wire,
+    DELIVERY_CFG,
 };
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -276,12 +277,8 @@ fn sent(error: Option<String>) {
 // listener (harmless: advance, on_wire and sent are idempotent); split the step if that matters.
 fn create_and_listen() -> Result<(), String> {
     use delivery_module::DeliveryModuleClient as D;
-    // PUKAAR_DELIVERY_CFG overrides the network (LAN entry-node, L2). logos.dev, not logos.test:
-    // since Delivery 0.3.0 logos.test sends only with a funded on-chain RLN membership (Basecamp's
-    // RLN module waits for 2x10^8 LEZ on the payer), so without one nothing left either profile.
-    // logos.dev (cluster 3) runs no RLN. Both ends must be on the same preset.
-    let cfg = std::env::var("PUKAAR_DELIVERY_CFG")
-        .unwrap_or_else(|_| r#"{"mode":"Edge","preset":"logos.dev"}"#.to_string());
+    // PUKAAR_DELIVERY_CFG overrides the network (LAN entry-node, L2).
+    let cfg = std::env::var("PUKAAR_DELIVERY_CFG").unwrap_or_else(|_| DELIVERY_CFG.to_string());
     delivered_once(
         "createNode",
         modules()

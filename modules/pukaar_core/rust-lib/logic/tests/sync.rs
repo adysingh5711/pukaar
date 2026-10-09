@@ -3,7 +3,7 @@ use pukaar_logic::event::new_key;
 use pukaar_logic::store::{Accept, Store};
 use pukaar_logic::sync::{
     heads_msg, lost_node, send_queue, should_answer, to_resend, to_resend_own, SendError, Wire,
-    ANSWERERS, MAX_RESEND,
+    ANSWERERS, DELIVERY_CFG, MAX_RESEND,
 };
 use util::*;
 
@@ -151,6 +151,16 @@ fn a_restarted_delivery_is_a_reason_to_retry_not_to_drop() {
     assert!(lost_node("channelSend: Context not initialized"));
     assert!(!retry(true, "channelSend: payload too large"));
     assert!(!lost_node("createNode: Context already initialized"));
+}
+
+#[test]
+fn delivery_never_holds_a_message_back_for_causal_order() {
+    // Delivery's SDS layer parks every message whose 2 predecessors it never saw, for good: one
+    // send that never left (logos.test without RLN) wedged both Basecamp profiles. Heads
+    // anti-entropy already orders and fills gaps, so SDS must carry no causal history.
+    let cfg: serde_json::Value = serde_json::from_str(DELIVERY_CFG).unwrap();
+    assert_eq!(cfg["preset"], "logos.dev");
+    assert_eq!(cfg["channelsOverrides"]["sdsCausalHistorySize"], 0);
 }
 
 #[test]

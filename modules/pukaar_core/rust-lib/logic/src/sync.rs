@@ -10,6 +10,15 @@ pub const MAX_RESEND: usize = 200;
 /// How many peers answer each Heads message (besides the admin's kiosk, which always does).
 pub const ANSWERERS: usize = 3;
 
+/// Delivery's createNode config. logos.dev, not logos.test: since Delivery 0.3.0 logos.test
+/// sends only with a funded on-chain RLN membership; logos.dev (cluster 3) runs no RLN. Both ends
+/// must be on the same preset. `sdsCausalHistorySize: 0`: Delivery's SDS layer otherwise holds
+/// back every message until it has seen the sender's last 2, forever (no timeout, no store
+/// fetch), so one send that never left wedges that sender for every peer. Heads anti-entropy
+/// already orders events and fills gaps.
+pub const DELIVERY_CFG: &str =
+    r#"{"mode":"Edge","preset":"logos.dev","channelsOverrides":{"sdsCausalHistorySize":0}}"#;
+
 /// What goes on the site channel. `Heads` is unsigned: lying about heads only
 /// changes what gets re-sent, and re-sends are capped.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
