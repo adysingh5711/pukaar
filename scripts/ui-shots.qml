@@ -12,10 +12,13 @@ Window {
     readonly property var widths: [800, 1280, 1400]
     readonly property var states: ["none", "pending", "resident", "steward", "admin"]
     readonly property var pages: ["board", "history", "report", "members", "site", "proof", "profile", "issue", "issue-new"]
+    // The last-anchor states other than the default recent one: Proof's block, and the sidebar line on Board.
+    readonly property var anchorStates: ["never", "stale", "mismatch"]
 
     QtObject {
         id: logos
         property string state: "none"
+        property string anchor: "recent"     // site_info last_anchor: recent, never, stale or mismatch
         // Fixed within each half hour, so two runs in the same half hour give the same pixels.
         readonly property int now: Math.floor(Date.now() / 1800000) * 1800
         readonly property string site: "5173".repeat(16)
@@ -94,7 +97,9 @@ Window {
                 removed_locations: [{ code: "T9", label: "Old toilet block", group: "Rooms", by: keys.admin, by_name: names.admin,
                                       reason: "Demolished", since: h(1000), removed_at: h(280) }],
                 members: ["admin", "steward", "resident", "r2"].map(function (w) { var m = member(w); m.role = roles[w]; return m }),
-                pending: [member("pending")], sla_ack_h: 24, sla_fix_h: 72, events: 42, forks: 0, forked_authors: [] }
+                pending: [member("pending")], sla_ack_h: 24, sla_fix_h: 72, events: 42, forks: 0, forked_authors: [],
+                last_anchor: anchor === "never" ? null : { ts: h(anchor === "stale" ? 50 : 3), tx: "pda:Public/9f2c", by: keys.steward,
+                    by_name: names.steward, events_covered: 33, reproducible: anchor !== "mismatch" } }
         }
         function reply(method, a) {
             switch (method) {
@@ -120,14 +125,19 @@ Window {
                 (s === "none" ? ["first-run"] : pages).forEach(function (p) { out.push({ state: s, width: w, page: p }) })
             })
         })
+        anchorStates.forEach(function (a) {
+            [800, 1400].forEach(function (w) { ["proof", "board"].forEach(function (p) { out.push({ state: "resident", width: w, page: p, anchor: a }) }) })
+        })
         return out
     }
     property int job: -1
     function next() {
         if (++job >= jobs.length) { Qt.quit(); return }
         var j = jobs[job], v = view.item
-        if (!v || logos.state !== j.state) {
+        var anchor = j.anchor || "recent"
+        if (!v || logos.state !== j.state || logos.anchor !== anchor) {
             logos.state = j.state
+            logos.anchor = anchor
             view.source = ""
             view.source = "file://" + args[0]
             v = view.item
@@ -146,7 +156,7 @@ Window {
         onTriggered: {
             var j = win.jobs[win.job]
             view.grabToImage(function (r) {
-                r.saveToFile(win.args[1] + "/" + j.state + "-" + j.page + "-" + j.width + ".png")
+                r.saveToFile(win.args[1] + "/" + j.state + "-" + j.page + (j.anchor ? "-anchor-" + j.anchor : "") + "-" + j.width + ".png")
                 win.next()
             })
         }

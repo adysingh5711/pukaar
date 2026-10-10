@@ -74,6 +74,7 @@ Item {
         accent: "#0969da", accentBg: "#ddf4ff", accentBd: "#9954aeff", focus: "#0969da",
         primary: "#0969da", primaryHover: "#0860ca", onPrimary: "#ffffff",
         danger: "#d1242f", dangerBg: "#ffebe9", dangerBd: "#99ff8182",
+        warn: "#9a6700", warnBg: "#fff8c5", warnBd: "#66d4a72c",
         okDot: "#1a7f37", connDot: "#9a6700",
         reported: { fg: "#bc4c00", bg: "#fff1e5", bd: "#99fb8f44", edge: "#bc4c00" },
         progress: { fg: "#0969da", bg: "#ddf4ff", bd: "#9954aeff", edge: "#0969da" },
@@ -92,6 +93,7 @@ Item {
         accent: "#6aa8f0", accentBg: "#1f2d3d", accentBd: "#4a90e2", focus: "#6aa8f0",
         primary: "#2563c9", primaryHover: "#2f6fd0", onPrimary: "#ffffff",
         danger: "#ff8a82", dangerBg: "#2e1f1f", dangerBd: "#fb3748",
+        warn: "#febc2e", warnBg: "#2e2914", warnBd: "#bb8009",
         okDot: "#49f563", connDot: "#febc2e",
         reported: { fg: "#ff9a2e", bg: "#3b2814", bd: "#ff8800", edge: "#ff8800" },
         progress: { fg: "#6aa8f0", bg: "#1f2d3d", bd: "#4a90e2", edge: "#4a90e2" },
@@ -289,9 +291,25 @@ Item {
     // place() without its code, which the card sets apart; "Other" shows its landmark bare.
     function placeName(i) { return i.location === "other" ? (i.landmark || "") : place(i).substr(i.location.length + 1) }
     function plural(n, word) { return n + " " + word + (n === 1 ? "" : "s") }
-    // The trust status the sidebar, History, Site and Proof show. site_info does not report anchors
-    // yet, so "last anchored" waits for a core change; conflicts are the forks the core found.
+    // The trust status the sidebar, History, Site and Proof show: conflicts are the forks the core found.
     readonly property string conflicts: info.forks > 0 ? plural(info.forks, "conflict") : "no conflicts"
+    // The newest anchor (site_info last_anchor, null = never). The app never reads LEZ: the tx is what
+    // its recorder claimed, so the UI says "recorded", never "verified"; only the root is checked here.
+    readonly property var lastAnchor: info.last_anchor || null
+    readonly property int anchorStaleHours: 24
+    // One state at a time, worst first: "mismatch", "never", "stale", or "" (recent and reproducible).
+    readonly property string anchorState: !lastAnchor ? "never" : !lastAnchor.reproducible ? "mismatch"
+        : now - lastAnchor.ts > anchorStaleHours * 3600 ? "stale" : ""
+    // The sidebar's addition to "Proof · no conflicts": nothing while the anchor is recent and matches.
+    readonly property string anchorNote: ({ never: "not anchored yet", mismatch: "anchor mismatch",
+        stale: lastAnchor ? "anchor " + dur(hoursSince(lastAnchor.ts)) + " old" : "", "": "" })[anchorState]
+    function anchorSummary(a) {
+        // The anchor's own record is always newer than the heads it covers: it is not counted.
+        var newer = Math.max(0, (info.events || 0) - a.events_covered - 1)
+        return "Last anchor recorded " + age(a.ts) + " (" + when(a.ts, now - a.ts < 6 * 86400 ? "ddd HH:mm" : "") + "). Covers "
+            + plural(a.events_covered, "event") + "."
+            + (newer ? " " + plural(newer, "newer event") + (newer === 1 ? " isn't" : " aren't") + " anchored yet." : "")
+    }
     // A place that takes no reports, in words: "retired" or "removes in 12 days" ("" = active).
     function placeState(l) {
         if (l.state === "pending_removal")
@@ -316,10 +334,12 @@ Item {
     function inTarget(i) { return i.claimed_ts - i.reported_ts <= info.sla_fix_h * 3600 }
     function span(sec) { var h = Math.round(sec / 3600); return h < 48 ? h + " h" : Math.floor(h / 24) + " d " + h % 24 + " h" }
     function closedVerb(i) { return i.status === "ConfirmedResolved" ? "Resolved" : "Closed" }
-    function age(ts) {
-        var h = Math.floor((Date.now() / 1000 - ts) / 3600)
-        return h < 1 ? "just now" : h < 48 ? h + " h ago" : Math.floor(h / 24) + " d ago"
-    }
+    // Wall-clock seconds, moved on each minute so relative times ("3 h ago") refresh on their own.
+    property real now: Date.now() / 1000
+    Timer { interval: 60000; running: true; repeat: true; onTriggered: root.now = Date.now() / 1000 }
+    function hoursSince(ts) { return Math.floor((now - ts) / 3600) }
+    function dur(h) { return h < 48 ? h + " h" : Math.floor(h / 24) + " d" }
+    function age(ts) { var h = hoursSince(ts); return h < 1 ? "just now" : dur(h) + " ago" }
     // The card's red lines. SLA flags are computed by the core (site SLA hours); this only words them.
     // A finished issue keeps its scars instead.
     function flagLines(i) {
@@ -628,24 +648,27 @@ Item {
         background: Rectangle { radius: 6; color: root.t.tipBg; border.color: root.t.tipBd }
     }
     // One sidebar entry: a fill, bold text and an accent icon when current (no bar). `count` > 0
-    // adds a pill (people waiting); `compact` is the icon-only rail, where the tooltip carries the label.
+    // adds a pill (people waiting); `subline` a small second line in `sublineInk` (the active ink when current, for
+    // contrast on the fill; on the rail, the icon takes that colour); `compact` is the icon-only rail, where the tooltip carries the label.
     component NavItem: AbstractButton {
         id: nav
         property string glyph
+        property string subline
+        property color sublineInk
         property bool current: false
         property bool compact: false
         property int count: 0
         readonly property string waiting: count > 0 ? ", " + count + " waiting" : ""
         readonly property color ink: current ? root.t.sbActFg : root.t.sbFg
-        readonly property color iconInk: current ? root.t.sbActIcon : root.t.sbIcon
+        readonly property color iconInk: compact && subline ? sublineInk : current ? root.t.sbActIcon : root.t.sbIcon
         Layout.fillWidth: true
-        implicitHeight: 44
+        implicitHeight: Math.max(44, contentItem.implicitHeight + topPadding + bottomPadding)
         leftPadding: compact ? 6 : 12; rightPadding: leftPadding; topPadding: 6; bottomPadding: 6
         hoverEnabled: true
         focusPolicy: Qt.StrongFocus
         Accessible.name: text + waiting
         HoverHandler { cursorShape: Qt.PointingHandCursor }
-        SideTip { text: nav.text + nav.waiting; visible: nav.compact && (nav.hovered || nav.visualFocus) }
+        SideTip { text: nav.text + nav.waiting + (nav.subline ? ", " + nav.subline : ""); visible: nav.compact && (nav.hovered || nav.visualFocus) }
         background: Rectangle {
             radius: 8
             color: nav.current ? root.t.sbActBg : nav.hovered ? root.t.sbHover : "transparent"
@@ -660,11 +683,17 @@ Item {
             }
         }
         contentItem: Item {
+            implicitHeight: nav.compact ? 0 : lines.implicitHeight
             Icon { name: nav.glyph; size: 20; color: nav.iconInk; anchors.verticalCenter: parent.verticalCenter; x: nav.compact ? (parent.width - width) / 2 : 0 }
-            Label {
+            Column {
+                id: lines
                 visible: !nav.compact
                 x: 32; width: parent.width - 32 - (nav.count > 0 ? 36 : 0); anchors.verticalCenter: parent.verticalCenter
-                text: nav.text; color: nav.ink; elide: Text.ElideRight; font.weight: nav.current ? Font.DemiBold : Font.Medium
+                Label { width: parent.width; text: nav.text; color: nav.ink; elide: Text.ElideRight; font.weight: nav.current ? Font.DemiBold : Font.Medium }
+                Label {
+                    visible: nav.subline !== ""; width: parent.width; text: nav.subline; color: nav.current ? nav.ink : nav.sublineInk; elide: Text.ElideRight
+                    font.pointSize: root.smallSize; font.weight: Font.Medium
+                }
             }
         }
     }
@@ -1200,13 +1229,16 @@ Item {
         }
     }
 
-    // A tinted notice (info blue, or `err` red) with an icon, wrapped text, and optionally one button
+    // A tinted notice (info blue, `err` red, or a `tone`: "warn" amber, "plain" neutral) with an icon, wrapped text, and optionally one button
     // on the right: a text one (`buttonText`) or an icon-only one (`buttonIcon`).
     component Flash: Rectangle {
         id: flash
         property string text
         property string lead               // a bold red first sentence
         property bool err: false
+        property string tone: err ? "err" : "info"
+        readonly property var ink: ({ info: [root.t.accentBg, root.t.accentBd, root.t.accent], err: [root.t.dangerBg, root.t.dangerBd, root.t.danger],
+                                      warn: [root.t.warnBg, root.t.warnBd, root.t.warn], plain: [root.t.well, root.t.bd, root.t.muted] })[tone]
         property bool bold: false          // the whole text bold (red in an error)
         property string icon: err ? "warn" : "info"
         property string buttonText
@@ -1217,13 +1249,13 @@ Item {
         Layout.fillWidth: true
         implicitHeight: row.implicitHeight + 22
         radius: 6
-        color: err ? root.t.dangerBg : root.t.accentBg
-        border.color: err ? root.t.dangerBd : root.t.accentBd
+        color: ink[0]
+        border.color: ink[1]
         RowLayout {
             id: row
             anchors { fill: parent; leftMargin: 13; rightMargin: 13; topMargin: 11; bottomMargin: 11 }
             spacing: 10
-            Icon { Layout.alignment: Qt.AlignTop; Layout.topMargin: 2; name: flash.icon; size: 16; color: flash.err ? root.t.danger : root.t.accent }
+            Icon { Layout.alignment: Qt.AlignTop; Layout.topMargin: 2; name: flash.icon; size: 16; color: flash.ink[2] }
             Label {
                 Layout.fillWidth: true; Layout.alignment: Qt.AlignTop; wrapMode: Text.Wrap; textFormat: Text.RichText
                 font.bold: flash.bold; color: flash.err && flash.bold ? root.t.danger : root.t.fg
@@ -1719,8 +1751,9 @@ Item {
                     visible: root.inSite
                     Layout.leftMargin: sidebar.open ? -6 : 0; Layout.rightMargin: Layout.leftMargin; leftPadding: 6   // expanded, the icon lines up with the delivery dot
                     text: "Proof · " + root.conflicts; glyph: "anchor"
+                    subline: root.anchorNote; sublineInk: root.anchorState === "mismatch" ? root.t.sbDanger : root.t.sbConn
                     current: root.page === "proof"; compact: !sidebar.open
-                    Accessible.name: "Proof of history, " + root.conflicts + ". Open Proof"
+                    Accessible.name: "Proof of history, " + root.conflicts + (subline ? ", " + subline : "") + ". Open Proof"
                     onClicked: root.openPage("proof")
                 }
                 AbstractButton {   // you: name, fingerprint, role; opens Profile
@@ -2689,6 +2722,17 @@ Item {
                             + "history to the Logos blockchain (LEZ), so no one, not even the admin, can quietly rewrite or delete past events."
                     }
                     Note { text: root.plural(root.info.events || 0, "event") + " · " + root.conflicts; font.weight: Font.DemiBold }
+                    Flash {   // the newest anchor: one state at a time (root.anchorState)
+                        readonly property var a: root.lastAnchor
+                        err: root.anchorState === "mismatch"
+                        tone: err ? "err" : root.anchorState === "" ? "plain" : "warn"
+                        icon: tone === "plain" ? "anchor" : "warn"
+                        lead: err ? "This anchor doesn't match the record on this device." : ""
+                        text: ({ mismatch: "If it is still here after this device syncs, tell your admin.",
+                                 never: "Nothing has been anchored yet. Until then, history can be changed without anyone noticing.",
+                                 stale: a ? "Last anchor was " + root.age(a.ts) + ". Any member can anchor from this page." : "",
+                                 "": a ? root.anchorSummary(a) : "" })[root.anchorState]
+                    }
                     Help { visible: !root.approved; text: "Members can anchor the record. After approval you can do this too." }
                     Heading { visible: root.approved; text: "Anchor now" }
                     Help { visible: root.approved; text: "Needs a terminal and a LEZ account." }
