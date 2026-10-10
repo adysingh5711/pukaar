@@ -104,6 +104,33 @@ pub struct State {
     pub issues: BTreeMap<Id, Issue>,
     pub rejected: BTreeMap<Id, String>,
     pub checkpoints: Vec<CheckpointRecord>,
+    /// Every applied location change, in applied order: the admin's change log.
+    pub place_log: Vec<PlaceChange>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlaceChangeKind {
+    Added,
+    Edited,
+    Renamed,
+    Retired,
+    Restored,
+    RemovalStarted,
+    RemovalUndone,
+    /// Not an event: shown once a removal's cooldown is over.
+    Removed,
+}
+
+/// One change to a place: who, when (event ts), what and why; a rename keeps (from, to).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlaceChange {
+    pub ts: u64,
+    pub by: Key,
+    pub code: String,
+    pub kind: PlaceChangeKind,
+    pub reason: String,
+    pub rename: Option<(String, String)>,
 }
 
 /// How long a removed location can be brought back, in seconds of event time.
@@ -270,8 +297,17 @@ impl State {
         }
     }
 
-    /// Apply a location change `check_location_body` accepted.
+    /// Apply a location change `check_location_body` accepted, and log it.
     fn apply_location_body(&mut self, by: Key, body: &Body, ts: u64) {
+        use PlaceChangeKind as K;
+        let change = |code: &str, kind, reason: &str| PlaceChange {
+            ts,
+            by,
+            code: code.to_owned(),
+            kind,
+            reason: reason.to_owned(),
+            rename: None,
+        };
         match body {
             Body::LocationRetire {
                 code,
@@ -279,13 +315,22 @@ impl State {
                 reason,
             } => {
                 self.retired.insert(code.clone(), reason.clone());
+                self.place_log.push(change(code, K::Retired, reason));
             }
-            Body::LocationRetire { code, .. }
+            Body::LocationRetire { code, reason, .. }
             | Body::LocationRemove {
-                code, undo: true, ..
+                code,
+                undo: true,
+                reason,
             } => {
                 self.retired.remove(code);
                 self.pending_removal.remove(code);
+                let kind = if matches!(body, Body::LocationRetire { .. }) {
+                    K::Restored
+                } else {
+                    K::RemovalUndone
+                };
+                self.place_log.push(change(code, kind, reason));
             }
             Body::LocationRemove { code, reason, .. } => {
                 // never both: a retired place that leaves the list stops being "retired"
@@ -298,16 +343,25 @@ impl State {
                         reason: reason.clone(),
                     },
                 );
+                self.place_log.push(change(code, K::RemovalStarted, reason));
             }
-            Body::LocationsAdd { locations } => self.locations.extend_from_slice(locations),
+            Body::LocationsAdd { locations } => {
+                self.locations.extend_from_slice(locations);
+                self.place_log
+                    .extend(locations.iter().map(|l| change(&l.code, K::Added, "")));
+            }
             Body::LocationEdit { code, label, group } => {
+                let mut c = change(code, K::Edited, "");
                 if let Some(l) = self.locations.iter_mut().find(|l| &l.code == code) {
                     if &l.label != label {
                         let old = std::mem::replace(&mut l.label, label.clone());
-                        self.renamed_from.insert(code.clone(), old);
+                        self.renamed_from.insert(code.clone(), old.clone());
+                        c.kind = K::Renamed;
+                        c.rename = Some((old, label.clone()));
                     }
                     l.group.clone_from(group);
                 }
+                self.place_log.push(c);
             }
             _ => {}
         }

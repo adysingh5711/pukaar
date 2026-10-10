@@ -6,7 +6,10 @@ use crate::event::{
     decode, sign, Body, DecodeError, Event, Id, Key, Location, Unsigned, MAX_EVENT_BYTES, MAX_TEXT,
     OTHER_LOCATION, VERSION, ZERO,
 };
-use crate::reducer::{reduce, require, Issue, Revocation, State, Status};
+use crate::reducer::{
+    reduce, require, Issue, PlaceChange, PlaceChangeKind, Revocation, State, Status,
+    REMOVAL_COOLDOWN,
+};
 use crate::store::{Accept, Store};
 use ed25519_dalek::SigningKey;
 use serde_json::{json, Value};
@@ -207,10 +210,27 @@ impl Node {
     }
 
     /// `now` (unix seconds) decides which removals are over: those leave `locations` for
-    /// `removed_locations`, the admin's change log.
+    /// `removed_locations` and show as `removed` in `place_log`, the admin's change log.
     #[must_use]
     pub fn site_info_json(&self, now: u64) -> String {
-        let s = self.state();
+        let mut s = self.state();
+        let mut log = std::mem::take(&mut s.place_log);
+        log.extend(
+            s.pending_removal
+                .iter()
+                .filter(|(_, r)| r.is_done(now))
+                .map(|(code, r)| PlaceChange {
+                    ts: r.removes_at(),
+                    by: r.by,
+                    code: code.clone(),
+                    kind: PlaceChangeKind::Removed,
+                    reason: r.reason.clone(),
+                    rename: None,
+                }),
+        );
+        // newest first; on a tie, the later-applied one first
+        log.reverse();
+        log.sort_by_key(|c| std::cmp::Reverse(c.ts));
         let (removed, listed): (Vec<&Location>, Vec<&Location>) =
             s.locations.iter().partition(|l| {
                 s.pending_removal
@@ -226,6 +246,7 @@ impl Node {
             "categories": s.config.categories,
             "locations": listed.into_iter().map(|l| location_json(&s, l, now)).collect::<Vec<_>>(),
             "removed_locations": removed.into_iter().map(|l| removed_json(&s, l)).collect::<Vec<_>>(),
+            "place_log": log.iter().map(|c| place_change_json(&s, c)).collect::<Vec<_>>(),
             "members": s.roles.iter().map(|(k, r)| { let mut m = member(k); m["role"] = json!(format!("{r:?}")); m }).collect::<Vec<_>>(),
             "pending": s.pending_members.iter().map(member).collect::<Vec<_>>(),
             "revoked": revoked.into_iter().map(|(k, r)| { let mut m = member(k); merge(&mut m, revocation_json(&s, r)); m }).collect::<Vec<_>>(),
@@ -626,6 +647,31 @@ fn removed_json(s: &State, l: &Location) -> Value {
         "by": hex::encode(r.by), "by_name": s.names.get(&r.by),
         "reason": r.reason, "since": r.since, "removed_at": r.removes_at(),
     })
+}
+
+/// A change-log row; `label` is the place's current name.
+fn place_change_json(s: &State, c: &PlaceChange) -> Value {
+    let label = s
+        .locations
+        .iter()
+        .find(|l| l.code == c.code)
+        .map(|l| &l.label);
+    let mut v = json!({
+        "ts": c.ts, "by": hex::encode(c.by), "by_name": s.names.get(&c.by),
+        "code": c.code, "label": label, "kind": c.kind, "reason": c.reason,
+    });
+    match c.kind {
+        PlaceChangeKind::RemovalStarted => {
+            v["ends_at"] = json!(c.ts.saturating_add(REMOVAL_COOLDOWN))
+        }
+        PlaceChangeKind::Removed => v["since"] = json!(c.ts.saturating_sub(REMOVAL_COOLDOWN)),
+        _ => {}
+    }
+    if let Some((from, to)) = &c.rename {
+        v["from"] = json!(from);
+        v["to"] = json!(to);
+    }
+    v
 }
 
 fn issue_json(s: &State, i: &Issue, now: u64) -> Value {

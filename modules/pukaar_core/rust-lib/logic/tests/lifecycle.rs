@@ -3,7 +3,7 @@ mod util;
 use common::*;
 use pukaar_logic::event::{new_key, Body, Id, Location, Role, MAX_TEXT};
 use pukaar_logic::node::Node;
-use pukaar_logic::reducer::Status;
+use pukaar_logic::reducer::{Status, REMOVAL_COOLDOWN};
 
 fn report(n: &mut Node) -> Id {
     n.publish(
@@ -929,4 +929,109 @@ fn sla_flags_follow_the_site_settings() {
         (info["sla_ack_h"].as_u64(), info["sla_fix_h"].as_u64()),
         (Some(12), Some(48))
     );
+}
+
+/// Every applied place change, as (kind, code, ts, reason) newest first.
+fn place_log(n: &Node, now: u64) -> Vec<serde_json::Value> {
+    json(&n.site_info_json(now))["place_log"]
+        .as_array()
+        .unwrap()
+        .clone()
+}
+
+/// P2 added, edited, renamed, retired, restored, removal started and undone; B-07 removal started.
+fn place_history(s: &mut Site) {
+    let a = &mut s.admin;
+    a.add_location("P2", "Lane behind the clinic", "Paths", 100)
+        .unwrap();
+    a.edit_location("P2", "Lane behind the clinic", "Lanes", 110)
+        .unwrap();
+    a.edit_location("P2", "Lane by the clinic", "Lanes", 120)
+        .unwrap();
+    a.retire_location("P2", "closed for construction", 130)
+        .unwrap();
+    a.restore_location("P2", "open again", 140).unwrap();
+    a.remove_location("P2", "added by mistake", 150).unwrap();
+    a.undo_remove_location("P2", "still needed", 160).unwrap();
+    a.remove_location("B-07", "bin taken away", 170).unwrap();
+    s.sync();
+    // a forged steward edit skips the pre-check: kept, rejected, and not a change
+    let forged = s
+        .steward
+        .publish(
+            Body::LocationEdit {
+                code: "P2".into(),
+                label: "Mine now".into(),
+                group: "Lanes".into(),
+            },
+            180,
+        )
+        .unwrap();
+    s.sync();
+    assert!(s.admin.state().rejected.contains_key(&forged.id));
+}
+
+#[test]
+fn the_change_log_lists_every_applied_place_change_newest_first() {
+    let mut s = Site::new();
+    place_history(&mut s);
+    let log = place_log(&s.admin, 171);
+    let rows: Vec<(&str, &str, u64, &str)> = log
+        .iter()
+        .map(|e| {
+            (
+                e["kind"].as_str().unwrap(),
+                e["code"].as_str().unwrap(),
+                e["ts"].as_u64().unwrap(),
+                e["reason"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("removal_started", "B-07", 170, "bin taken away"),
+            ("removal_undone", "P2", 160, "still needed"),
+            ("removal_started", "P2", 150, "added by mistake"),
+            ("restored", "P2", 140, "open again"),
+            ("retired", "P2", 130, "closed for construction"),
+            ("renamed", "P2", 120, ""),
+            ("edited", "P2", 110, ""),
+            ("added", "P2", 100, ""),
+        ]
+    );
+    let admin = hex::encode(s.admin.me());
+    for e in &log {
+        assert_eq!(e["by"], admin.as_str());
+        assert_eq!(e["by_name"], "Site admin");
+    }
+    assert_eq!(log[0]["label"], "Bin at path junction");
+    assert_eq!(log[0]["ends_at"], 170 + REMOVAL_COOLDOWN);
+    assert_eq!(log[1]["label"], "Lane by the clinic", "the current name");
+    assert_eq!(log[5]["from"], "Lane behind the clinic");
+    assert_eq!(log[5]["to"], "Lane by the clinic");
+    assert!(
+        log[6].get("from").is_none(),
+        "a group change is not a rename"
+    );
+}
+
+#[test]
+fn a_removal_shows_as_removed_only_once_its_cooldown_is_over() {
+    let mut s = Site::new();
+    place_history(&mut s);
+    let end = 170 + REMOVAL_COOLDOWN;
+    assert!(place_log(&s.admin, end - 1)
+        .iter()
+        .all(|e| e["kind"] != "removed"));
+    let log = place_log(&s.admin, end);
+    assert_eq!(log.len(), 9);
+    let r = &log[0];
+    assert_eq!(r["kind"], "removed");
+    assert_eq!(r["code"], "B-07");
+    assert_eq!(r["ts"], end);
+    assert_eq!(r["since"], 170);
+    assert_eq!(r["reason"], "bin taken away");
+    assert_eq!(r["by_name"], "Site admin");
+    assert_eq!(log[1]["kind"], "removal_started");
 }
