@@ -319,9 +319,10 @@ Item {
     // The sidebar's addition to "Proof · no conflicts": nothing while the anchor is recent and matches.
     readonly property string anchorNote: ({ never: "not anchored yet", mismatch: "anchor mismatch",
         stale: lastAnchor ? "anchor " + dur(hoursSince(lastAnchor.ts)) + " old" : "", "": "" })[anchorState]
+    // The anchor's own record is always newer than the heads it covers: it is not counted.
+    function newerEvents(a) { return Math.max(0, (info.events || 0) - a.events_covered - 1) }
     function anchorSummary(a) {
-        // The anchor's own record is always newer than the heads it covers: it is not counted.
-        var newer = Math.max(0, (info.events || 0) - a.events_covered - 1)
+        var newer = newerEvents(a)
         return "Last anchor recorded " + age(a.ts) + " (" + when(a.ts, now - a.ts < 6 * 86400 ? "ddd HH:mm" : "") + "). Covers "
             + plural(a.events_covered, "event") + "."
             + (newer ? " " + plural(newer, "newer event") + (newer === 1 ? " isn't" : " aren't") + " anchored yet." : "")
@@ -805,13 +806,10 @@ Item {
         onClicked: root.openPage("proof")
     }
 
-    // One issue card: on the board, or `flat` as a History row (no frame, a rule under it, the code
-    // not a link: History is already filtering). The texts default to the board's; History passes its
-    // own meta line as hintText.
+    // One issue card on the board.
     component IssueCard: ItemDelegate {
         id: card
         required property var issue
-        property bool flat: false
         property string placeText: root.place(issue)
         property string hintText: root.hint(issue)
         property var flags: root.flagLines(issue)                      // red lines
@@ -820,21 +818,18 @@ Item {
         property var stage: root.stageStyle(issue.status)
         signal opened()
         readonly property color ink: issue.location_retired ? root.t.muted : root.t.fg   // a retired place's card is quieter
-        readonly property bool linked: !flat && issue.location !== "other"
+        readonly property bool linked: issue.location !== "other"
         width: ListView.view.width
-        topPadding: 10; bottomPadding: 12; rightPadding: flat ? 16 : 12
-        leftPadding: flat ? (current ? 21 : 16) : current ? 16 : 12
+        topPadding: 10; bottomPadding: 12; rightPadding: 12
+        leftPadding: current ? 16 : 12
         background: Frame {
             ring: card.visualFocus
-            radius: card.flat ? 0 : 6
-            border.width: card.visualFocus ? 2 : card.flat ? 0 : 1
-            fill: card.flat ? (card.current ? root.t.accentBg : card.hovered ? root.t.hover : root.t.card)
-                : card.down ? Qt.darker(root.t.card, 1.06) : card.issue.location_retired ? root.t.well : root.t.card
+            radius: 6
+            border.width: card.visualFocus ? 2 : 1
+            fill: card.down ? Qt.darker(root.t.card, 1.06) : card.issue.location_retired ? root.t.well : root.t.card
             edge: card.current || card.hovered ? root.t.ctlBd : root.t.bd
-            Rectangle { visible: card.flat; anchors.bottom: parent.bottom; width: parent.width; height: 1; color: root.t.bd }
-            Rectangle { visible: card.flat && card.current; width: 5; height: parent.height; color: card.stage.edge }
             Shape {   // 5 px strip, round on its outer corners only
-                visible: card.current && !card.flat
+                visible: card.current
                 x: -1; y: -1; width: 5; height: card.height + 2
                 preferredRendererType: Shape.CurveRenderer
                 ShapePath {
@@ -882,6 +877,105 @@ Item {
             }
         }
         onClicked: card.opened()
+    }
+
+    // The anchor at a glance (top of History): a dot and a line, then a link to Integrity. Green while
+    // the anchor is recent and matches, amber when stale or never, red on a mismatch. Never "verified".
+    component IntegrityStrip: Rectangle {
+        id: strip
+        readonly property var a: root.lastAnchor
+        readonly property string state: root.anchorState
+        readonly property color tone: state === "mismatch" ? root.t.sbOff : state === "" ? root.t.sbOk : root.t.sbConn
+        readonly property string head: !a || state === "never" ? "Not anchored yet" : state === "mismatch" ? "Anchor mismatch"
+            : state === "stale" ? "Anchor " + root.dur(root.hoursSince(a.ts)) + " old" : "Anchored " + root.age(a.ts)
+        readonly property string detail: a && state === "mismatch" ? "the record does not match the last anchor"
+            : !a || state === "never" ? root.plural(root.info.events || 0, "event") + " recorded, none anchored"
+            : root.plural(root.info.events || 0, "event") + (root.newerEvents(a) ? ", " + root.newerEvents(a) + " newer not anchored yet" : "")
+        Layout.fillWidth: true; Layout.bottomMargin: 8
+        implicitHeight: line.implicitHeight + 16
+        radius: 8; color: root.t.well; border.color: root.t.bd
+        Accessible.role: Accessible.StaticText; Accessible.name: head + ", " + detail
+        Flow {   // the dot is a glyph, so the text and the link wrap as two units
+            id: line
+            x: 12; y: 8; width: parent.width - 24; spacing: 10
+            Label {
+                textFormat: Text.StyledText; font.pointSize: root.smallSize
+                text: "<font color='" + strip.tone + "'>●</font>&nbsp; <b><font color='" + strip.tone + "'>" + strip.head + "</font></b> <font color='" + root.t.muted + "'>· " + strip.detail + "</font>"
+            }
+            LinkButton { text: "Open Integrity  ›"; Accessible.name: "Open Integrity"; onClicked: root.openPage("proof") }
+        }
+    }
+
+    // History's table: each column's width (Place, Issue and Closing note also share what is left);
+    // the last four columns drop out when the page is narrow, or the issue pane is open beside it.
+    readonly property var histColW: [62, 170, 220, 150, 80, 170, 90, 60]
+    readonly property bool histCompact: compactRows || paneOpen
+    // One table cell: a text, then whatever it holds (flag lines, chips). The header row uses it too.
+    component HistCell: Column {
+        required property int col
+        property string text
+        property int format: Text.PlainText
+        property bool muted: false      // meta text: smaller, grey
+        property color ink: muted ? root.t.muted : root.t.fg
+        property bool bold: false
+        property int align: Text.AlignLeft
+        Layout.preferredWidth: root.histColW[col]; Layout.fillWidth: col === 1 || col === 2 || col === 5
+        Layout.alignment: Qt.AlignTop
+        visible: col < 4 || !root.histCompact
+        spacing: 2
+        Label {
+            visible: parent.text !== ""
+            width: parent.width; wrapMode: Text.Wrap; text: parent.text; textFormat: parent.format; horizontalAlignment: parent.align
+            color: parent.ink; font.pointSize: parent.muted ? root.smallSize : root.baseSize; font.weight: parent.bold ? Font.DemiBold : Font.Normal
+        }
+    }
+    // One closed issue as a table row; a click opens the pane. A retired place's row is quieter.
+    component HistRow: ItemDelegate {
+        id: row
+        required property var issue
+        property string note            // "Confirmed: lid fitted (Asha)"
+        property string hint            // "Resolved 4 Oct · ...", for screen readers
+        readonly property var flags: root.scars(issue)
+        readonly property var stage: root.stageStyle(issue.status)
+        readonly property bool current: !!root.selected && root.selected.issue.id === issue.id
+        readonly property color ink: issue.location_retired ? root.t.muted : root.t.fg
+        width: ListView.view.width
+        topPadding: 9; bottomPadding: 9; leftPadding: 16; rightPadding: 16
+        background: Rectangle {
+            color: row.current ? root.t.accentBg : row.hovered ? root.t.hover : row.issue.location_retired ? root.t.well : root.t.card
+            border.width: row.visualFocus ? 2 : 0; border.color: root.t.focus
+            Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: root.t.bd }
+            Rectangle { visible: row.current; width: 5; height: parent.height; color: row.stage.edge }
+        }
+        Accessible.name: root.place(issue) + ": " + issue.text
+        Accessible.description: issue.stage + ". " + hint + " " + flags.join(" ")
+        contentItem: RowLayout {
+            spacing: 12
+            HistCell { col: 0; text: root.when(root.closedAt(row.issue), "d MMM"); ink: row.ink }
+            HistCell {
+                col: 1; ink: row.ink; format: Text.RichText
+                text: root.mono(root.placeCode(row.issue)) + " " + root.esc(root.placeName(row.issue))
+            }
+            HistCell {
+                col: 2; text: row.issue.text; ink: row.ink
+                Repeater { model: row.flags; delegate: FlagLine { width: parent.width } }
+            }
+            HistCell {
+                col: 3
+                Flow {
+                    width: parent.width; spacing: 4
+                    StatusChip { label: row.issue.stage; stage: row.stage; icon: root.stageIcon(row.issue.status); maxWidth: parent.width }
+                    StatusChip {
+                        visible: row.issue.reopen_count > 0; maxWidth: parent.width
+                        label: "Reopened " + row.issue.reopen_count + "×"; stage: root.t.closed; icon: "reopen"
+                    }
+                }
+            }
+            HistCell { col: 4; muted: true; text: row.issue.category }
+            HistCell { col: 5; muted: true; text: row.note }
+            HistCell { col: 6; muted: true; text: row.issue.reporter === root.me.key ? "you" : root.who(row.issue.reporter, row.issue.reporter_name) }
+            HistCell { col: 7; muted: true; align: Text.AlignRight; text: root.span(root.closedAt(row.issue) - row.issue.reported_ts) }
+        }
     }
 
     // A board column's title: stage icon, name, count pill, and a one-line subtitle.
@@ -3002,8 +3096,9 @@ Item {
                     property int limit: pageSize
                     property int status: 0        // All, Resolved, Closed without fix, Reopened ≥1×
                     property int since: 3         // 7 days, 30 days, 3 months, All
+                    property bool oldestFirst: false   // the Closed header's sort
                     readonly property string place: root.historyPlace
-                    readonly property var all: root.issues.filter(function (i) { return root.isTerminal(i.status) }).sort(root.newestClosedFirst)
+                    readonly property var all: root.issues.filter(function (i) { return root.isTerminal(i.status) }).sort(function (a, b) { return (oldestFirst ? -1 : 1) * root.newestClosedFirst(a, b) })
                     readonly property var atPlace: place === "" ? all : all.filter(function (i) { return i.location === place })
                     readonly property var shown: {
                         var q = search.text.trim().toLowerCase(), days = [7, 30, 91, 0][since], now = Date.now() / 1000
@@ -3016,7 +3111,7 @@ Item {
                     }
                     // the page's rows, each with its month for the section headers
                     readonly property var rows: shown.slice(0, limit).map(function (i) { return Object.assign({ month: root.when(root.closedAt(i), "MMMM yyyy") }, i) })
-                    readonly property string filters: [search.text, place, status, since, root.onlyMine].join("|")
+                    readonly property string filters: [search.text, place, status, since, root.onlyMine, oldestFirst].join("|")
                     onFiltersChanged: limit = pageSize
                     function count(l, f) { return l.filter(f).length }
                     function clear() { search.text = ""; status = 0; since = 3; root.onlyMine = false; root.historyPlace = "" }
@@ -3026,10 +3121,14 @@ Item {
                         var claimed = m.filter(function (i) { return !!i.claimed_ts })
                         return root.plural(m.length, "issue") + (claimed.length ? " · fixed within target: " + count(claimed, root.inTarget) + " of " + claimed.length : "")
                     }
-                    // "Resolved 4 Oct · Confirmed: works (Asha) · reported by you · still on the board"
-                    function meta(i) {
+                    // "Confirmed: works (Asha)": the closing note and who closed it
+                    function closingNote(i) {
                         var p = i.progress
-                        return root.closedVerb(i) + " " + root.when(root.closedAt(i), "d MMM") + (p && p.note ? " · " + p.note + " (" + root.who(p.by, p.by_name) + ")" : "")
+                        return p && p.note ? p.note + " (" + root.who(p.by, p.by_name) + ")" : ""
+                    }
+                    // "Resolved 4 Oct · Confirmed: works (Asha) · reported by you · still on the board" (for screen readers)
+                    function meta(i) {
+                        return root.closedVerb(i) + " " + root.when(root.closedAt(i), "d MMM") + (closingNote(i) ? " · " + closingNote(i) : "")
                              + (i.reporter === root.me.key ? " · reported by you" : "") + (root.onBoard(i) ? " · still on the board" : "")
                     }
                     // the place view: "14 fixed, 2 reopened, 1 won't fix, 2 duplicates since 22 May. Open now: 1, on the board."
@@ -3044,13 +3143,13 @@ Item {
                         return parts.join(", ") + (at.length ? " since " + root.when(Math.min.apply(null, at.map(function (i) { return i.reported_ts })), "d MMM") : "")
                              + ". Open now: " + open + (open ? ", on the board." : ".")
                     }
+                    IntegrityStrip {}
                     PageHead {
                         title: "History"
                         lede: hist.place ? "Everything reported at one place. <b>Nothing is deleted.</b>"
-                            : "Every resolved and closed issue, newest first. The board shows resolved issues for 14 days and closed ones for 30; "
+                            : "Every resolved and closed issue, " + (hist.oldestFirst ? "oldest" : "newest") + " first. The board shows resolved issues for 14 days and closed ones for 30; "
                               + "after that they are only here. <b>Nothing is deleted</b>, and any of them can be reopened."
                     }
-                    ProofLink {}
                     RowLayout {
                         Layout.fillWidth: true; Layout.topMargin: 8
                         spacing: 12
@@ -3148,13 +3247,45 @@ Item {
                             x: 1; y: 1; width: parent.width - 2; height: contentHeight
                             interactive: false
                             model: hist.rows
+                            header: Rectangle {   // the column titles; only Closed sorts
+                                width: histList.width; implicitHeight: heads.implicitHeight + 16; color: root.t.well
+                                Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: root.t.bd }
+                                RowLayout {
+                                    id: heads
+                                    x: 16; y: 8; width: parent.width - 32; spacing: 12
+                                    HistCell {
+                                        col: 0
+                                        AbstractButton {
+                                            id: sort
+                                            text: "Closed " + (hist.oldestFirst ? "▲" : "▼")
+                                            focusPolicy: Qt.StrongFocus
+                                            Accessible.name: "Sort by closed date, " + (hist.oldestFirst ? "oldest" : "newest") + " first"
+                                            onClicked: hist.oldestFirst = !hist.oldestFirst
+                                            Keys.onReturnPressed: clicked()
+                                            Keys.onEnterPressed: clicked()
+                                            HoverHandler { cursorShape: Qt.PointingHandCursor }
+                                            contentItem: Label {
+                                                text: sort.text; font.pointSize: root.smallSize; font.weight: Font.DemiBold
+                                                color: sort.hovered ? root.t.fg : root.t.muted
+                                            }
+                                            background: Rectangle { anchors { fill: parent; margins: -3 } radius: 4; color: "transparent"; border.width: sort.visualFocus ? 2 : 0; border.color: root.t.focus }
+                                        }
+                                    }
+                                    HistCell { col: 1; muted: true; bold: true; text: "Place" }
+                                    HistCell { col: 2; muted: true; bold: true; text: "Issue" }
+                                    HistCell { col: 3; muted: true; bold: true; text: "Status" }
+                                    HistCell { col: 4; muted: true; bold: true; text: "Category" }
+                                    HistCell { col: 5; muted: true; bold: true; text: "Closing note" }
+                                    HistCell { col: 6; muted: true; bold: true; text: "Reported by" }
+                                    HistCell { col: 7; muted: true; bold: true; align: Text.AlignRight; text: "Took" }
+                                }
+                            }
                             section.property: "month"
                             section.delegate: SectionHeader { aside: hist.monthAside(section) }
-                            delegate: IssueCard {
+                            delegate: HistRow {
                                 required property var modelData
-                                issue: modelData; flat: true
-                                hintText: hist.meta(modelData)
-                                onOpened: root.openIssue(modelData.id)
+                                issue: modelData; hint: hist.meta(modelData); note: hist.closingNote(modelData)
+                                onClicked: root.openIssue(modelData.id)
                             }
                             footer: Item {
                                 readonly property int remaining: hist.shown.length - hist.rows.length

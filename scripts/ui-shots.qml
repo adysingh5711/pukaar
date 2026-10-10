@@ -12,7 +12,7 @@ Window {
     readonly property var widths: [800, 1280, 1400]
     readonly property var states: ["none", "pending", "resident", "steward", "admin"]
     readonly property var pages: ["board", "history", "report", "people", "places", "proof", "profile", "issue", "issue-new"]
-    // The last-anchor states other than the default recent one: Proof's block, and the sidebar line on Board.
+    // The last-anchor states other than the default recent one: Proof's block, the sidebar line on Board, History's strip.
     readonly property var anchorStates: ["never", "stale", "mismatch"]
     // Revoked roles: a removed device ("removed", as Ravi Das), and the admin's view once r2 was removed ("former").
     // Places with its change log opened and scrolled to (`log`): as the admin, then searched (a third
@@ -100,7 +100,7 @@ Window {
             issue(7, "Duplicate", "Closed: duplicate", "other", "Garbage", "Bin at the market gate is full.", "r2",
                   { age: 58, landmark: "बाज़ार गेट के सामने", progress: progress("steward", 55, "Same as the B1 report.", "", 0) }),
             issue(8, "ConfirmedResolved", "Resolved", "B1", "Garbage", "Old bin broken.", "resident",
-                  { age: 1300, acked_ts: h(1260), claimed_ts: h(1100), confirms: 1, progress: progress("steward", 1080, "New bin installed.", "", 0) })
+                  { age: 1300, acked_ts: h(1260), claimed_ts: h(1100), confirms: 1, reopen_count: 1, progress: progress("steward", 1080, "New bin installed.", "", 0) })
         ]
         function ev(n, kind, who, age, body, o) {
             return Object.assign({ id: String(n).repeat(64).substr(0, 64), kind: kind, author: keys[who], author_name: names[who], ts: h(age),
@@ -166,7 +166,7 @@ Window {
             [800, 1400].forEach(function (w) { out.push({ state: r[0], width: w, page: r[1], former: !!r[2] }) })
         })
         anchorStates.forEach(function (a) {
-            [800, 1400].forEach(function (w) { ["proof", "board"].forEach(function (p) { out.push({ state: "resident", width: w, page: p, anchor: a }) }) })
+            [800, 1400].forEach(function (w) { ["proof", "board", "history"].forEach(function (p) { out.push({ state: "resident", width: w, page: p, anchor: a }) }) })
         })
         logJobs.forEach(function (r) {
             [800, 1400].forEach(function (w) { out.push({ state: r[0], width: w, page: r[1], log: true, search: r[2] || "" }) })
