@@ -10,7 +10,8 @@ Window {
     width: 1280; height: 900; visible: true
     readonly property var args: Qt.application.arguments.slice(Qt.application.arguments.indexOf("--") + 1)
     readonly property var widths: [800, 1280, 1400]
-    readonly property var states: ["none", "pending", "resident", "steward", "admin"]
+    // "admin" is a regular admin (Kiran is the super admin); "superadmin" is Asha as the only one.
+    readonly property var states: ["none", "pending", "resident", "steward", "admin", "superadmin"]
     readonly property var pages: ["board", "history", "report", "people", "places", "proof", "profile", "issue", "issue-new"]
     // The last-anchor states other than the default recent one: Integrity's block, Board's banner, History's strip.
     readonly property var anchorStates: ["never", "stale", "mismatch"]
@@ -21,6 +22,11 @@ Window {
     // Places as the admin with retired places shown and a confirm step open on a row (its objectName, the panel).
     readonly property var confirmJobs: [["placeRow-W2", "retire_location"], ["placeRow-L1", "undo_remove_location"]]
     // The last item: rows whose panel opens before the shot (People's revoke step on Meera's row).
+    // Super admins: two of them; Kiran on notice, as Asha sees it and on Kiran's own Board; Kiran demoted
+    // after the deadline (sealed by Suresh, one late action rejected); Asha's change and transfer steps open.
+    readonly property var superJobs: [["superadmin2", "people"], ["superadmin2", "profile"], ["notice", "people"], ["noticed", "board"],
+                                      ["noticed", "people"], ["demoted", "people"],
+                                      ["superadmin", "people", [["memberRow-adadad", "change"], ["memberRow-a1a1a1", "transfer"]], "panels"]]
     readonly property var revokeJobs: [["removed", "board"], ["removed", "profile"], ["admin", "board", true], ["admin", "issue", true],
                                        ["admin", "people", true, [["memberRow-7e7e7e", "revoke"]]]]
 
@@ -32,11 +38,24 @@ Window {
         // Fixed within each half hour, so two runs in the same half hour give the same pixels.
         readonly property int now: Math.floor(Date.now() / 1800000) * 1800
         readonly property string site: "5173".repeat(16)
-        readonly property var keys: ({ admin: "a1".repeat(32), steward: "5e".repeat(32), resident: "7e".repeat(32), r2: "72".repeat(32), pending: "9e".repeat(32), gone: "6a".repeat(32) })
-        readonly property var names: ({ admin: "Asha Verma", steward: "Suresh Kumar", resident: "Meera", r2: null, pending: null, gone: "Ravi Das" })
-        readonly property var roles: ({ admin: "Admin", steward: "Steward", resident: "Resident", r2: "Resident" })
+        readonly property var keys: ({ admin: "a1".repeat(32), admin2: "ad".repeat(32), steward: "5e".repeat(32), resident: "7e".repeat(32), r2: "72".repeat(32), pending: "9e".repeat(32), gone: "6a".repeat(32) })
+        readonly property var names: ({ admin: "Asha Verma", admin2: "Kiran Shah", steward: "Suresh Kumar", resident: "Meera", r2: null, pending: null, gone: "Ravi Das" })
+        readonly property var roles: ({ admin: "Admin", admin2: state === "demoted" ? "Steward" : "Admin", steward: "Steward", resident: "Resident", r2: "Resident" })
         function h(n) { return now - n * 3600 }
-        function member(who) { return { key: keys[who], fingerprint: keys[who].substr(0, 6), name: names[who] } }
+        // Who is looking (most states are a role's own key), and who the super admins are.
+        readonly property string viewer: ({ removed: "gone", noticed: "admin2", superadmin: "admin", superadmin2: "admin", notice: "admin", demoted: "admin" })[state] || state
+        readonly property var supers: state === "admin" ? ["admin2"] : state === "superadmin2" ? ["admin", "admin2"] : ["admin"]
+        // Asha's notice to Kiran: running (a week to go), or ended and sealed by Suresh (`demoted`).
+        function notice(sealed) {
+            return { subject: keys.admin2, subject_name: names.admin2, by: keys.admin, by_name: names.admin, ts: h(20), outcome: "steward",
+                     deadline: sealed ? h(10) : now + 7 * 86400, reason: "Missed two audits, and shared a key with a helper.", sealed: sealed,
+                     sealed_by: sealed ? keys.steward : null, sealed_by_name: sealed ? names.steward : null, sealed_ts: sealed ? h(9) : null }
+        }
+        readonly property var notices: state === "notice" || state === "noticed" ? [notice(false)] : state === "demoted" ? [notice(true)] : []
+        function member(who) {
+            return { key: keys[who], fingerprint: keys[who].substr(0, 6), name: names[who], super_admin: supers.indexOf(who) >= 0,
+                     demotions: state === "demoted" && who === "admin2" ? [notice(true)] : [] }
+        }
         function revocation(age, reason) { return { by: keys.admin, by_name: names.admin, ts: h(age), reason: reason } }
         readonly property var revocations: ({ gone: revocation(30, "Left the camp."), r2: revocation(5, "Shared the site id outside the ward.") })
         function revoked() {
@@ -127,8 +146,9 @@ Window {
         }
         function me() {
             if (state === "none") return { site: null, delivery: "Open" }
-            var who = state === "removed" ? "gone" : state
+            var who = viewer
             return { key: keys[who], fingerprint: keys[who].substr(0, 6), role: roles[who] || null, name: names[who], site: site,
+                     super_admin: supers.indexOf(who) >= 0, notice: state === "noticed" ? notice(false) : null,
                      revoked: revocations[who] || null, syncing_own_history: false, delivery: "Open" }
         }
         function siteInfo() {
@@ -137,8 +157,10 @@ Window {
                 removed_locations: [{ code: "T9", label: "Old toilet block", group: "Rooms", by: keys.admin, by_name: names.admin,
                                       reason: "Demolished", since: h(1000), removed_at: h(280) }],
                 place_log: placeLog,
-                members: ["admin", "steward", "resident"].concat(former ? [] : ["r2"]).map(function (w) { var m = member(w); m.role = roles[w]; return m }),
-                pending: [member("pending")], revoked: revoked(), sla_ack_h: 24, sla_fix_h: 72, events: 42, forks: 0, forked_authors: [],
+                members: ["admin", "admin2", "steward", "resident"].concat(former ? [] : ["r2"]).map(function (w) { var m = member(w); m.role = roles[w]; return m }),
+                pending: [member("pending")], revoked: revoked(), super_admins: supers.map(member), notices: notices,
+                rejected: state === "demoted" ? [{ id: "e9".repeat(32), kind: "role_grant", author: keys.admin2, author_name: names.admin2,
+                                                   ts: h(8), reason: "only admin grants roles" }] : [], sla_ack_h: 24, sla_fix_h: 72, events: 42, forks: 0, forked_authors: [],
                 last_anchor: anchor === "never" ? null : { ts: h(anchor === "stale" ? 50 : 3), tx: "pda:Public/9f2c", by: keys.steward,
                     by_name: names.steward, events_covered: 33, reproducible: anchor !== "mismatch" } }
         }
@@ -165,6 +187,9 @@ Window {
             widths.forEach(function (w) {
                 (s === "none" ? ["first-run"] : pages).forEach(function (p) { out.push({ state: s, width: w, page: p }) })
             })
+        })
+        superJobs.forEach(function (r) {
+            [800, 1400].forEach(function (w) { out.push({ state: r[0], width: w, page: r[1], panels: r[2], tag: r[3] }) })
         })
         revokeJobs.forEach(function (r) {
             [800, 1400].forEach(function (w) { out.push({ state: r[0], width: w, page: r[1], former: !!r[2], panels: r[3] }) })
@@ -195,6 +220,7 @@ Window {
             view.source = ""
             view.source = "file://" + args[0]
             v = view.item
+            v.now = logos.now   // its clock too: a notice's deadline shows to the minute
         }
         width = j.width
         v.closeIssue()
@@ -209,7 +235,7 @@ Window {
         var rows = find(v, "placesPage")
         if (rows) find(rows, "showRetired").checked = !!j.rows
         var members = find(v, "memberList")
-        if (members && j.former) members.open = true   // the admin's revoke boxes, once r2 was removed
+        if (members) members.open = j.page === "people"   // an admin's opens collapsed: show its rows
         focusSink.forceActiveFocus()
         shot.start()
     }
@@ -233,7 +259,7 @@ Window {
             }
             focusSink.forceActiveFocus()   // again: an opened panel puts the cursor in its field
             view.grabToImage(function (r) {
-                r.saveToFile(win.args[1] + "/" + j.state + "-" + j.page + (j.anchor ? "-anchor-" + j.anchor : "") + (j.former ? "-former" : "") + (j.log ? "-log" : "") + (j.rows ? "-rows" : "") + (j.search ? "-search" : "") + "-" + j.width + ".png")
+                r.saveToFile(win.args[1] + "/" + j.state + "-" + j.page + (j.anchor ? "-anchor-" + j.anchor : "") + (j.former ? "-former" : "") + (j.log ? "-log" : "") + (j.rows ? "-rows" : "") + (j.search ? "-search" : "") + (j.tag ? "-" + j.tag : "") + "-" + j.width + ".png")
                 win.next()
             })
         }

@@ -38,7 +38,9 @@ Item {
     readonly property bool unapproved: !approved && !removed      // no role, and it is ours to ask for: read the fingerprint at the kiosk
     readonly property bool awaitingApproval: inSite && unapproved && !!info.name   // joined, genesis here, not yet granted a role
     readonly property bool isAdmin: me.role === "Admin"
-    readonly property string roleName: me.role || (removed ? "Removed" : "Pending")
+    readonly property bool isSuper: !!me.super_admin     // changes admins; at most two per site
+    readonly property int superCount: (info.super_admins || []).length
+    readonly property string roleName: isSuper ? "Super admin" : me.role || (removed ? "Removed" : "Pending")
     // A restored identity waits for its own history before signing anything (core refuses meanwhile).
     readonly property bool syncing: !!me.syncing_own_history
     // ---- shell (design/proposal/NOTES.md section 3) ----
@@ -286,6 +288,29 @@ Item {
     function who(key, name) { return name ? name : "pseudonym " + String(key).substr(0, 6) }
     function formerTag(former) { return former ? " (former member)" : "" }   // after a revoked author's name and code
     function when(ts, format) { return new Date(ts * 1000).toLocaleString(Qt.locale(), format || "d MMM HH:mm") }
+    // A member's admin notice (site_info notices): the running one while they are an admin, else the
+    // one that ended it, or their last demotion.
+    function noticeOf(m) {
+        var n = (info.notices || []).filter(function (x) { return x.subject === m.key })[0], d = m.demotions || []
+        return m.role === "Admin" ? n || null : n || d[d.length - 1] || null
+    }
+    // The People row's line about it.
+    function noticeLine(m) {
+        var n = noticeOf(m)
+        if (!n) return ""
+        var by = who(n.by, n.by_name), why = "“" + n.reason + "”"
+        if (m.role === "Admin")
+            return "Admin · " + (n.outcome === "remove" ? "is removed" : "becomes steward") + " on " + when(n.deadline) + " (notice by " + by + ": " + why + ")"
+        return m.role + " · was admin until " + when(n.deadline) + ", changed by " + by + ": " + why
+               + (n.sealed_by ? " Sealed by " + who(n.sealed_by, n.sealed_by_name) + (n.sealed_ts ? " at " + when(n.sealed_ts) : "") + "." : "")
+    }
+    // The member's own refused role actions (site_info rejected), e.g. an admin's after their notice ended.
+    function rejectedLine(m) {
+        var l = (info.rejected || []).filter(function (r) { return r.author === m.key }), n = noticeOf(m)
+        if (!l.length) return ""
+        return plural(l.length, "action") + " by " + who(m.key, m.name) + (n && m.role !== "Admin" ? " after " + when(n.deadline) : "")
+               + (l.length === 1 ? " was" : " were") + " rejected: " + l[0].reason
+    }
     // The change log's action chip per kind: its label and colour group (blue in motion, green restored, grey ended).
     readonly property var placeActions: ({ added: ["Added", "closed"], edited: ["Edited", "progress"], renamed: ["Renamed", "progress"],
         retired: ["Retired", "closed"], restored: ["Restored", "resolved"], removal_started: ["Removal started", "progress"],
@@ -1376,7 +1401,7 @@ Item {
             Label {
                 Layout.fillWidth: true; Layout.alignment: Qt.AlignTop; wrapMode: Text.Wrap; textFormat: Text.RichText
                 font.bold: flash.bold; color: flash.err && flash.bold ? root.t.danger : root.t.fg
-                text: (flash.lead ? "<b><font color='" + root.t.danger + "'>" + root.esc(flash.lead) + "</font></b> " : "") + root.esc(flash.text)
+                text: (flash.lead ? "<b><font color='" + flash.ink[2] + "'>" + root.esc(flash.lead) + "</font></b> " : "") + root.esc(flash.text)
             }
             ConfirmButton {
                 visible: flash.buttonText !== "" || flash.buttonIcon !== ""
@@ -2377,6 +2402,14 @@ Item {
                             font.pointSize: root.smallSize; color: root.t.muted
                         }
                     }
+                    Flash {   // we are an admin on notice: when and how our role changes, and why
+                        readonly property var n: root.me.notice
+                        visible: !!n && !n.sealed && n.deadline > root.now
+                        Layout.bottomMargin: 8
+                        tone: "warn"; icon: "warn"
+                        lead: n ? (n.outcome === "remove" ? "You are removed from the site on " : "You become a steward on ") + root.when(n.deadline) + "." : ""
+                        text: n ? "Reason: “" + n.reason + "” You keep admin powers until then." : ""
+                    }
                     Flash {   // the record no longer matches its anchor: every member sees it, on every Board visit
                         visible: root.anchorState === "mismatch"
                         Layout.bottomMargin: 8
@@ -2641,32 +2674,43 @@ Item {
                         objectName: "memberList"
                         title: "Members"; aside: "· " + root.members.length
                         open: !root.isAdmin; pad: 0
+                        Help {
+                            visible: root.isSuper && root.superCount >= 2
+                            Layout.margins: 16; Layout.bottomMargin: 6
+                            text: "Two super admins already, the most allowed."
+                        }
                         Repeater {
                             model: root.members
+                            // Who changes what: an admin, the residents and stewards; a super admin, also the admins.
                             delegate: ColumnLayout {
                                 id: memberRow
                                 objectName: "memberRow-" + modelData.fingerprint
                                 required property var modelData
                                 required property int index
                                 readonly property bool own: modelData.key === root.me.key
-                                readonly property bool elevated: modelData.role === "Admin" || modelData.role === "Steward"
+                                readonly property bool admin: modelData.role === "Admin"
+                                readonly property bool sup: !!modelData.super_admin
+                                readonly property bool elevated: admin || modelData.role === "Steward"
                                 readonly property string person: root.who(modelData.key, modelData.name)
-                                property string panel                // "" or the open confirm step: "revoke"
-                                onPanelChanged: memberStep.reset()
+                                readonly property var running: admin ? root.noticeOf(modelData) : null   // their notice, still running
+                                readonly property bool canChange: root.isSuper && admin && !sup && !running
+                                property string panel                // "" or the open step: "revoke", "change" or "transfer"
+                                onPanelChanged: { revokeStep.reset(); changeStep.reset() }
                                 Layout.fillWidth: true
                                 spacing: 0
                                 Rectangle { visible: memberRow.index > 0; Layout.fillWidth: true; implicitHeight: 1; color: root.t.bd }
                                 GridLayout {
                                     Layout.fillWidth: true; Layout.margins: 10; Layout.leftMargin: 16; Layout.rightMargin: 16
                                     columns: root.compactRows ? 3 : 4; columnSpacing: 12; rowSpacing: 8
-                                    Fingerprint { Layout.preferredWidth: 92; text: memberRow.modelData.fingerprint }
+                                    Fingerprint { Layout.alignment: Qt.AlignTop; Layout.preferredWidth: 92; text: memberRow.modelData.fingerprint }
                                     Item {   // the role chip has its own column; a narrow row puts it after the name
                                         visible: !root.compactRows
+                                        Layout.alignment: Qt.AlignTop
                                         Layout.preferredWidth: 100; implicitHeight: roleChip.height
                                         StatusChip { id: roleChip; label: memberRow.modelData.role; stage: memberRow.elevated ? root.t.progress : root.t.closed }
                                     }
                                     ColumnLayout {
-                                        Layout.fillWidth: true
+                                        Layout.fillWidth: true; Layout.alignment: Qt.AlignTop
                                         spacing: 0
                                         Flow {
                                             id: nameFlow
@@ -2676,19 +2720,71 @@ Item {
                                                 wrapMode: Text.Wrap; textFormat: Text.PlainText; font.weight: Font.DemiBold
                                                 text: memberRow.person
                                             }
+                                            StatusChip { visible: memberRow.sup; label: "Super admin"; stage: root.t.progress; strong: true }
                                             StatusChip { visible: root.compactRows; label: memberRow.modelData.role; stage: memberRow.elevated ? root.t.progress : root.t.closed }
                                         }
                                         Label { visible: memberRow.own; text: "you"; color: root.t.muted; font.pointSize: root.smallSize }
+                                        Help { visible: text !== ""; Layout.topMargin: 4; text: root.noticeLine(memberRow.modelData) }
+                                        FlagLine { id: rejected; visible: rejected.modelData !== ""; Layout.fillWidth: true; Layout.topMargin: 4; modelData: root.rejectedLine(memberRow.modelData) }
                                     }
-                                    ActionButton {
-                                        visible: root.isAdmin; shown: !memberRow.own
-                                        Layout.alignment: Qt.AlignTop
-                                        text: "Revoke"; kind: "danger"; Accessible.name: "Revoke " + memberRow.person
-                                        onClicked: memberRow.panel = "revoke"
+                                    RowLayout {   // only the controls this viewer may use; nothing at all for residents and stewards
+                                        visible: root.isAdmin
+                                        Layout.alignment: Qt.AlignTop | Qt.AlignRight; Layout.fillHeight: false   // buttons their own height, not the row's
+                                        spacing: 8
+                                        Help {
+                                            visible: memberRow.admin && !root.isSuper
+                                            Layout.fillWidth: false; Layout.maximumWidth: 240
+                                            text: "Only a super admin can change admins."
+                                        }
+                                        ConfirmButton {
+                                            visible: root.isSuper && !memberRow.admin && !!memberRow.modelData.name
+                                            text: "Grant admin"; name: text + ": " + memberRow.person; confirmText: "Confirm grant"
+                                            effect: "They become an admin now."
+                                            onConfirmed: root.run("grant_role", [memberRow.modelData.key, "admin", memberRow.modelData.name])
+                                        }
+                                        ActionButton {
+                                            visible: memberRow.canChange
+                                            text: "Change admin"; Accessible.name: text + ": " + memberRow.person
+                                            onClicked: memberRow.panel = "change"
+                                        }
+                                        ConfirmButton {
+                                            visible: memberRow.canChange && root.superCount < 2 && !!memberRow.modelData.name
+                                            text: "Add super admin"; name: text + ": " + memberRow.person; confirmText: "Confirm"
+                                            effect: "They can change admins too, from now on."
+                                            onConfirmed: root.run("add_super_admin", [memberRow.modelData.key])
+                                        }
+                                        ConfirmButton {
+                                            visible: root.isSuper && !!memberRow.running
+                                            text: "End notice now"; kind: "danger"; name: text + ": " + memberRow.person; confirmText: "Confirm end"
+                                            effect: memberRow.running && memberRow.running.outcome === "remove" ? "They are removed from the site now." : "They become a steward now."
+                                            onConfirmed: root.run("end_notice_now", [memberRow.modelData.key])
+                                        }
+                                        ConfirmButton {
+                                            visible: root.isSuper && !!memberRow.running
+                                            text: "Cancel notice"; name: text + ": " + memberRow.person; confirmText: "Confirm cancel"
+                                            effect: "They stay an admin."
+                                            onConfirmed: root.run("cancel_notice", [memberRow.modelData.key])
+                                        }
+                                        ActionButton {
+                                            visible: root.isSuper && memberRow.sup && memberRow.own
+                                            text: "Transfer super admin"
+                                            onClicked: memberRow.panel = "transfer"
+                                        }
+                                        ConfirmButton {
+                                            visible: root.isSuper && memberRow.sup && !memberRow.own
+                                            text: "Remove super admin"; kind: "danger"; name: text + ": " + memberRow.person; confirmText: "Confirm remove"
+                                            effect: "They become a regular admin. Immediate, no notice."
+                                            onConfirmed: root.run("remove_super_admin", [memberRow.modelData.key])
+                                        }
+                                        ActionButton {
+                                            visible: !memberRow.admin
+                                            text: "Revoke"; kind: "danger"; Accessible.name: "Revoke " + memberRow.person
+                                            onClicked: memberRow.panel = "revoke"
+                                        }
                                     }
                                 }
                                 ReasonPanel {
-                                    id: memberStep
+                                    id: revokeStep
                                     visible: memberRow.panel === "revoke" && root.isAdmin
                                     Layout.leftMargin: 16 + 92 + 12
                                     title: "Revoke " + memberRow.person + "?"
@@ -2697,6 +2793,67 @@ Item {
                                     okText: "Confirm revoke"
                                     onConfirmed: root.run("revoke_role", [memberRow.modelData.key, reason], function () { memberRow.panel = "" })
                                     onCancelled: memberRow.panel = ""
+                                }
+                                ReasonPanel {   // a notice: they stay an admin until the deadline, then the outcome applies by itself
+                                    id: changeStep
+                                    property int outcome: 0          // 0 steward, 1 remove
+                                    property int span: 3             // index into `days`, or 4: the custom date and time
+                                    readonly property var days: [0, 1, 7, 30]
+                                    readonly property real deadline: end(root.now)
+                                    // ponytail: "Now" is a minute ahead, so the core's later clock still sees a deadline to come.
+                                    function end(t) {
+                                        return span < 4 ? Math.floor(t) + Math.max(60, days[span] * 86400)
+                                                        : Date.fromLocaleString(Qt.locale(), custom.text.trim(), "yyyy-MM-dd HH:mm").getTime() / 1000
+                                    }
+                                    visible: memberRow.panel === "change" && root.isSuper
+                                    Layout.leftMargin: 16 + 92 + 12
+                                    title: "Change admin: " + memberRow.person
+                                    reasonName: "Reason for changing " + memberRow.person
+                                    ready: deadline > Date.now() / 1000
+                                    effect: !ready ? "Write a date and time to come, as 2026-11-11 14:00."
+                                        : "They keep admin powers until " + root.when(deadline) + ". At that time they automatically "
+                                          + (outcome ? "are removed from the site" : "become a steward")
+                                          + ". Actions they sign after that time are rejected. Everyone can see the reason."
+                                    okText: "Start notice"
+                                    onConfirmed: root.run("admin_notice", [memberRow.modelData.key, outcome ? "remove" : "steward", Math.floor(end(Date.now() / 1000)), reason],
+                                                          function () { memberRow.panel = "" })
+                                    onCancelled: memberRow.panel = ""
+                                    FormRow {
+                                        label: "What happens at the end"; compact: true
+                                        Segmented { name: "What happens at the end"; options: ["Move to steward", "Remove from site"]; current: changeStep.outcome; onPicked: function (i) { changeStep.outcome = i } }
+                                    }
+                                    FormRow {
+                                        label: "Notice"; compact: true
+                                        Segmented { name: "Notice"; options: ["Now", "1 day", "7 days", "30 days", "Custom"]; current: changeStep.span; onPicked: function (i) { changeStep.span = i } }
+                                        FramedField {
+                                            id: custom
+                                            visible: changeStep.span === 4
+                                            Layout.preferredWidth: 220
+                                            placeholderText: "yyyy-MM-dd HH:mm"
+                                            Accessible.name: "Notice ends at, as year-month-day hours:minutes"
+                                        }
+                                    }
+                                }
+                                ReasonPanel {   // hand our place to a named member, at once
+                                    visible: memberRow.panel === "transfer" && root.isSuper
+                                    Layout.leftMargin: 16 + 92 + 12
+                                    title: "Transfer super admin"
+                                    withReason: false
+                                    ready: transferTo.currentIndex >= 0
+                                    effect: "They become a super admin now. You become a regular admin. The change is immediate and everyone can see it."
+                                    okText: "Transfer"
+                                    onConfirmed: root.run("transfer_super_admin", [transferTo.currentValue], function () { memberRow.panel = "" })
+                                    onCancelled: memberRow.panel = ""
+                                    FormRow {
+                                        label: "Pick a member"; compact: true
+                                        FramedCombo {
+                                            id: transferTo
+                                            Layout.preferredWidth: 260
+                                            textRole: "name"; valueRole: "key"
+                                            model: root.members.filter(function (m) { return !!m.name && m.key !== root.me.key })
+                                            Accessible.name: "Member to make super admin"
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -3116,6 +3273,15 @@ Item {
                     readonly property var myReports: root.issues.filter(function (i) { return i.reporter === root.me.key })
                     readonly property int mineOpen: myReports.filter(function (i) { return !root.isTerminal(i.status) }).length
                     PageHead { title: "You"; lede: root.esc(root.me.name || "pseudonym") + " · " + root.roleName }
+                    Flash {
+                        visible: root.isSuper && root.superCount === 1
+                        Accessible.role: Accessible.AlertMessage
+                        err: true
+                        lead: "Back up your key now."
+                        text: "You are the only super admin. If you lose this key, nobody can manage admins. Add a second super admin or back up your key."
+                        buttonText: "Back up key"
+                        onActivated: exportPassword.forceActiveFocus()
+                    }
                     FormRow {
                         label: "Your code"; sub: root.unapproved ? "(read it aloud at the kiosk)" : ""
                         Fingerprint { text: root.me.fingerprint || ""; big: root.unapproved }

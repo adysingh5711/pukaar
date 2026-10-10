@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Offscreen screenshots of the Pukaar view against fixture data (scripts/ui-shots.qml), in light
-# and dark, for every state (not in a site, pending, resident, steward, admin), page and the issue
+# and dark, for every state (not in a site, pending, resident, steward, admin, super admin), page and the issue
 # pane, at 800, 1280 and 1400 px. Prints QML warnings; exits non-zero on any.
 #   scripts/ui-shots.sh [out dir]      default: $TMPDIR/pukaar-shots/<git short hash>
 # Compare two runs (fuzz: a line at a fractional x can anti-alias differently from run to run):
