@@ -11,12 +11,13 @@ Window {
     readonly property var args: Qt.application.arguments.slice(Qt.application.arguments.indexOf("--") + 1)
     readonly property var widths: [800, 1280, 1400]
     readonly property var states: ["none", "pending", "resident", "steward", "admin"]
-    readonly property var pages: ["board", "history", "report", "people", "site", "proof", "profile", "issue", "issue-new"]
+    readonly property var pages: ["board", "history", "report", "people", "places", "proof", "profile", "issue", "issue-new"]
     // The last-anchor states other than the default recent one: Proof's block, and the sidebar line on Board.
     readonly property var anchorStates: ["never", "stale", "mismatch"]
     // Revoked roles: a removed device ("removed", as Ravi Das), and the admin's view once r2 was removed ("former").
-    // Site with its change log opened and scrolled to (`log`), as the admin.
-    readonly property var logJobs: [["admin", "site"]]
+    // Places with its change log opened and scrolled to (`log`): as the admin, then searched (a third
+    // item, `search`) by a resident for an action word, and by a steward for something no row has.
+    readonly property var logJobs: [["admin", "places"], ["resident", "places", "retired"], ["steward", "places", "tank lid"]]
     readonly property var revokeJobs: [["removed", "board"], ["removed", "profile"], ["admin", "board", true], ["admin", "issue", true], ["admin", "people", true]]
 
     QtObject {
@@ -168,7 +169,7 @@ Window {
             [800, 1400].forEach(function (w) { ["proof", "board"].forEach(function (p) { out.push({ state: "resident", width: w, page: p, anchor: a }) }) })
         })
         logJobs.forEach(function (r) {
-            [800, 1400].forEach(function (w) { out.push({ state: r[0], width: w, page: r[1], log: true }) })
+            [800, 1400].forEach(function (w) { out.push({ state: r[0], width: w, page: r[1], log: true, search: r[2] || "" }) })
         })
         return out
     }
@@ -198,6 +199,8 @@ Window {
         if (j.page === "proof") v.checkpoint = logos.reply("checkpoint_now")
         var log = find(v, "changeLog")
         if (log) log.open = !!j.log
+        var search = find(v, "logSearch")
+        if (search) search.text = j.search || ""
         var members = find(v, "memberList")
         if (members && j.former) members.open = true   // the admin's revoke boxes, once r2 was removed
         focusSink.forceActiveFocus()
@@ -213,7 +216,7 @@ Window {
                 f.contentY = Math.min(log.mapToItem(f.contentItem, 0, 0).y - 16, f.contentHeight - f.height)
             }
             view.grabToImage(function (r) {
-                r.saveToFile(win.args[1] + "/" + j.state + "-" + j.page + (j.anchor ? "-anchor-" + j.anchor : "") + (j.former ? "-former" : "") + (j.log ? "-log" : "") + "-" + j.width + ".png")
+                r.saveToFile(win.args[1] + "/" + j.state + "-" + j.page + (j.anchor ? "-anchor-" + j.anchor : "") + (j.former ? "-former" : "") + (j.log ? "-log" : "") + (j.search ? "-search" : "") + "-" + j.width + ".png")
                 win.next()
             })
         }

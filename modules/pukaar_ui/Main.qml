@@ -42,7 +42,7 @@ Item {
     // A restored identity waits for its own history before signing anything (core refuses meanwhile).
     readonly property bool syncing: !!me.syncing_own_history
     // ---- shell (design/proposal/NOTES.md section 3) ----
-    readonly property var pages: ["board", "report", "people", "site", "proof", "profile", "history"]   // the StackLayout's children, in order
+    readonly property var pages: ["board", "report", "people", "places", "proof", "profile", "history"]   // the StackLayout's children, in order
     property string page: "board"
     // The sidebar is expanded (216 px) from 1100 px of window, an 80 px icon rail below; the user's
     // toggle ("expanded" / "collapsed", "" = never pressed) wins at every width and is remembered.
@@ -56,7 +56,6 @@ Item {
     readonly property int sidebarWidth: sidebarOpen && !overlay ? 216 : 80     // what the content gives up
     function toggleSidebar() { if (overlay) overlayOpen = !overlayOpen; else prefs.sidebar = sidebarOpen ? "collapsed" : "expanded" }
     function openPage(name) { page = name; overlayOpen = false }
-    onIsAdminChanged: if (!isAdmin && page === "site") { openPage("board"); notice = "Your admin role was removed, so the Site page is closed." }
     // A place code's link: that place in History. Narrow, the pane covers the page, so it closes.
     function showPlace(code) { historyPlace = code; if (narrow) closeIssue(); openPage("history") }
     // The issue pane sits beside the Board and History pages (both open issues); narrow, it replaces them.
@@ -308,7 +307,7 @@ Item {
     // place() without its code, which the card sets apart; "Other" shows its landmark bare.
     function placeName(i) { return i.location === "other" ? (i.landmark || "") : place(i).substr(i.location.length + 1) }
     function plural(n, word) { return n + " " + word + (n === 1 ? "" : "s") }
-    // The trust status the sidebar, History, Site and Proof show: conflicts are the forks the core found.
+    // The trust status the sidebar, History, Places and Proof show: conflicts are the forks the core found.
     readonly property string conflicts: info.forks > 0 ? plural(info.forks, "conflict") : "no conflicts"
     // The newest anchor (site_info last_anchor, null = never). The app never reads LEZ: the tx is what
     // its recorder claimed, so the UI says "recorded", never "verified"; only the root is checked here.
@@ -799,7 +798,7 @@ Item {
         Accessible.name: "History of " + code
         onClicked: root.showPlace(code)
     }
-    // The trust status as a link to Proof (History and Site; the sidebar has its own trust line).
+    // The trust status as a link to Proof (History and Places; the sidebar has its own trust line).
     component ProofLink: LinkButton {
         text: "Proof of history · " + root.conflicts + "  ›"
         Accessible.name: "Open Proof of history, " + root.conflicts
@@ -1772,9 +1771,9 @@ Item {
                         { label: "Board", icon: "board", page: "board" },
                         { label: "Report", icon: "report", page: "report" },
                         { label: "History", icon: "hist", page: "history" },
-                        { label: "People", icon: "members", page: "people", count: root.isAdmin ? root.pending.length : 0 }   // the admin's waiting count
+                        { label: "People", icon: "members", page: "people", count: root.isAdmin ? root.pending.length : 0 },   // the admin's waiting count
+                        { label: "Places", icon: "pin", page: "places" }
                     ].filter(function (e) { return root.approved || e.page !== "report" })   // a pending key cannot report
-                     .concat(root.isAdmin ? [{ label: "Site", icon: "pin", page: "site" }] : [])
                     delegate: NavItem {
                         required property var modelData
                         text: modelData.label; glyph: modelData.icon
@@ -1974,7 +1973,7 @@ Item {
             }
             CollapsibleSection {
                 title: "Create a site"; aside: "(site admin only)"
-                Help { text: "Nothing is published until you press Create site. Places can be added later too, on the Site page." }
+                Help { text: "Nothing is published until you press Create site. Places can be added later too, on the Places page." }
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 16
@@ -2109,7 +2108,7 @@ Item {
                         Layout.preferredHeight: 40
                         allowed: advanced.open ? adminName.text.trim() !== "" : setup.problem === ""
                         onClicked: root.run("site_create", [advanced.open ? setup.withAdmin(advancedJson.text) : setup.genesisJson()], null,
-                                            "Start with fewer places, then add the rest after creating, via Site → Add a place.")
+                                            "Start with fewer places, then add the rest after creating, via Places → Add a place.")
                     }
                     Help { visible: !advanced.open && setup.problem !== ""; text: setup.problem }
                 }
@@ -2580,19 +2579,34 @@ Item {
                     }
                 }
 
-                // Site (admin): the places, one list with its add form, and their change log.
+                // Places (everyone in the site): the places and their change log, searchable. The admin
+                // also adds, edits, retires and removes places here.
                 TabPage {
-                    id: sitePage
+                    id: placesPage
                     maxWidth: 1040
                     enabled: !root.syncing
                     property bool adding: false    // "Add a place" was pressed: its form shows above the list
                     property bool fullLog: false    // the change log past its newest 20; forgotten once the page is left
                     onVisibleChanged: if (!visible) fullLog = false
                     readonly property int retiredCount: root.locations.filter(function (l) { return l.state === "retired" }).length
-                    PageHead { title: "Site"; lede: "Add, edit, retire and remove places, and see what changed." }
+                    // The change log's search: any word of a row (code, name, person, action, reason), over the whole log.
+                    readonly property string query: logSearch.text.trim().toLowerCase()
+                    readonly property var logMatches: query === "" ? root.placeLog
+                        : root.placeLog.filter(function (c) { return root.placeChange(c).toLowerCase().indexOf(query) >= 0 })
+                    // A place's "Changes" link: its code in the search, then the log in view.
+                    function showChanges(code) {
+                        logSearch.text = code
+                        changeLog.open = true
+                        logSearch.forceActiveFocus()
+                        Qt.callLater(function () {
+                            var f = placesPage.contentItem
+                            f.contentY = Math.max(0, Math.min(changeLog.mapToItem(f.contentItem, 0, 0).y - 16, f.contentHeight - f.height))
+                        })
+                    }
+                    PageHead { title: "Places"; lede: root.isAdmin ? "Add, edit, retire and remove places, and see what changed." : "The places in this site, and what changed." }
                     CollapsibleSection {
                         title: "Places"
-                        aside: "· " + root.locations.length + " places" + (sitePage.retiredCount > 0 ? ", " + sitePage.retiredCount + " retired" : "")
+                        aside: "· " + root.locations.length + " places" + (placesPage.retiredCount > 0 ? ", " + placesPage.retiredCount + " retired" : "")
                         open: true; pad: 0
                         RowLayout {
                             Layout.fillWidth: true; Layout.margins: 16; Layout.bottomMargin: 8
@@ -2600,16 +2614,17 @@ Item {
                             Help {
                                 text: "Nothing is deleted. A retired place takes no new reports; one with open issues can't be retired. "
                                     + "A place nobody ever reported can be removed: it is hidden after 30 days (undo until then), and its signed events stay in everyone's log. "
-                                    + "Edit changes a place's name and group; its code never changes."
+                                    + (root.isAdmin ? "Edit changes a place's name and group; its code never changes." : "A code opens that place in History.")
                             }
                             FramedButton {
+                                visible: root.isAdmin
                                 Layout.alignment: Qt.AlignTop
-                                text: sitePage.adding ? "Cancel" : "Add a place"; iconName: sitePage.adding ? "x" : "plus"
-                                onClicked: sitePage.adding = !sitePage.adding
+                                text: placesPage.adding ? "Cancel" : "Add a place"; iconName: placesPage.adding ? "x" : "plus"
+                                onClicked: placesPage.adding = !placesPage.adding
                             }
                         }
                         ColumnLayout {
-                            visible: sitePage.adding
+                            visible: placesPage.adding && root.isAdmin
                             Layout.fillWidth: true; Layout.margins: 16; Layout.topMargin: 0
                             spacing: 12
                             Help { text: "For a place found on the site walk. It joins the list straight away." }
@@ -2672,6 +2687,8 @@ Item {
                                     // The core refuses a retire while issues are open; disabling is only a courtesy.
                                     readonly property bool blocked: st === "active" && modelData.open_issues > 0
                                     readonly property bool hasReason: reason.text.trim() !== ""
+                                    readonly property string status: pending ? "hidden on " + root.when(modelData.removes_at, "d MMM") + ": " + modelData.removal_reason
+                                        : st === "retired" ? "retired: " + modelData.retired_reason : "active"
                                     property bool editing: false
                                     function change(method) { root.run(method, [modelData.code, reason.text], function () { reason.text = "" }) }
                                     width: ListView.view.width
@@ -2685,17 +2702,34 @@ Item {
                                         GridLayout {   // name, reason, then three fixed slots: every row's boxes and buttons line up
                                             Layout.fillWidth: true; Layout.margins: 8; Layout.leftMargin: 16; Layout.rightMargin: 16
                                             columns: root.compactRows ? 4 : 5; columnSpacing: 8; rowSpacing: 6
-                                            Label {
+                                            Flow {   // code (its History), name, status and open issues, then its changes
+                                                id: placeLine
                                                 Layout.fillWidth: true; Layout.columnSpan: root.compactRows ? 4 : 1
-                                                wrapMode: Text.Wrap; textFormat: Text.RichText
-                                                color: locRow.st === "active" ? root.t.fg : root.t.muted
-                                                text: "<span style='font-family:monospace;font-weight:600'>" + root.esc(locRow.modelData.code) + "</span> " + root.esc(locRow.modelData.label)
-                                                    + (locRow.st === "retired" ? " <span style='color:" + root.t.muted + ";font-size:" + root.smallSize + "pt'>(retired: " + root.esc(locRow.modelData.retired_reason) + ")</span>" : "")
-                                                    + (locRow.pending ? " <span style='color:" + root.t.danger + ";font-size:" + root.smallSize + "pt;font-weight:600'>(" + root.esc(root.placeState(locRow.modelData) + ": " + locRow.modelData.removal_reason) + ")</span>" : "")
-                                                    + (locRow.blocked ? " <span style='color:" + root.t.muted + ";font-size:" + root.smallSize + "pt'>· " + root.esc(root.openIssuesText(locRow.modelData.open_issues)) + "</span>" : "")
+                                                spacing: 8
+                                                PlaceLink { code: locRow.modelData.code; height: placeName.height }
+                                                Label {
+                                                    id: placeName
+                                                    width: Math.min(implicitWidth, placeLine.width)
+                                                    wrapMode: Text.Wrap; textFormat: Text.PlainText
+                                                    color: locRow.st === "active" ? root.t.fg : root.t.muted
+                                                    text: locRow.modelData.label
+                                                }
+                                                Label {
+                                                    width: Math.min(implicitWidth, placeLine.width); height: placeName.height
+                                                    verticalAlignment: Text.AlignVCenter; wrapMode: Text.Wrap; textFormat: Text.PlainText
+                                                    color: locRow.pending ? root.t.danger : root.t.muted
+                                                    font.pointSize: root.smallSize; font.weight: locRow.pending ? Font.DemiBold : Font.Normal
+                                                    text: [locRow.status].concat(locRow.modelData.open_issues > 0 ? [root.openIssuesText(locRow.modelData.open_issues)] : []).join(" · ")
+                                                }
+                                                LinkButton {
+                                                    height: placeName.height
+                                                    text: "Changes"; Accessible.name: "Changes to " + locRow.modelData.code
+                                                    onClicked: placesPage.showChanges(locRow.modelData.code)
+                                                }
                                             }
                                             FramedField {
                                                 id: reason
+                                                visible: root.isAdmin
                                                 Layout.preferredWidth: 180; Layout.fillWidth: root.compactRows
                                                 maximumLength: 500
                                                 enabled: !locRow.blocked
@@ -2703,6 +2737,7 @@ Item {
                                                 Accessible.name: "Reason for changing " + locRow.modelData.code
                                             }
                                             ActionButton {   // slot 1: Retire / Restore
+                                                visible: root.isAdmin
                                                 shown: !locRow.pending
                                                 Layout.preferredWidth: 92
                                                 text: locRow.st === "retired" ? "Restore" : "Retire"
@@ -2710,6 +2745,7 @@ Item {
                                                 onClicked: locRow.change(locRow.st === "retired" ? "restore_location" : "retire_location")
                                             }
                                             ActionButton {   // slot 2: Remove / Undo removal; only for a place no report ever named, the core decides
+                                                visible: root.isAdmin
                                                 shown: locRow.pending || !locRow.modelData.ever_used
                                                 Layout.preferredWidth: 132
                                                 kind: locRow.pending ? "default" : "danger"
@@ -2718,6 +2754,7 @@ Item {
                                                 onClicked: locRow.change(locRow.pending ? "undo_remove_location" : "remove_location")
                                             }
                                             ActionButton {   // slot 3: Edit
+                                                visible: root.isAdmin
                                                 shown: !locRow.pending
                                                 Layout.preferredWidth: 84
                                                 text: locRow.editing ? "Cancel" : "Edit"
@@ -2726,7 +2763,7 @@ Item {
                                             }
                                         }
                                         RowLayout {   // the code is the place's identity: only name and group change
-                                            visible: locRow.editing
+                                            visible: locRow.editing && root.isAdmin
                                             Layout.fillWidth: true
                                             Layout.leftMargin: 16; Layout.rightMargin: 16; Layout.bottomMargin: 12
                                             spacing: 8
@@ -2754,8 +2791,10 @@ Item {
                         }
                     }
                     CollapsibleSection {
+                        id: changeLog
                         objectName: "changeLog"
-                        title: "Change log"; aside: "· " + root.placeLog.length
+                        title: "Change log"
+                        aside: "· " + (placesPage.query ? placesPage.logMatches.length + " of " : "") + root.placeLog.length
                         pad: 0
                         Help {
                             Layout.margins: 16; Layout.bottomMargin: 8
@@ -2766,25 +2805,44 @@ Item {
                             Layout.margins: 16; Layout.topMargin: 0
                             text: "No changes yet."
                         }
+                        FormRow {
+                            visible: root.placeLog.length > 0
+                            Layout.margins: 16; Layout.topMargin: 4; Layout.bottomMargin: 12
+                            label: "Search"; compact: true
+                            FramedField {
+                                id: logSearch
+                                objectName: "logSearch"
+                                Layout.fillWidth: true
+                                placeholderText: "place, person, action (retired, removed, renamed…) or reason"
+                                Accessible.name: "Search the change log"
+                            }
+                        }
+                        Blank {
+                            visible: placesPage.query !== "" && placesPage.logMatches.length === 0
+                            Layout.topMargin: 8
+                            icon: "search"; title: "No changes match “" + logSearch.text.trim() + "”."
+                            text: "Search by place code or name, a person, an action or a reason."
+                            FramedButton { text: "Clear"; Accessible.name: "Clear the change log search"; onClicked: logSearch.text = "" }
+                        }
                         Repeater {
-                            model: sitePage.fullLog ? root.placeLog : root.placeLog.slice(0, 20)
+                            model: placesPage.fullLog || placesPage.query ? placesPage.logMatches : root.placeLog.slice(0, 20)
                             delegate: LogRow {
                                 required property var modelData
                                 text: root.placeChange(modelData)
                             }
                         }
                         MoreToggle {
-                            visible: root.placeLog.length > 20
+                            visible: !placesPage.query && root.placeLog.length > 20
                             Layout.fillWidth: true; Layout.margins: 16
-                            expanded: sitePage.fullLog
+                            expanded: placesPage.fullLog
                             text: expanded ? "Show the newest 20" : "+" + root.plural(root.placeLog.length - 20, "older change")
-                            onClicked: sitePage.fullLog = !sitePage.fullLog
+                            onClicked: placesPage.fullLog = !placesPage.fullLog
                         }
                     }
                     ProofLink { Layout.topMargin: 8 }
                 }
 
-                // Proof (from the trust line, History and Site): the record's status, then the three
+                // Proof (from the trust line, History and Places): the record's status, then the three
                 // anchor steps for any member: compute, run the printed spel command, record the reference
                 TabPage {
                     enabled: !root.syncing
