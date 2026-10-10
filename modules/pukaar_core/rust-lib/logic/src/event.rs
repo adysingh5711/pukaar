@@ -33,6 +33,25 @@ pub enum Role {
     Admin,
 }
 
+/// What an admin notice ends in. APPEND-ONLY, like `Body`.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NoticeOutcome {
+    Steward,
+    Remove,
+}
+
+impl NoticeOutcome {
+    /// The role the subject is judged with once the notice is over (`None`: not a member).
+    #[must_use]
+    pub fn role(self) -> Option<Role> {
+        match self {
+            NoticeOutcome::Steward => Some(Role::Steward),
+            NoticeOutcome::Remove => None,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Location {
     pub code: String,
@@ -138,6 +157,45 @@ pub enum Body {
         undo: bool,
         reason: String,
     },
+    /// Super admin only: a second super admin (at most two), an existing named member, who
+    /// also becomes an admin.
+    SuperAdminAdd {
+        subject: Key,
+    },
+    /// Super admin only, on the other super admin; they stay an admin.
+    SuperAdminRemove {
+        subject: Key,
+    },
+    /// Super admin only: the author steps down (stays an admin) and `to` takes their place.
+    SuperAdminTransfer {
+        to: Key,
+    },
+    /// Super admin only, on an admin who is not a super admin: they keep their powers until
+    /// `deadline` (unix seconds, at or after this event's ts), then become `outcome`. Replaces
+    /// the subject's earlier notice.
+    AdminNotice {
+        subject: Key,
+        outcome: NoticeOutcome,
+        deadline: u64,
+        reason: String,
+    },
+    /// Super admin only, before the notice is sealed.
+    AdminNoticeCancel {
+        subject: Key,
+    },
+    /// Super admin only: the notice ends at this event's ts, sealed with `seen_seq` (as
+    /// `NoticeSeal`).
+    AdminNoticeEndNow {
+        subject: Key,
+        seen_seq: u64,
+    },
+    /// Any member, at or after the deadline: makes the notice's outcome final. `seen_seq` is
+    /// the subject's next seq as the sealer saw it: their events from it on are judged with the
+    /// outcome role, whatever their ts.
+    NoticeSeal {
+        subject: Key,
+        seen_seq: u64,
+    },
 }
 
 fn location_texts(ls: &[Location]) -> impl Iterator<Item = &str> {
@@ -182,12 +240,19 @@ impl Body {
             | ClaimResolved { note: t, .. }
             | Confirm { note: t, .. }
             | Comment { text: t, .. }
+            | AdminNotice { reason: t, .. }
             | Checkpoint { lez_tx: t, .. } => vec![t],
             LocationRetire { code, reason, .. } | LocationRemove { code, reason, .. } => {
                 vec![code, reason]
             }
             LocationEdit { code, label, group } => vec![code, label, group],
-            MarkDuplicate { .. } => vec![],
+            MarkDuplicate { .. }
+            | SuperAdminAdd { .. }
+            | SuperAdminRemove { .. }
+            | SuperAdminTransfer { .. }
+            | AdminNoticeCancel { .. }
+            | AdminNoticeEndNow { .. }
+            | NoticeSeal { .. } => vec![],
         }
     }
 }
@@ -271,7 +336,8 @@ pub fn decode(bytes: &[u8]) -> Result<Event, DecodeError> {
         Body::Report { text, landmark, .. } => [text, landmark].iter().any(|t| t.len() > MAX_TEXT),
         b @ (Body::LocationRetire { .. }
         | Body::LocationEdit { .. }
-        | Body::LocationRemove { .. }) => b.texts().iter().any(|t| t.len() > MAX_TEXT),
+        | Body::LocationRemove { .. }
+        | Body::AdminNotice { .. }) => b.texts().iter().any(|t| t.len() > MAX_TEXT),
         _ => false,
     };
     if over {

@@ -3,12 +3,12 @@
 
 use crate::checkpoint::{checkpoint_now, n_events, root_for};
 use crate::event::{
-    decode, sign, Body, DecodeError, Event, Id, Key, Location, Unsigned, MAX_EVENT_BYTES, MAX_TEXT,
-    OTHER_LOCATION, VERSION, ZERO,
+    decode, sign, Body, DecodeError, Event, Id, Key, Location, NoticeOutcome, Unsigned,
+    MAX_EVENT_BYTES, MAX_TEXT, OTHER_LOCATION, VERSION, ZERO,
 };
 use crate::reducer::{
-    reduce, require, Issue, PlaceChange, PlaceChangeKind, Revocation, State, Status,
-    REMOVAL_COOLDOWN,
+    issue_of, reduce, require, Issue, Notice, PlaceChange, PlaceChangeKind, Revocation, State,
+    Status, REMOVAL_COOLDOWN,
 };
 use crate::store::{Accept, Store};
 use ed25519_dalek::SigningKey;
@@ -193,14 +193,23 @@ impl Node {
         })
     }
 
+    /// `identity_json_at` before any notice deadline: roles as granted.
     #[must_use]
     pub fn identity_json(&self) -> String {
+        self.identity_json_at(0)
+    }
+
+    /// Our identity; `role` is ours as of `now` (unix seconds), so it flips at a notice's deadline.
+    #[must_use]
+    pub fn identity_json_at(&self, now: u64) -> String {
         let s = self.state();
         let me = self.me();
         json!({
             "key": hex::encode(me),
             "fingerprint": fingerprint(&me),
-            "role": s.roles.get(&me).map(|r| format!("{r:?}")),
+            "role": s.role_at(&me, now).map(|r| format!("{r:?}")),
+            "super_admin": s.super_admins.contains(&me),
+            "notice": s.notices.get(&me).map(|n| notice_json(&s, &me, n)),
             "name": s.names.get(&me),
             "revoked": s.revoked.get(&me).map(|r| revocation_json(&s, r)),
             "site": hex::encode(self.store.site),
@@ -239,7 +248,22 @@ impl Node {
             });
         let mut revoked: Vec<_> = s.revoked.iter().collect();
         revoked.sort_by_key(|(_, r)| std::cmp::Reverse(r.ts));
-        let member = |k: &Key| json!({ "key": hex::encode(k), "fingerprint": fingerprint(k), "name": s.names.get(k) });
+        let member = |k: &Key| {
+            let demotions = s.demotions.get(k).map_or(&[][..], Vec::as_slice);
+            json!({
+                "key": hex::encode(k), "fingerprint": fingerprint(k), "name": s.names.get(k),
+                "super_admin": s.super_admins.contains(k),
+                "demotions": demotions.iter().map(|n| notice_json(&s, k, n)).collect::<Vec<_>>(),
+            })
+        };
+        // events no issue timeline shows, newest first
+        let mut rejected: Vec<&Event> = self
+            .store
+            .events
+            .values()
+            .filter(|e| s.rejected.contains_key(&e.id) && issue_of(&e.u.body).is_none())
+            .collect();
+        rejected.sort_by_key(|e| std::cmp::Reverse(e.u.ts));
         json!({
             "site": hex::encode(self.store.site),
             "name": s.config.name,
@@ -247,7 +271,14 @@ impl Node {
             "locations": listed.into_iter().map(|l| location_json(&s, l, now)).collect::<Vec<_>>(),
             "removed_locations": removed.into_iter().map(|l| removed_json(&s, l)).collect::<Vec<_>>(),
             "place_log": log.iter().map(|c| place_change_json(&s, c)).collect::<Vec<_>>(),
-            "members": s.roles.iter().map(|(k, r)| { let mut m = member(k); m["role"] = json!(format!("{r:?}")); m }).collect::<Vec<_>>(),
+            // as of `now`: a member whose notice ended in removal leaves at the deadline
+            "members": s.roles.keys().filter_map(|k| { let mut m = member(k); m["role"] = json!(format!("{:?}", s.role_at(k, now)?)); Some(m) }).collect::<Vec<_>>(),
+            "super_admins": s.super_admins.iter().map(member).collect::<Vec<_>>(),
+            "notices": s.notices.iter().map(|(k, n)| notice_json(&s, k, n)).collect::<Vec<_>>(),
+            "rejected": rejected.into_iter().map(|e| json!({
+                "id": hex::encode(e.id), "kind": kind_name(&e.u.body), "author": hex::encode(e.u.author),
+                "author_name": s.names.get(&e.u.author), "ts": e.u.ts, "reason": s.rejected[&e.id],
+            })).collect::<Vec<_>>(),
             "pending": s.pending_members.iter().map(member).collect::<Vec<_>>(),
             "revoked": revoked.into_iter().map(|(k, r)| { let mut m = member(k); merge(&mut m, revocation_json(&s, r)); m }).collect::<Vec<_>>(),
             "sla_ack_h": s.config.sla_ack_h,
@@ -292,18 +323,115 @@ impl Node {
         reason: &str,
         ts: u64,
     ) -> Result<Event, String> {
-        let subject = parse_id(subject_hex.trim()).ok_or("bad key")?;
         let reason = reason.trim();
-        if reason.is_empty() {
-            return Err("a revoke needs a reason".into());
+        require(!reason.is_empty(), "a revoke needs a reason")?;
+        self.publish_about(subject_hex, ts, |subject, _| Body::RoleRevoke {
+            subject,
+            reason: reason.into(),
+        })
+    }
+
+    /// Sign a body about one member: `body` gets their key and their next seq as we hold it.
+    fn publish_about(
+        &mut self,
+        subject_hex: &str,
+        ts: u64,
+        body: impl FnOnce(Key, u64) -> Body,
+    ) -> Result<Event, String> {
+        let subject = parse_id(subject_hex.trim()).ok_or("bad key")?;
+        let seen = self.store.next_seq(&subject).0;
+        self.publish(body(subject, seen), ts)
+    }
+
+    /// Super admin only: a second super admin (a named member; at most two).
+    pub fn add_super_admin(&mut self, subject_hex: &str, ts: u64) -> Result<Event, String> {
+        self.publish_about(subject_hex, ts, |subject, _| Body::SuperAdminAdd {
+            subject,
+        })
+    }
+
+    /// Super admin only, on the other one; they stay an admin.
+    pub fn remove_super_admin(&mut self, subject_hex: &str, ts: u64) -> Result<Event, String> {
+        self.publish_about(subject_hex, ts, |subject, _| Body::SuperAdminRemove {
+            subject,
+        })
+    }
+
+    /// Super admin only: hand our place to `to`; we stay an admin.
+    pub fn transfer_super_admin(&mut self, to_hex: &str, ts: u64) -> Result<Event, String> {
+        self.publish_about(to_hex, ts, |to, _| Body::SuperAdminTransfer { to })
+    }
+
+    /// Super admin only: `subject` stays an admin until `deadline` (unix seconds), then becomes a
+    /// steward (`outcome` "steward") or leaves (`remove`). The reason is required here, at creation.
+    pub fn admin_notice(
+        &mut self,
+        subject_hex: &str,
+        outcome: &str,
+        deadline: u64,
+        reason: &str,
+        ts: u64,
+    ) -> Result<Event, String> {
+        let outcome = match outcome {
+            "steward" => NoticeOutcome::Steward,
+            "remove" => NoticeOutcome::Remove,
+            other => return Err(format!("unknown outcome {other}")),
+        };
+        let reason = reason.trim();
+        require(!reason.is_empty(), "a notice needs a reason")?;
+        self.publish_about(subject_hex, ts, |subject, _| Body::AdminNotice {
+            subject,
+            outcome,
+            deadline,
+            reason: reason.into(),
+        })
+    }
+
+    pub fn cancel_notice(&mut self, subject_hex: &str, ts: u64) -> Result<Event, String> {
+        self.publish_about(subject_hex, ts, |subject, _| Body::AdminNoticeCancel {
+            subject,
+        })
+    }
+
+    /// End a notice at `ts` and seal it at once.
+    pub fn end_notice_now(&mut self, subject_hex: &str, ts: u64) -> Result<Event, String> {
+        self.publish_about(subject_hex, ts, |subject, seen_seq| {
+            Body::AdminNoticeEndNow { subject, seen_seq }
+        })
+    }
+
+    /// Seal every notice whose deadline has passed by `now` and that no seal has closed yet,
+    /// unless we already signed one for it. Any member's node does this, unasked: the first
+    /// seal applied wins and later ones change nothing. The events signed, to send.
+    pub fn auto_seal(&mut self, now: u64) -> Vec<Event> {
+        let s = self.state();
+        if self.restore.is_some() || s.role_at(&self.me(), now).is_none() {
+            return Vec::new();
         }
-        self.publish(
-            Body::RoleRevoke {
-                subject,
-                reason: reason.into(),
-            },
-            ts,
-        )
+        let due: Vec<(Key, u64)> = s
+            .notices
+            .iter()
+            .filter(|(k, n)| n.sealed.is_none() && now >= n.deadline && !self.sealed_by_me(k, n))
+            .map(|(k, _)| (*k, self.store.next_seq(k).0))
+            .collect();
+        due.into_iter()
+            .filter_map(|(subject, seen_seq)| {
+                self.publish(Body::NoticeSeal { subject, seen_seq }, now)
+                    .ok()
+            })
+            .collect()
+    }
+
+    /// Have we signed a seal on `subject` since `n` ended (it may not have reached anyone yet)?
+    fn sealed_by_me(&self, subject: &Key, n: &Notice) -> bool {
+        let me = self.me();
+        self.store
+            .events
+            .range((me, 0)..=(me, u64::MAX))
+            .any(|(_, e)| {
+                e.u.ts >= n.deadline
+                    && matches!(e.u.body, Body::NoticeSeal { subject: s, .. } if s == *subject)
+            })
     }
 
     /// Sign a location change only if the rules (`State::check_location_body`) accept it, so a
@@ -627,6 +755,15 @@ fn location_json(s: &State, l: &Location, now: u64) -> Value {
     v
 }
 
+/// A notice on `subject`: who gave it, the outcome, the deadline, why, and whether it's sealed.
+fn notice_json(s: &State, subject: &Key, n: &Notice) -> Value {
+    json!({
+        "subject": hex::encode(subject), "subject_name": s.names.get(subject),
+        "by": hex::encode(n.by), "by_name": s.names.get(&n.by), "ts": n.ts,
+        "outcome": n.outcome, "deadline": n.deadline, "reason": n.reason, "sealed": n.sealed.is_some(),
+    })
+}
+
 /// Who took a member's role away, when and why.
 fn revocation_json(s: &State, r: &Revocation) -> Value {
     json!({ "by": hex::encode(r.by), "by_name": s.names.get(&r.by), "ts": r.ts, "reason": r.reason })
@@ -743,6 +880,13 @@ pub fn kind_name(b: &Body) -> &'static str {
         LocationRetire { .. } => "location_retire",
         LocationEdit { .. } => "location_edit",
         LocationRemove { .. } => "location_remove",
+        SuperAdminAdd { .. } => "super_admin_add",
+        SuperAdminRemove { .. } => "super_admin_remove",
+        SuperAdminTransfer { .. } => "super_admin_transfer",
+        AdminNotice { .. } => "admin_notice",
+        AdminNoticeCancel { .. } => "admin_notice_cancel",
+        AdminNoticeEndNow { .. } => "admin_notice_end_now",
+        NoticeSeal { .. } => "notice_seal",
     }
 }
 

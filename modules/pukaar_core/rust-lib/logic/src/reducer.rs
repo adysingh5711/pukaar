@@ -1,7 +1,7 @@
 //! Deterministic reducer: a pure function of the accepted event set.
 //! Invalid events are kept but inert, with the reason recorded (nothing is dropped silently).
 
-use crate::event::{Body, Event, Id, Key, Location, Role, OTHER_LOCATION};
+use crate::event::{Body, Event, Id, Key, Location, NoticeOutcome, Role, OTHER_LOCATION};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
@@ -106,6 +106,26 @@ pub struct State {
     pub checkpoints: Vec<CheckpointRecord>,
     /// Every applied location change, in applied order: the admin's change log.
     pub place_log: Vec<PlaceChange>,
+    /// At most two, never none; the genesis author is the first. Always admins.
+    pub super_admins: BTreeSet<Key>,
+    /// subject -> their latest notice, sealed or not, until a role change clears it.
+    pub notices: BTreeMap<Key, Notice>,
+    /// subject -> every notice sealed on them, oldest first: their demotion history.
+    pub demotions: BTreeMap<Key, Vec<Notice>>,
+}
+
+/// An admin's notice period: their powers until `deadline` (event time), then `outcome`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Notice {
+    /// The `AdminNotice` event's id.
+    pub id: Id,
+    pub by: Key,
+    pub ts: u64,
+    pub outcome: NoticeOutcome,
+    pub deadline: u64,
+    pub reason: String,
+    /// The winning seal's `seen_seq`, once sealed.
+    pub sealed: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
@@ -138,6 +158,13 @@ pub struct PlaceChange {
 // replica agrees; a skewed admin clock can shift the window. Anchor-backed time if that matters.
 pub const REMOVAL_COOLDOWN: u64 = 30 * 24 * 3600;
 const DAY: u64 = 24 * 3600;
+const MAX_SUPER_ADMINS: usize = 2;
+const ONLY_SUPER: &str = "only a super admin does this";
+/// Passes over the log, at most: each re-runs it knowing every seal the last one applied.
+// ponytail: a backdated act can change which seal wins only through the sealer's membership,
+// so two passes settle every honest log; one that keeps flipping stops at the cap (still the
+// same on every replica: it's a function of the event set).
+const MAX_PASSES: usize = 4;
 
 /// A member's role taken away: by which admin, when (event ts) and why.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -186,11 +213,8 @@ impl State {
     }
 
     /// The start of every location change: an admin, and a listed code (never `other`).
-    fn admin_on_location(&self, by: &Key, code: &str, verb: &str) -> Result<(), String> {
-        require(
-            self.roles.get(by) == Some(&Role::Admin),
-            format!("only admin {verb} locations"),
-        )?;
+    fn admin_on_location(&self, admin: bool, code: &str, verb: &str) -> Result<(), String> {
+        require(admin, format!("only admin {verb} locations"))?;
         require(
             code != OTHER_LOCATION && self.locations.iter().any(|l| l.code == code),
             format!("unknown location {code}"),
@@ -208,12 +232,12 @@ impl State {
     /// same check before signing, so a refusal never reaches the network.
     pub fn check_location_change(
         &self,
-        by: &Key,
+        admin: bool,
         code: &str,
         retire: bool,
         reason: &str,
     ) -> Result<(), String> {
-        self.admin_on_location(by, code, "retires")?;
+        self.admin_on_location(admin, code, "retires")?;
         require(
             !reason.trim().is_empty(),
             "a retire or restore needs a reason",
@@ -233,11 +257,8 @@ impl State {
 
     /// THE add rule: every code is new (retired, pending and removed ones are still in
     /// `locations`), not `other`, and unique within the event; code, name and group are set.
-    fn check_locations_add(&self, by: &Key, locations: &[Location]) -> Result<(), String> {
-        require(
-            self.roles.get(by) == Some(&Role::Admin),
-            "only admin edits the site map",
-        )?;
+    fn check_locations_add(&self, admin: bool, locations: &[Location]) -> Result<(), String> {
+        require(admin, "only admin edits the site map")?;
         for (i, l) in locations.iter().enumerate() {
             require(
                 [&l.code, &l.label, &l.group]
@@ -256,15 +277,19 @@ impl State {
     /// THE rule for every location-changing body (`ts` is the event's): the reducer applies it
     /// on every replica and `Node` checks it before signing. Other bodies pass.
     pub fn check_location_body(&self, by: &Key, body: &Body, ts: u64) -> Result<(), String> {
+        self.location_rule(self.role_at(by, ts) == Some(Role::Admin), body, ts)
+    }
+
+    fn location_rule(&self, admin: bool, body: &Body, ts: u64) -> Result<(), String> {
         match body {
-            Body::LocationsAdd { locations } => self.check_locations_add(by, locations),
+            Body::LocationsAdd { locations } => self.check_locations_add(admin, locations),
             Body::LocationRetire {
                 code,
                 retired,
                 reason,
-            } => self.check_location_change(by, code, *retired, reason),
+            } => self.check_location_change(admin, code, *retired, reason),
             Body::LocationEdit { code, label, group } => {
-                self.admin_on_location(by, code, "edits")?;
+                self.admin_on_location(admin, code, "edits")?;
                 self.not_pending_removal(code)?;
                 require(
                     !label.trim().is_empty() && !group.trim().is_empty(),
@@ -272,7 +297,7 @@ impl State {
                 )
             }
             Body::LocationRemove { code, undo, reason } => {
-                self.admin_on_location(by, code, "removes")?;
+                self.admin_on_location(admin, code, "removes")?;
                 require(!reason.trim().is_empty(), "a remove or undo needs a reason")?;
                 if !*undo {
                     self.not_pending_removal(code)?;
@@ -295,6 +320,83 @@ impl State {
             }
             _ => Ok(()),
         }
+    }
+
+    /// `k`'s role, where `ended` says whether their unsealed notice is over.
+    fn judged_role(&self, k: &Key, ended: impl FnOnce(&Notice) -> bool) -> Option<Role> {
+        match self.notices.get(k) {
+            Some(n) if n.sealed.is_none() && ended(n) => n.outcome.role(),
+            _ => self.roles.get(k).copied(),
+        }
+    }
+
+    /// `k`'s role for an act at `ts`: a notice whose deadline has passed counts before its seal.
+    #[must_use]
+    pub fn role_at(&self, k: &Key, ts: u64) -> Option<Role> {
+        self.judged_role(k, |n| ts >= n.deadline)
+    }
+
+    /// notice id -> `seen_seq`, for every seal applied.
+    fn seals(&self) -> BTreeMap<Id, u64> {
+        self.demotions
+            .values()
+            .flatten()
+            .filter_map(|n| Some((n.id, n.sealed?)))
+            .collect()
+    }
+
+    /// A super admin's own role is nobody's to change, and the admin role (giving it, or
+    /// changing an admin's) is the super admins' alone.
+    fn check_role_change(&self, sup: bool, subject: &Key, to_admin: bool) -> Result<(), String> {
+        require(
+            sup || !(to_admin || self.roles.get(subject) == Some(&Role::Admin)),
+            "only a super admin grants or changes the admin role",
+        )
+    }
+
+    fn check_new_super(&self, k: &Key) -> Result<(), String> {
+        require(
+            self.roles.contains_key(k) && self.names.contains_key(k),
+            "a super admin must be a named member",
+        )?;
+        require(!self.super_admins.contains(k), "already a super admin")
+    }
+
+    fn make_super(&mut self, k: Key) {
+        self.super_admins.insert(k);
+        self.roles.insert(k, Role::Admin);
+        self.notices.remove(&k);
+    }
+
+    fn open_notice(&mut self, k: &Key) -> Result<&mut Notice, String> {
+        self.notices
+            .get_mut(k)
+            .filter(|n| n.sealed.is_none())
+            .ok_or_else(|| "no open notice for this member".into())
+    }
+
+    /// Make `subject`'s open notice final: its outcome for good, and a line in their history.
+    fn seal(&mut self, subject: Key, seen_seq: u64) {
+        let Ok(n) = self.open_notice(&subject) else {
+            return;
+        };
+        n.sealed = Some(seen_seq);
+        let n = n.clone();
+        match n.outcome.role() {
+            Some(r) => {
+                self.roles.insert(subject, r);
+            }
+            None => {
+                self.roles.remove(&subject);
+                let r = Revocation {
+                    by: n.by,
+                    ts: n.deadline,
+                    reason: n.reason.clone(),
+                };
+                self.revoked.insert(subject, r);
+            }
+        }
+        self.demotions.entry(subject).or_default().push(n);
     }
 
     /// Apply a location change `check_location_body` accepted, and log it.
@@ -368,11 +470,29 @@ impl State {
     }
 }
 
+/// The state after `ordered`. A sealed notice reaches back: the subject's events from the
+/// seal's `seen_seq` on are judged with its outcome even when they order before the seal (a
+/// low lamport and an old clock), so the log is re-run knowing the seals until they settle.
 #[must_use]
 pub fn reduce<'a>(ordered: impl IntoIterator<Item = &'a Event>) -> State {
+    let events: Vec<&Event> = ordered.into_iter().collect();
+    let mut known = BTreeMap::new();
+    let mut s = reduce_once(&events, &known);
+    for _ in 1..MAX_PASSES {
+        let seals = s.seals();
+        if seals == known {
+            break;
+        }
+        known = seals;
+        s = reduce_once(&events, &known);
+    }
+    s
+}
+
+fn reduce_once(events: &[&Event], seals: &BTreeMap<Id, u64>) -> State {
     let mut s = State::default();
-    for e in ordered {
-        if let Err(why) = apply(&mut s, e) {
+    for e in events {
+        if let Err(why) = apply(&mut s, e, seals) {
             s.rejected.insert(e.id, why);
         }
     }
@@ -404,7 +524,7 @@ fn not_permitted(st: Status) -> String {
     format!("not permitted in state {st:?}")
 }
 
-fn issue_of(b: &Body) -> Option<Id> {
+pub(crate) fn issue_of(b: &Body) -> Option<Id> {
     use Body::*;
     match b {
         Acknowledge { issue, .. }
@@ -419,11 +539,15 @@ fn issue_of(b: &Body) -> Option<Id> {
     }
 }
 
-fn apply(s: &mut State, e: &Event) -> Result<(), String> {
+/// `seals`: notice id -> `seen_seq` of every seal known so far (see `reduce`).
+fn apply(s: &mut State, e: &Event, seals: &BTreeMap<Id, u64>) -> Result<(), String> {
     use Body::*;
     use Status::*;
     let a = e.u.author;
-    let role = s.roles.get(&a).copied();
+    let role = s.judged_role(&a, |n| {
+        e.u.ts >= n.deadline || seals.get(&n.id).is_some_and(|&seen| e.u.seq >= seen)
+    });
+    let sup = s.super_admins.contains(&a);
     let staff = matches!(role, Some(Role::Steward | Role::Admin));
     let admin = role == Some(Role::Admin);
 
@@ -446,7 +570,7 @@ fn apply(s: &mut State, e: &Event) -> Result<(), String> {
             require(s.admin.is_none(), "second genesis")?;
             require(!admin_name.trim().is_empty(), "the admin must be named")?;
             s.admin = Some(a);
-            s.roles.insert(a, Role::Admin);
+            s.make_super(a);
             s.names.insert(a, admin_name.trim().to_string());
             s.config = Config {
                 name: name.clone(),
@@ -466,7 +590,7 @@ fn apply(s: &mut State, e: &Event) -> Result<(), String> {
                 Some(n) => s.names.insert(a, n.clone()),
                 None => s.names.remove(&a),
             };
-            if role.is_none() {
+            if !s.roles.contains_key(&a) {
                 s.pending_members.insert(a);
             }
             Ok(())
@@ -478,6 +602,11 @@ fn apply(s: &mut State, e: &Event) -> Result<(), String> {
             name,
         } => {
             require(admin, "only admin grants roles")?;
+            require(
+                !s.super_admins.contains(subject),
+                "a super admin's role cannot be changed",
+            )?;
+            s.check_role_change(sup, subject, *role == Role::Admin)?;
             // A resident may be named here too (the admin hears them at the kiosk); their own
             // later Profile still replaces or clears it. Unnamed, a resident keeps their own.
             match name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
@@ -490,12 +619,15 @@ fn apply(s: &mut State, e: &Event) -> Result<(), String> {
             s.roles.insert(*subject, *role);
             s.pending_members.remove(subject);
             s.revoked.remove(subject);
+            s.notices.remove(subject);
             Ok(())
         }
         RoleRevoke { subject, reason } => {
             require(admin, "only admin revokes roles")?;
-            require(Some(*subject) != s.admin, "admin cannot be revoked")?;
+            require(!s.super_admins.contains(subject), "admin cannot be revoked")?;
+            s.check_role_change(sup, subject, false)?;
             s.roles.remove(subject);
+            s.notices.remove(subject);
             s.revoked.insert(
                 *subject,
                 Revocation {
@@ -510,8 +642,78 @@ fn apply(s: &mut State, e: &Event) -> Result<(), String> {
         | LocationRetire { .. }
         | LocationEdit { .. }
         | LocationRemove { .. }) => {
-            s.check_location_body(&a, b, e.u.ts)?;
+            s.location_rule(admin, b, e.u.ts)?;
             s.apply_location_body(a, b, e.u.ts);
+            Ok(())
+        }
+        SuperAdminAdd { subject } => {
+            require(sup, ONLY_SUPER)?;
+            s.check_new_super(subject)?;
+            require(
+                s.super_admins.len() < MAX_SUPER_ADMINS,
+                "there are already two super admins",
+            )?;
+            s.make_super(*subject);
+            Ok(())
+        }
+        SuperAdminRemove { subject } => {
+            require(sup, ONLY_SUPER)?;
+            require(*subject != a, "a super admin steps down by transfer")?;
+            require(s.super_admins.remove(subject), "not a super admin")
+        }
+        SuperAdminTransfer { to } => {
+            require(sup, ONLY_SUPER)?;
+            s.check_new_super(to)?;
+            s.super_admins.remove(&a);
+            s.make_super(*to);
+            Ok(())
+        }
+        AdminNotice {
+            subject,
+            outcome,
+            deadline,
+            reason,
+        } => {
+            require(sup, ONLY_SUPER)?;
+            require(
+                s.roles.get(subject) == Some(&Role::Admin) && !s.super_admins.contains(subject),
+                "a notice is for an admin who is not a super admin",
+            )?;
+            require(!reason.trim().is_empty(), "a notice needs a reason")?;
+            require(*deadline >= e.u.ts, "the deadline has already passed")?;
+            let n = Notice {
+                id: e.id,
+                by: a,
+                ts: e.u.ts,
+                outcome: *outcome,
+                deadline: *deadline,
+                reason: reason.clone(),
+                sealed: None,
+            };
+            s.notices.insert(*subject, n);
+            Ok(())
+        }
+        AdminNoticeCancel { subject } => {
+            require(sup, ONLY_SUPER)?;
+            s.open_notice(subject)?;
+            s.notices.remove(subject);
+            Ok(())
+        }
+        AdminNoticeEndNow { subject, seen_seq } => {
+            require(sup, ONLY_SUPER)?;
+            s.open_notice(subject)?.deadline = e.u.ts;
+            s.seal(*subject, *seen_seq);
+            Ok(())
+        }
+        NoticeSeal { subject, seen_seq } => {
+            let n = s.notices.get(subject).ok_or("no notice for this member")?;
+            if n.sealed.is_some() {
+                return Ok(()); // the first seal won; a later one changes nothing
+            }
+            // ponytail: the sealer's clock (event ts), like REMOVAL_COOLDOWN: a fast clock seals
+            // early. Anchor-backed time if that matters.
+            require(e.u.ts >= n.deadline, "the notice has not ended yet")?;
+            s.seal(*subject, *seen_seq);
             Ok(())
         }
         Report {

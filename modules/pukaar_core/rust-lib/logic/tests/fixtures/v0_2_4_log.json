@@ -1,0 +1,477 @@
+{
+  "events": [
+    "4bc911a6e62ce7ab71d50a3e6686dbde17b5eafdeb6bd38783862b380a02cdcc4515c162db11b813a169698d55726c622123ca0c5a9b4bc7dfeb8435dd35af076c6f676f733a70756b6161723a310001e64533d0eebca7e89d6767b06ddbba4a902a5c3728c7d71b07565ad3ff65f4c38a875fff1eb38451577acd5afee405456568dd7c89e090863a0557bc7af49f1700000000000000000000000000000000000000000000000000000000000000000001690300",
+    "baecfe529133354d91bb979ed4b49601870336daf6a7e617afe0312cd8b347ba2882e96b7866901eb90308c22ede0c1d0dc06d011e763afed1b62573369a94066c6f676f733a70756b6161723a31000100000000000000000000000000000000000000000000000000000000000000008a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c000000000000000000000000000000000000000000000000000000000000000000016400094468756e20746573740a536974652061646d696e020577617465720577617374650204572d3033125461702062792064696e696e672068616c6c0c576174657220706f696e747304422d30371442696e2061742070617468206a756e6374696f6e0442696e730c3003",
+    "75c0fa3c342e5c54fba03f4a51adffb4fc8dfed7ab7ffcc02066f4ac974b1cb4750b5553e6fd2de091268628f489cb8bea9837c2a620b12ea22744cf5be98f0e6c6f676f733a70756b6161723a310001e64533d0eebca7e89d6767b06ddbba4a902a5c3728c7d71b07565ad3ff65f4c38a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c01e64533d0eebca7e89d6767b06ddbba4a902a5c3728c7d71b07565ad3ff65f4c3026e018139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b39401010a466163696c6974696573",
+    "df50481a4d8101b0593078f27bc0bbcd8bf61cbdc320dc8c0b5f98c2cccf6a6849757001f067b43fada1ff21a1805a0d4f229f287c3a5e5e23c56e85eb413f056c6f676f733a70756b6161723a310001e64533d0eebca7e89d6767b06ddbba4a902a5c3728c7d71b07565ad3ff65f4c38a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c02d270594cff329e4135d5dc81b74d02a4195758dbf8f0dd99d2388373a39fbec2036f01ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d10000",
+    "d55116a990b95fb3bb621ec3b98a95ceca35e0ffd5e07256a8e8e0fbd3d84b875a62260020b2d524f42799edb44364b4ceeefc982fd27482bab3493db47cc4056c6f676f733a70756b6161723a310001e64533d0eebca7e89d6767b06ddbba4a902a5c3728c7d71b07565ad3ff65f4c38a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c03477173d8fce57b4813f7d8134a71a1b8be660b009c819f19faa9f497add1298f047001ca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c00010452617669",
+    "97ed43ff562d009a2d42a3960cb04b6ae8ce1b0d5f2eaf7ad4a30b1bcf18cda19cf19c83dd0995d4f235042da2dbffa02aa288c0ce1d3336d5306b36458a390b6c6f676f733a70756b6161723a310001e64533d0eebca7e89d6767b06ddbba4a902a5c3728c7d71b07565ad3ff65f4c38a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c04766faaddb67ee5c88e5e3e3cbdedfe699f03ac842c865d47acc3505bf97456260571016e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1020106446570757479",
+    "33bf29d5510be405f51250c3e719e542ea136cf6294c281eac7d41c326e15dcf29836e63e93bc05c3331998e648ea84d1b8c5204b48711bcfb6bd991f8aadf036c6f676f733a70756b6161723a310001e64533d0eebca7e89d6767b06ddbba4a902a5c3728c7d71b07565ad3ff65f4c36e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1000000000000000000000000000000000000000000000000000000000000000000067a018a875fff1eb38451577acd5afee405456568dd7c89e090863a0557bc7af49f170000",
+    "570c759fbbcfdb9e752de88f5aea2d2636be4a0724e09f7ac91185610f9b8cc6011a58605fdd99728380ce42140467d0096c5790cec6c158002cdc6533980b0c6c6f676f733a70756b6161723a310001e64533d0eebca7e89d6767b06ddbba4a902a5c3728c7d71b07565ad3ff65f4c38139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394000000000000000000000000000000000000000000000000000000000000000000067d0301024d65",
+    "b2673a4a76f47c9eea360013c12474b44bfad1315046f87ce26510f29a8f6edc668e5b80f2339b8b8db5af0baa7fff143aacc335c2b2e3a0b3a9a3e99577d9076c6f676f733a70756b6161723a310001e64533d0eebca7e89d6767b06ddbba4a902a5c3728c7d71b07565ad3ff65f4c38a875fff1eb38451577acd5afee405456568dd7c89e090863a0557bc7af49f1701dfc59cbcaa996e7ee4abed99cbbf78a019928e5ef628935ee5804c04c0a2d0fa06790301054b6972616e",
+    "ff970c3c19a85c0b74de57ed2f7559e8d011e2ed1b336027420abd8a9076f3413ddd45098c4df285c742a4bdc9bf981c4ea911c3d35f1fcde1f97364e7de6a046c6f676f733a70756b6161723a310001e64533d0eebca7e89d6767b06ddbba4a902a5c3728c7d71b07565ad3ff65f4c38a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c059f081889041d0ca578c3e2d5ac4c7f315942ccb9ec74256b3f8e7e7e9f60e1aa067f1004572d30330e546170206279206b69746368656e0c576174657220706f696e7473",
+    "47c2a64ff5ee0c51f28b46de83ca2d3b9d083ec6f3e98349fee9db163975238179e577a852e99cc37e68e770fd712911d17d0286fa2f722f812e787f7f028b0b6c6f676f733a70756b6161723a310001e64533d0eebca7e89d6767b06ddbba4a902a5c3728c7d71b07565ad3ff65f4c3ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1000000000000000000000000000000000000000000000000000000000000000000067803010441736861",
+    "ddd3efd8f3a3186ebe4235ce771dea8e9f8dbd149d41a9d60a6ee0b6131c48b487679e245caabf1a39a7b1e5e9216a186c48c4aa65893549cc4909d70986400d6c6f676f733a70756b6161723a310001e64533d0eebca7e89d6767b06ddbba4a902a5c3728c7d71b07565ad3ff65f4c36e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf101d73f1b1907f69999233567a1dadd6838eb7f00138aa9eac2c1620acfa3a4e454077c028a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c04636f7570",
+    "541343229e7fc5a82857017084083c805a5e762dbe6448217d5b55de4abe8afa1e6138402328c72f30a59d56af6c63798d364c6825bb1d88de61268656e461076c6f676f733a70756b6161723a310001e64533d0eebca7e89d6767b06ddbba4a902a5c3728c7d71b07565ad3ff65f4c3ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d101f39c8bc900898c035097dd5739ff3356c46314001be7921d7db76f79f6a5e749077b01ca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c01010452617669",
+    "15ee7e8d529b77752220c5a2e8ad475011fecce91d4d3e16810ae8b2037f3c21132d093790bdd3ddabc8f4338a5073f8d5a222e90fda903a7e4eeb71a0e259036c6f676f733a70756b6161723a310001e64533d0eebca7e89d6767b06ddbba4a902a5c3728c7d71b07565ad3ff65f4c36e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf102b73982f7766e859719a43473dc18c6bcd20e43ba11f605b90b12303f49f7ad1d087e040104502d3031094d61696e2070617468055061746873",
+    "ec69316cd15f0b3760362df0ebed8b2b56faaf140692242d463584d46c1943bee73c41e6f00bac406f0067edc20f4315dfa1f402f5dcaddc23d0992880f9530b6c6f676f733a70756b6161723a310001e64533d0eebca7e89d6767b06ddbba4a902a5c3728c7d71b07565ad3ff65f4c36e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1031baa7ee43f3643981dc9a7052dc9d451b911258b5aea1c7e9768ec9cfb70a1c80980011104502d3031000a6e657665722075736564",
+    "b53d0492820ad5ff0af6ed8ff73a4ffc48f194c438f26c14cbaeafde2dd8b2d66e8b6c203a9390a34f355f5bc5c3dbce88e5ce23eb6ada15e01f15f6f035dd066c6f676f733a70756b6161723a310001e64533d0eebca7e89d6767b06ddbba4a902a5c3728c7d71b07565ad3ff65f4c3ca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c0000000000000000000000000000000000000000000000000000000000000000000a83010505776174657204572d303300086e6f207761746572",
+    "becbef2e06bfcfe8f4ee550070535a6cc91cac59588f3270b7f2b45cfe8773468b53e3637949c7651601c8f95bc59dc824a8d03832761cd8fe1b88c2c3e8f8046c6f676f733a70756b6161723a310001e64533d0eebca7e89d6767b06ddbba4a902a5c3728c7d71b07565ad3ff65f4c3ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d102d0d5a0da8b5129bf3b2254a658f1c58207809b93cb6d76a6b839c8dc1e02783c0a82010505776174657204572d3033000b746170206c65616b696e67",
+    "7aefd744067fcec2977c45fb935b8d497824a06a4ef7417adfe35590ef92dae3eb715ba703a008226efa30f66983dabf225021af210eef85733ebf51e8494e056c6f676f733a70756b6161723a310001e64533d0eebca7e89d6767b06ddbba4a902a5c3728c7d71b07565ad3ff65f4c36e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf104d2bb9153456d1a942cea46d62e00ecd3f4763bdd22c5ceb8efba6d0174169b2a0b8e010bece1ce55e9775a3c58da54e240a5723be7d7ffb8548537e4d7f36abbd9ac73bd096d61696e7320637574",
+    "8ff04cd79a865145bedc7f5d2768f803a3905ea98b42bbb13b8a24898cd2d32585897cf33a180f803edbe78937cfe2aa3b1a44470462726de46d9497f29a650f6c6f676f733a70756b6161723a310001e64533d0eebca7e89d6767b06ddbba4a902a5c3728c7d71b07565ad3ff65f4c38139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394012642193130d6d7be4ebaf7a2797eb999eff007c5799106974c45b2e79e85e97f0b8c0106e599ab77c190410fd9c69d7be38129a05a77b9382f5b15c905c1e17d64ed3bd204056f6e206974",
+    "e6dba5610267d27128b9b064e246337eab6048a80e6a71d8ca1f04c97f3d19968e22be7f34ac8d731258940f37f63aeb1cc49396015fba96dee2673bb03073006c6f676f733a70756b6161723a310001e64533d0eebca7e89d6767b06ddbba4a902a5c3728c7d71b07565ad3ff65f4c3ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d103e599ab77c190410fd9c69d7be38129a05a77b9382f5b15c905c1e17d64ed3bd20b8f0109ece1ce55e9775a3c58da54e240a5723be7d7ffb8548537e4d7f36abbd9ac73bd046e6f7065",
+    "2b9be667f1ff6885ba0e4c09d1d9be0f8352cd867b55a24618c8ef93c45601462e02c05fe6d76ff4e0d869821ef68bf49a4dd91b065e27cdcad16cabd27d02096c6f676f733a70756b6161723a310001e64533d0eebca7e89d6767b06ddbba4a902a5c3728c7d71b07565ad3ff65f4c38139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b39402c20c28bccd2590a54c8576ddea9246384bdcd364eb424b2c84ce08938286844c0c8d0108e599ab77c190410fd9c69d7be38129a05a77b9382f5b15c905c1e17d64ed3bd20f776173686572207265706c61636564",
+    "1ba7ea0bd462b55eef4b882757ea09de0fd4a095138e96b06a15700caa7cd99c960f5c74be64367dd6ff59df092b334631a54c01e08dee88f9b09d390e017b0d6c6f676f733a70756b6161723a310001e64533d0eebca7e89d6767b06ddbba4a902a5c3728c7d71b07565ad3ff65f4c38a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c061aa5a9e536b0636511842cdbe40b3bea5b0079f3254ed4427ff605b50045788e0d970102ca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c096d6f766564206f7574",
+    "68e8b41c87c24d60f479bbe443137ff2d632d79f4297ae63f895f8b3042cb6971a92e65a5aa7f62b1016c766f49df2e8b609a16c36328d344224b7db02bc3b0e6c6f676f733a70756b6161723a310001e64533d0eebca7e89d6767b06ddbba4a902a5c3728c7d71b07565ad3ff65f4c3ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1043b51afd98c5c0966052f55cc77ad7e99e91157823d6dc5ed38f9857dfe8e2fd90d960109e599ab77c190410fd9c69d7be38129a05a77b9382f5b15c905c1e17d64ed3bd203647279",
+    "ae7da5b64a8680aac91787d661041d2763937e3ee1d9ecabafb9cc4d1e39b72a53724a0b0286883b7f6c5af6ced8bd851565874943a63957560042e567c90e0d6c6f676f733a70756b6161723a310001e64533d0eebca7e89d6767b06ddbba4a902a5c3728c7d71b07565ad3ff65f4c38a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c07074acbcbb5ed616ff463d75d9e96821bf7d0bb4488b927bfaae92a315b472faa0e9801040103522d3106526f6f6d203105526f6f6d73",
+    "933332cfac7ba29947d3af7d853ef0e66b699a69cfadd3dba8d6be8acd1813a3d9022eeb27589c5006ab87b7f529fff427e77fa28234f6165bf67dead51e630d6c6f676f733a70756b6161723a310001e64533d0eebca7e89d6767b06ddbba4a902a5c3728c7d71b07565ad3ff65f4c38a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c08b7965a26b8ac6a1cba5a4e6c3ae0d45bb4a497d29726d9fbe0985e7a2174ca280f99010f04422d3037010862696e20676f6e65",
+    "0b84e5b4f8fb59147d8142fcb6a993605537f7f484a802588a96990a3291a38ea71f0b2e74cce2d942aecc4a4417bd16684f97e784a6492f1095146304efce0e6c6f676f733a70756b6161723a310001e64533d0eebca7e89d6767b06ddbba4a902a5c3728c7d71b07565ad3ff65f4c38a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c095540c7f4acb27c9ffe24af92bf67761800c56c03fb50a35bad9b034640b02c69109a010e066e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1048139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394028a875fff1eb38451577acd5afee405456568dd7c89e090863a0557bc7af49f17018a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c08ca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c00ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1030674782d313233"
+  ],
+  "identity": {
+    "admin": {
+      "fingerprint": "8a88e3",
+      "key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+      "name": "Site admin",
+      "revoked": null,
+      "role": "Admin",
+      "site": "e64533d0eebca7e89d6767b06ddbba4a902a5c3728c7d71b07565ad3ff65f4c3",
+      "syncing_own_history": false
+    },
+    "deputy": {
+      "fingerprint": "6e7a1c",
+      "key": "6e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1",
+      "name": "Deputy",
+      "revoked": null,
+      "role": "Admin",
+      "site": "e64533d0eebca7e89d6767b06ddbba4a902a5c3728c7d71b07565ad3ff65f4c3",
+      "syncing_own_history": false
+    },
+    "ravi": {
+      "fingerprint": "ca93ac",
+      "key": "ca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c",
+      "name": "Ravi",
+      "revoked": {
+        "by": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+        "by_name": "Site admin",
+        "reason": "moved out",
+        "ts": 151
+      },
+      "role": null,
+      "site": "e64533d0eebca7e89d6767b06ddbba4a902a5c3728c7d71b07565ad3ff65f4c3",
+      "syncing_own_history": false
+    }
+  },
+  "issues": [
+    {
+      "ack_overdue": false,
+      "acked_ts": 140,
+      "awaiting_48h": false,
+      "category": "water",
+      "claimant": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
+      "claimed_ts": 141,
+      "confirms": 0,
+      "fix_overdue": false,
+      "former": false,
+      "id": "e599ab77c190410fd9c69d7be38129a05a77b9382f5b15c905c1e17d64ed3bd2",
+      "landmark": "",
+      "location": "W-03",
+      "location_label": "Tap by kitchen",
+      "location_renamed_from": "Tap by dining hall",
+      "location_retired": false,
+      "progress": {
+        "by": "ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1",
+        "by_name": "Asha",
+        "due_ts": 0,
+        "eta_h": 0,
+        "next_step": "",
+        "note": "Confirmed: dry",
+        "ts": 150
+      },
+      "reopen_count": 0,
+      "reported_ts": 130,
+      "reporter": "ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1",
+      "reporter_name": "Asha",
+      "stage": "Resolved",
+      "status": "ConfirmedResolved",
+      "text": "tap leaking"
+    },
+    {
+      "ack_overdue": false,
+      "acked_ts": null,
+      "awaiting_48h": false,
+      "category": "water",
+      "claimant": null,
+      "claimed_ts": null,
+      "confirms": 0,
+      "fix_overdue": false,
+      "former": true,
+      "id": "ece1ce55e9775a3c58da54e240a5723be7d7ffb8548537e4d7f36abbd9ac73bd",
+      "landmark": "",
+      "location": "W-03",
+      "location_label": "Tap by kitchen",
+      "location_renamed_from": "Tap by dining hall",
+      "location_retired": false,
+      "progress": {
+        "by": "6e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1",
+        "by_name": "Deputy",
+        "due_ts": 0,
+        "eta_h": 0,
+        "next_step": "",
+        "note": "mains cut",
+        "ts": 142
+      },
+      "reopen_count": 0,
+      "reported_ts": 131,
+      "reporter": "ca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c",
+      "reporter_name": "Ravi",
+      "stage": "Closed: won't fix",
+      "status": "ClosedWontfix",
+      "text": "no water"
+    }
+  ],
+  "now": 1000000,
+  "rejected": {
+    "2642193130d6d7be4ebaf7a2797eb999eff007c5799106974c45b2e79e85e97f": "staff names are set by the admin when granting the role",
+    "3b51afd98c5c0966052f55cc77ad7e99e91157823d6dc5ed38f9857dfe8e2fd9": "not permitted in state ClosedWontfix",
+    "b73982f7766e859719a43473dc18c6bcd20e43ba11f605b90b12303f49f7ad1d": "admin cannot be revoked",
+    "d0d5a0da8b5129bf3b2254a658f1c58207809b93cb6d76a6b839c8dc1e02783c": "only admin grants roles"
+  },
+  "site_info": {
+    "categories": [
+      "water",
+      "waste"
+    ],
+    "events": 26,
+    "forked_authors": [],
+    "forks": 0,
+    "last_anchor": {
+      "by": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+      "by_name": "Site admin",
+      "events_covered": 24,
+      "reproducible": true,
+      "ts": 154,
+      "tx": "tx-123"
+    },
+    "locations": [
+      {
+        "code": "W-03",
+        "ever_used": true,
+        "group": "Water points",
+        "label": "Tap by kitchen",
+        "open_issues": 0,
+        "removal_reason": "",
+        "removes_at": 0,
+        "renamed_from": "Tap by dining hall",
+        "retired": false,
+        "retired_reason": "",
+        "state": "active"
+      },
+      {
+        "code": "B-07",
+        "ever_used": false,
+        "group": "Bins",
+        "label": "Bin at path junction",
+        "open_issues": 0,
+        "removal_reason": "",
+        "removes_at": 0,
+        "renamed_from": null,
+        "retired": true,
+        "retired_reason": "bin gone",
+        "state": "retired"
+      },
+      {
+        "code": "P-01",
+        "ever_used": false,
+        "group": "Paths",
+        "label": "Main path",
+        "open_issues": 0,
+        "removal_reason": "never used",
+        "removes_at": 2592128,
+        "renamed_from": null,
+        "retired": false,
+        "retired_reason": "",
+        "state": "pending_removal"
+      },
+      {
+        "code": "R-1",
+        "ever_used": false,
+        "group": "Rooms",
+        "label": "Room 1",
+        "open_issues": 0,
+        "removal_reason": "",
+        "removes_at": 0,
+        "renamed_from": null,
+        "retired": false,
+        "retired_reason": "",
+        "state": "active"
+      }
+    ],
+    "members": [
+      {
+        "fingerprint": "6e7a1c",
+        "key": "6e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1",
+        "name": "Deputy",
+        "role": "Admin"
+      },
+      {
+        "fingerprint": "813977",
+        "key": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
+        "name": "Facilities",
+        "role": "Steward"
+      },
+      {
+        "fingerprint": "8a875f",
+        "key": "8a875fff1eb38451577acd5afee405456568dd7c89e090863a0557bc7af49f17",
+        "name": "Kiran",
+        "role": "Resident"
+      },
+      {
+        "fingerprint": "8a88e3",
+        "key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+        "name": "Site admin",
+        "role": "Admin"
+      },
+      {
+        "fingerprint": "ed4928",
+        "key": "ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1",
+        "name": "Asha",
+        "role": "Resident"
+      }
+    ],
+    "name": "Dhun test",
+    "pending": [],
+    "place_log": [
+      {
+        "by": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+        "by_name": "Site admin",
+        "code": "B-07",
+        "kind": "retired",
+        "label": "Bin at path junction",
+        "reason": "bin gone",
+        "ts": 153
+      },
+      {
+        "by": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+        "by_name": "Site admin",
+        "code": "R-1",
+        "kind": "added",
+        "label": "Room 1",
+        "reason": "",
+        "ts": 152
+      },
+      {
+        "by": "6e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1",
+        "by_name": "Deputy",
+        "code": "P-01",
+        "ends_at": 2592128,
+        "kind": "removal_started",
+        "label": "Main path",
+        "reason": "never used",
+        "ts": 128
+      },
+      {
+        "by": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+        "by_name": "Site admin",
+        "code": "W-03",
+        "from": "Tap by dining hall",
+        "kind": "renamed",
+        "label": "Tap by kitchen",
+        "reason": "",
+        "to": "Tap by kitchen",
+        "ts": 127
+      },
+      {
+        "by": "6e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1",
+        "by_name": "Deputy",
+        "code": "P-01",
+        "kind": "added",
+        "label": "Main path",
+        "reason": "",
+        "ts": 126
+      }
+    ],
+    "removed_locations": [],
+    "revoked": [
+      {
+        "by": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+        "by_name": "Site admin",
+        "fingerprint": "ca93ac",
+        "key": "ca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c",
+        "name": "Ravi",
+        "reason": "moved out",
+        "ts": 151
+      }
+    ],
+    "site": "e64533d0eebca7e89d6767b06ddbba4a902a5c3728c7d71b07565ad3ff65f4c3",
+    "sla_ack_h": 12,
+    "sla_fix_h": 48
+  },
+  "state_debug": "State { admin: Some([138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92]), config: Config { name: \"Dhun test\", categories: [\"water\", \"waste\"], sla_ack_h: 12, sla_fix_h: 48, max_open_per_author: 3 }, locations: [Location { code: \"W-03\", label: \"Tap by kitchen\", group: \"Water points\" }, Location { code: \"B-07\", label: \"Bin at path junction\", group: \"Bins\" }, Location { code: \"P-01\", label: \"Main path\", group: \"Paths\" }, Location { code: \"R-1\", label: \"Room 1\", group: \"Rooms\" }], retired: {\"B-07\": \"bin gone\"}, pending_removal: {\"P-01\": Removal { by: [110, 122, 28, 221, 41, 176, 183, 143, 209, 58, 244, 197, 89, 143, 239, 244, 239, 42, 151, 22, 110, 60, 166, 242, 228, 251, 252, 205, 128, 80, 91, 241], since: 128, reason: \"never used\" }}, renamed_from: {\"W-03\": \"Tap by dining hall\"}, roles: {[110, 122, 28, 221, 41, 176, 183, 143, 209, 58, 244, 197, 89, 143, 239, 244, 239, 42, 151, 22, 110, 60, 166, 242, 228, 251, 252, 205, 128, 80, 91, 241]: Admin, [129, 57, 119, 14, 168, 125, 23, 95, 86, 163, 84, 102, 195, 76, 126, 204, 203, 141, 138, 145, 180, 238, 55, 162, 93, 246, 15, 91, 143, 201, 179, 148]: Steward, [138, 135, 95, 255, 30, 179, 132, 81, 87, 122, 205, 90, 254, 228, 5, 69, 101, 104, 221, 124, 137, 224, 144, 134, 58, 5, 87, 188, 122, 244, 159, 23]: Resident, [138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92]: Admin, [237, 73, 40, 198, 40, 209, 194, 198, 234, 233, 3, 56, 144, 89, 149, 97, 41, 89, 39, 58, 92, 99, 249, 54, 54, 193, 70, 20, 172, 135, 55, 209]: Resident}, names: {[110, 122, 28, 221, 41, 176, 183, 143, 209, 58, 244, 197, 89, 143, 239, 244, 239, 42, 151, 22, 110, 60, 166, 242, 228, 251, 252, 205, 128, 80, 91, 241]: \"Deputy\", [129, 57, 119, 14, 168, 125, 23, 95, 86, 163, 84, 102, 195, 76, 126, 204, 203, 141, 138, 145, 180, 238, 55, 162, 93, 246, 15, 91, 143, 201, 179, 148]: \"Facilities\", [138, 135, 95, 255, 30, 179, 132, 81, 87, 122, 205, 90, 254, 228, 5, 69, 101, 104, 221, 124, 137, 224, 144, 134, 58, 5, 87, 188, 122, 244, 159, 23]: \"Kiran\", [138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92]: \"Site admin\", [202, 147, 172, 23, 5, 24, 112, 113, 214, 123, 131, 199, 255, 14, 254, 129, 8, 232, 236, 69, 48, 87, 93, 119, 38, 135, 147, 51, 219, 218, 190, 124]: \"Ravi\", [237, 73, 40, 198, 40, 209, 194, 198, 234, 233, 3, 56, 144, 89, 149, 97, 41, 89, 39, 58, 92, 99, 249, 54, 54, 193, 70, 20, 172, 135, 55, 209]: \"Asha\"}, pending_members: {}, revoked: {[202, 147, 172, 23, 5, 24, 112, 113, 214, 123, 131, 199, 255, 14, 254, 129, 8, 232, 236, 69, 48, 87, 93, 119, 38, 135, 147, 51, 219, 218, 190, 124]: Revocation { by: [138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92], ts: 151, reason: \"moved out\" }}, issues: {[229, 153, 171, 119, 193, 144, 65, 15, 217, 198, 157, 123, 227, 129, 41, 160, 90, 119, 185, 56, 47, 91, 21, 201, 5, 193, 225, 125, 100, 237, 59, 210]: Issue { id: [229, 153, 171, 119, 193, 144, 65, 15, 217, 198, 157, 123, 227, 129, 41, 160, 90, 119, 185, 56, 47, 91, 21, 201, 5, 193, 225, 125, 100, 237, 59, 210], reporter: [237, 73, 40, 198, 40, 209, 194, 198, 234, 233, 3, 56, 144, 89, 149, 97, 41, 89, 39, 58, 92, 99, 249, 54, 54, 193, 70, 20, 172, 135, 55, 209], category: \"water\", location: \"W-03\", landmark: \"\", text: \"tap leaking\", status: ConfirmedResolved, progress: Some(Progress { by: [237, 73, 40, 198, 40, 209, 194, 198, 234, 233, 3, 56, 144, 89, 149, 97, 41, 89, 39, 58, 92, 99, 249, 54, 54, 193, 70, 20, 172, 135, 55, 209], ts: 150, note: \"Confirmed: dry\", next_step: \"\", eta_h: 0 }), claimant: Some([129, 57, 119, 14, 168, 125, 23, 95, 86, 163, 84, 102, 195, 76, 126, 204, 203, 141, 138, 145, 180, 238, 55, 162, 93, 246, 15, 91, 143, 201, 179, 148]), confirms: {}, reopen_votes: {}, reopen_count: 0, duplicate_of: None, reported_ts: 130, acked_ts: Some(140), claimed_ts: Some(141), timeline: [[229, 153, 171, 119, 193, 144, 65, 15, 217, 198, 157, 123, 227, 129, 41, 160, 90, 119, 185, 56, 47, 91, 21, 201, 5, 193, 225, 125, 100, 237, 59, 210], [194, 12, 40, 188, 205, 37, 144, 165, 76, 133, 118, 221, 234, 146, 70, 56, 75, 220, 211, 100, 235, 66, 75, 44, 132, 206, 8, 147, 130, 134, 132, 76], [192, 203, 7, 60, 166, 146, 191, 108, 110, 220, 19, 63, 198, 223, 170, 243, 137, 192, 86, 3, 26, 248, 204, 75, 199, 73, 78, 49, 207, 137, 77, 86], [155, 11, 17, 100, 93, 206, 97, 110, 238, 252, 243, 14, 160, 174, 222, 110, 3, 239, 156, 216, 122, 70, 202, 148, 130, 108, 78, 219, 241, 137, 44, 186]] }, [236, 225, 206, 85, 233, 119, 90, 60, 88, 218, 84, 226, 64, 165, 114, 59, 231, 215, 255, 184, 84, 133, 55, 228, 215, 243, 106, 187, 217, 172, 115, 189]: Issue { id: [236, 225, 206, 85, 233, 119, 90, 60, 88, 218, 84, 226, 64, 165, 114, 59, 231, 215, 255, 184, 84, 133, 55, 228, 215, 243, 106, 187, 217, 172, 115, 189], reporter: [202, 147, 172, 23, 5, 24, 112, 113, 214, 123, 131, 199, 255, 14, 254, 129, 8, 232, 236, 69, 48, 87, 93, 119, 38, 135, 147, 51, 219, 218, 190, 124], category: \"water\", location: \"W-03\", landmark: \"\", text: \"no water\", status: ClosedWontfix, progress: Some(Progress { by: [110, 122, 28, 221, 41, 176, 183, 143, 209, 58, 244, 197, 89, 143, 239, 244, 239, 42, 151, 22, 110, 60, 166, 242, 228, 251, 252, 205, 128, 80, 91, 241], ts: 142, note: \"mains cut\", next_step: \"\", eta_h: 0 }), claimant: None, confirms: {}, reopen_votes: {}, reopen_count: 0, duplicate_of: None, reported_ts: 131, acked_ts: None, claimed_ts: None, timeline: [[236, 225, 206, 85, 233, 119, 90, 60, 88, 218, 84, 226, 64, 165, 114, 59, 231, 215, 255, 184, 84, 133, 55, 228, 215, 243, 106, 187, 217, 172, 115, 189], [166, 177, 175, 148, 162, 66, 112, 235, 83, 84, 230, 53, 237, 121, 112, 40, 9, 221, 85, 103, 181, 252, 248, 206, 113, 157, 63, 75, 234, 196, 12, 117], [59, 81, 175, 217, 140, 92, 9, 102, 5, 47, 85, 204, 119, 173, 126, 153, 233, 17, 87, 130, 61, 109, 197, 237, 56, 249, 133, 125, 254, 142, 47, 217]] }}, rejected: {[38, 66, 25, 49, 48, 214, 215, 190, 78, 186, 247, 162, 121, 126, 185, 153, 239, 240, 7, 197, 121, 145, 6, 151, 76, 69, 178, 231, 158, 133, 233, 127]: \"staff names are set by the admin when granting the role\", [59, 81, 175, 217, 140, 92, 9, 102, 5, 47, 85, 204, 119, 173, 126, 153, 233, 17, 87, 130, 61, 109, 197, 237, 56, 249, 133, 125, 254, 142, 47, 217]: \"not permitted in state ClosedWontfix\", [183, 57, 130, 247, 118, 110, 133, 151, 25, 164, 52, 115, 220, 24, 198, 188, 210, 14, 67, 186, 17, 246, 5, 185, 11, 18, 48, 63, 73, 247, 173, 29]: \"admin cannot be revoked\", [208, 213, 160, 218, 139, 81, 41, 191, 59, 34, 84, 166, 88, 241, 197, 130, 7, 128, 155, 147, 203, 109, 118, 166, 184, 57, 200, 220, 30, 2, 120, 60]: \"only admin grants roles\"}, checkpoints: [CheckpointRecord { by: [138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92], heads: [([110, 122, 28, 221, 41, 176, 183, 143, 209, 58, 244, 197, 89, 143, 239, 244, 239, 42, 151, 22, 110, 60, 166, 242, 228, 251, 252, 205, 128, 80, 91, 241], 4), ([129, 57, 119, 14, 168, 125, 23, 95, 86, 163, 84, 102, 195, 76, 126, 204, 203, 141, 138, 145, 180, 238, 55, 162, 93, 246, 15, 91, 143, 201, 179, 148], 2), ([138, 135, 95, 255, 30, 179, 132, 81, 87, 122, 205, 90, 254, 228, 5, 69, 101, 104, 221, 124, 137, 224, 144, 134, 58, 5, 87, 188, 122, 244, 159, 23], 1), ([138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92], 8), ([202, 147, 172, 23, 5, 24, 112, 113, 214, 123, 131, 199, 255, 14, 254, 129, 8, 232, 236, 69, 48, 87, 93, 119, 38, 135, 147, 51, 219, 218, 190, 124], 0), ([237, 73, 40, 198, 40, 209, 194, 198, 234, 233, 3, 56, 144, 89, 149, 97, 41, 89, 39, 58, 92, 99, 249, 54, 54, 193, 70, 20, 172, 135, 55, 209], 3)], lez_tx: \"tx-123\", ts: 154 }], place_log: [PlaceChange { ts: 127, by: [138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92], code: \"W-03\", kind: Renamed, reason: \"\", rename: Some((\"Tap by dining hall\", \"Tap by kitchen\")) }, PlaceChange { ts: 126, by: [110, 122, 28, 221, 41, 176, 183, 143, 209, 58, 244, 197, 89, 143, 239, 244, 239, 42, 151, 22, 110, 60, 166, 242, 228, 251, 252, 205, 128, 80, 91, 241], code: \"P-01\", kind: Added, reason: \"\", rename: None }, PlaceChange { ts: 128, by: [110, 122, 28, 221, 41, 176, 183, 143, 209, 58, 244, 197, 89, 143, 239, 244, 239, 42, 151, 22, 110, 60, 166, 242, 228, 251, 252, 205, 128, 80, 91, 241], code: \"P-01\", kind: RemovalStarted, reason: \"never used\", rename: None }, PlaceChange { ts: 152, by: [138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92], code: \"R-1\", kind: Added, reason: \"\", rename: None }, PlaceChange { ts: 153, by: [138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92], code: \"B-07\", kind: Retired, reason: \"bin gone\", rename: None }] }",
+  "timelines": {
+    "e599ab77c190410fd9c69d7be38129a05a77b9382f5b15c905c1e17d64ed3bd2": {
+      "events": [
+        {
+          "anchored_by": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+          "anchored_by_name": "Site admin",
+          "anchored_tx": "tx-123",
+          "author": "ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1",
+          "author_name": "Asha",
+          "body": "tap leaking",
+          "former": false,
+          "id": "e599ab77c190410fd9c69d7be38129a05a77b9382f5b15c905c1e17d64ed3bd2",
+          "kind": "report",
+          "rejected": null,
+          "ts": 130
+        },
+        {
+          "anchored_by": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+          "anchored_by_name": "Site admin",
+          "anchored_tx": "tx-123",
+          "author": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
+          "author_name": "Facilities",
+          "body": "ETA 4 h. on it",
+          "former": false,
+          "id": "c20c28bccd2590a54c8576ddea9246384bdcd364eb424b2c84ce08938286844c",
+          "kind": "acknowledge",
+          "rejected": null,
+          "ts": 140
+        },
+        {
+          "anchored_by": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+          "anchored_by_name": "Site admin",
+          "anchored_tx": "tx-123",
+          "author": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
+          "author_name": "Facilities",
+          "body": "washer replaced",
+          "former": false,
+          "id": "c0cb073ca692bf6c6edc133fc6dfaaf389c056031af8cc4bc7494e31cf894d56",
+          "kind": "claim_resolved",
+          "rejected": null,
+          "ts": 141
+        },
+        {
+          "anchored_by": null,
+          "anchored_by_name": null,
+          "anchored_tx": null,
+          "author": "ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1",
+          "author_name": "Asha",
+          "body": "dry",
+          "former": false,
+          "id": "9b0b11645dce616eeefcf30ea0aede6e03ef9cd87a46ca94826c4edbf1892cba",
+          "kind": "confirm",
+          "rejected": null,
+          "ts": 150
+        }
+      ],
+      "issue": {
+        "ack_overdue": false,
+        "acked_ts": 140,
+        "awaiting_48h": false,
+        "category": "water",
+        "claimant": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
+        "claimed_ts": 141,
+        "confirms": 0,
+        "fix_overdue": false,
+        "former": false,
+        "id": "e599ab77c190410fd9c69d7be38129a05a77b9382f5b15c905c1e17d64ed3bd2",
+        "landmark": "",
+        "location": "W-03",
+        "location_label": "Tap by kitchen",
+        "location_renamed_from": "Tap by dining hall",
+        "location_retired": false,
+        "progress": {
+          "by": "ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1",
+          "by_name": "Asha",
+          "due_ts": 0,
+          "eta_h": 0,
+          "next_step": "",
+          "note": "Confirmed: dry",
+          "ts": 150
+        },
+        "reopen_count": 0,
+        "reported_ts": 130,
+        "reporter": "ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1",
+        "reporter_name": "Asha",
+        "stage": "Resolved",
+        "status": "ConfirmedResolved",
+        "text": "tap leaking"
+      }
+    },
+    "ece1ce55e9775a3c58da54e240a5723be7d7ffb8548537e4d7f36abbd9ac73bd": {
+      "events": [
+        {
+          "anchored_by": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+          "anchored_by_name": "Site admin",
+          "anchored_tx": "tx-123",
+          "author": "ca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c",
+          "author_name": "Ravi",
+          "body": "no water",
+          "former": true,
+          "id": "ece1ce55e9775a3c58da54e240a5723be7d7ffb8548537e4d7f36abbd9ac73bd",
+          "kind": "report",
+          "rejected": null,
+          "ts": 131
+        },
+        {
+          "anchored_by": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+          "anchored_by_name": "Site admin",
+          "anchored_tx": "tx-123",
+          "author": "6e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1",
+          "author_name": "Deputy",
+          "body": "mains cut",
+          "former": false,
+          "id": "a6b1af94a24270eb5354e635ed79702809dd5567b5fcf8ce719d3f4beac40c75",
+          "kind": "close_wontfix",
+          "rejected": null,
+          "ts": 142
+        },
+        {
+          "anchored_by": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+          "anchored_by_name": "Site admin",
+          "anchored_tx": "tx-123",
+          "author": "ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1",
+          "author_name": "Asha",
+          "body": "nope",
+          "former": false,
+          "id": "3b51afd98c5c0966052f55cc77ad7e99e91157823d6dc5ed38f9857dfe8e2fd9",
+          "kind": "confirm",
+          "rejected": "not permitted in state ClosedWontfix",
+          "ts": 143
+        }
+      ],
+      "issue": {
+        "ack_overdue": false,
+        "acked_ts": null,
+        "awaiting_48h": false,
+        "category": "water",
+        "claimant": null,
+        "claimed_ts": null,
+        "confirms": 0,
+        "fix_overdue": false,
+        "former": true,
+        "id": "ece1ce55e9775a3c58da54e240a5723be7d7ffb8548537e4d7f36abbd9ac73bd",
+        "landmark": "",
+        "location": "W-03",
+        "location_label": "Tap by kitchen",
+        "location_renamed_from": "Tap by dining hall",
+        "location_retired": false,
+        "progress": {
+          "by": "6e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1",
+          "by_name": "Deputy",
+          "due_ts": 0,
+          "eta_h": 0,
+          "next_step": "",
+          "note": "mains cut",
+          "ts": 142
+        },
+        "reopen_count": 0,
+        "reported_ts": 131,
+        "reporter": "ca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c",
+        "reporter_name": "Ravi",
+        "stage": "Closed: won't fix",
+        "status": "ClosedWontfix",
+        "text": "no water"
+      }
+    }
+  }
+}

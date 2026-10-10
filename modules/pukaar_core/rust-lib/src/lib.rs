@@ -35,10 +35,32 @@ pub trait PukaarCoreModule: Send + 'static {
     /// Stop waiting for a restored identity's history (allowed 10 min after the restore).
     fn skip_history_sync(&mut self) -> String;
     fn set_profile(&mut self, display_name: String) -> String;
-    /// `name` is required for steward/admin and optional for residents.
+    /// `name` is required for steward/admin and optional for residents. Only a super admin
+    /// grants "admin" or changes an admin's role; nobody changes a super admin's.
     fn grant_role(&mut self, subject_hex: String, role: String, name: String) -> String;
-    /// Admin only (the rules reject anyone else's); `reason` is required.
+    /// Admin only (the rules reject anyone else's); `reason` is required. Revoking an admin is
+    /// a super admin's call; a super admin can't be revoked.
     fn revoke_role(&mut self, subject_hex: String, reason: String) -> String;
+    /// Super admin only: a second super admin (a named member; at most two), made an admin too.
+    fn add_super_admin(&mut self, subject_hex: String) -> String;
+    /// Super admin only, on the other super admin, who stays an admin.
+    fn remove_super_admin(&mut self, subject_hex: String) -> String;
+    /// Super admin only: hand our place to `to_hex` (made an admin too); we stay an admin.
+    fn transfer_super_admin(&mut self, to_hex: String) -> String;
+    /// Super admin only, on an admin who isn't one: they keep admin powers until `deadline`
+    /// (unix seconds, now or later), then become a steward (`outcome` "steward") or leave
+    /// ("remove"). `reason` is required. Replaces their earlier notice.
+    fn admin_notice(
+        &mut self,
+        subject_hex: String,
+        outcome: String,
+        deadline: i64,
+        reason: String,
+    ) -> String;
+    /// Super admin only, before the notice is sealed.
+    fn cancel_notice(&mut self, subject_hex: String) -> String;
+    /// Super admin only: the notice ends now and is sealed at once.
+    fn end_notice_now(&mut self, subject_hex: String) -> String;
     fn add_location(&mut self, code: String, label: String, group: String) -> String;
     /// Admin only. Never a delete: refused with `error: W-01 has 2 open issues` while any
     /// issue there is still open. Retired locations take no new reports. `reason` is required.
@@ -153,6 +175,20 @@ impl Shared {
     // events are saved the moment they are signed (`write`). Append-only log if this ever matters.
     fn save_due(&mut self, force: bool) {
         if self.dirty && (force || self.last_save.elapsed() >= SAVE_EVERY) {
+            self.persist();
+        }
+    }
+
+    /// Seal every notice whose deadline has passed (`Node::auto_seal` signs each one once),
+    /// save, and queue the seals to go out.
+    fn auto_seal(&mut self) {
+        let Some(node) = self.node.as_mut() else {
+            return;
+        };
+        let seals = node.auto_seal(now());
+        if !seals.is_empty() {
+            self.outbox
+                .extend(seals.into_iter().map(|e| Wire::Event(e.bytes).encode()));
             self.persist();
         }
     }
@@ -427,6 +463,7 @@ fn flush() {
         let Some(sh) = g.as_mut() else {
             return;
         };
+        sh.auto_seal(); // the poll is also the clock for notice deadlines
         sh.save_due(false); // the poll is the clock for debounced saves
         if sh.retry_at.is_some_and(|t| Instant::now() < t) {
             return; // Delivery just failed: don't stall this call on it again (the outbox waits)
@@ -584,7 +621,7 @@ impl PukaarCoreModule for Pukaar {
 
     fn my_identity(&mut self) -> String {
         flush();
-        let mut v = read(|n| n.identity_json())
+        let mut v = read(|n| n.identity_json_at(now()))
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_else(|| serde_json::json!({ "site": null }));
@@ -642,6 +679,39 @@ impl PukaarCoreModule for Pukaar {
 
     fn revoke_role(&mut self, subject_hex: String, reason: String) -> String {
         publish_with(|n| n.revoke_role(&subject_hex, &reason, now()))
+    }
+
+    fn add_super_admin(&mut self, subject_hex: String) -> String {
+        publish_with(|n| n.add_super_admin(&subject_hex, now()))
+    }
+
+    fn remove_super_admin(&mut self, subject_hex: String) -> String {
+        publish_with(|n| n.remove_super_admin(&subject_hex, now()))
+    }
+
+    fn transfer_super_admin(&mut self, to_hex: String) -> String {
+        publish_with(|n| n.transfer_super_admin(&to_hex, now()))
+    }
+
+    fn admin_notice(
+        &mut self,
+        subject_hex: String,
+        outcome: String,
+        deadline: i64,
+        reason: String,
+    ) -> String {
+        let Ok(deadline) = u64::try_from(deadline) else {
+            return err("bad deadline");
+        };
+        publish_with(|n| n.admin_notice(&subject_hex, &outcome, deadline, &reason, now()))
+    }
+
+    fn cancel_notice(&mut self, subject_hex: String) -> String {
+        publish_with(|n| n.cancel_notice(&subject_hex, now()))
+    }
+
+    fn end_notice_now(&mut self, subject_hex: String) -> String {
+        publish_with(|n| n.end_notice_now(&subject_hex, now()))
     }
 
     fn add_location(&mut self, code: String, label: String, group: String) -> String {
