@@ -6,13 +6,13 @@
 
 [![ci](https://github.com/adysingh5711/pukaar/actions/workflows/ci.yml/badge.svg)](https://github.com/adysingh5711/pukaar/actions/workflows/ci.yml)
 ![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)
-![status](https://img.shields.io/badge/status-pilot--ready%20v0.2.4-blue)
+![status](https://img.shields.io/badge/status-pilot--ready%20v0.3.0-blue)
 
 | | |
 |---|---|
 | Demo video | To be added in later version |
 | Screenshots | [See the walkthrough](#screenshots) |
-| Latest release | [v0.2.4](https://github.com/adysingh5711/pukaar/releases/tag/v0.2.4): signed `.lgx` packages for Logos Basecamp 0.3.1 |
+| Latest release | [v0.3.0](https://github.com/adysingh5711/pukaar/releases/tag/v0.3.0): signed `.lgx` packages for Logos Basecamp 0.3.1 |
 
 ---
 
@@ -75,7 +75,7 @@ Pukaar's own screens in the order you would meet them, rendered offscreen with s
 
 ![Pukaar board with four columns of fault reports, overdue warnings and the admin's sidebar](public/images/01-board.png)
 
-The board for a sample site, seen by the admin, with four columns: reported, in progress, resolved and closed without fix. Cards that no steward acknowledged within 24 h, or that are past their target, are marked in red, so a stalled report is visible to everyone. The "Fix claimed, awaiting confirmation" card is still in progress, not resolved. The sidebar is the same for every member: Board, Report, History, People and Places. For the admin, People also shows a count of people waiting. Its foot shows the delivery status, the Proof line and the "you" block that opens Profile.
+The board for a sample site, seen by the admin, with four columns: reported, in progress, resolved and closed without fix. Cards that no steward acknowledged within 24 h, or that are past their target, are marked in red, so a stalled report is visible to everyone. The "Fix claimed, awaiting confirmation" card is still in progress, not resolved. The sidebar is the same for every member: Board, Report, History, People and Places. For the admin, People also shows a count of people waiting. Its foot shows the delivery status and the "you" block that opens Profile. A red banner appears at the top only when this device cannot rebuild the last anchored root.
 
 ### Why a report isn't closed yet
 
@@ -93,7 +93,7 @@ The same pane for the reporter, on a fix a steward has claimed. A claim is not a
 
 ![History page listing resolved and closed issues by month, with filters](public/images/04-history.png)
 
-Every resolved and closed issue, with search and filters for place, status and time, grouped by month with how many were fixed within target. The board shows resolved issues for 14 days and closed ones for 30. After that they live here. Nothing is deleted, and any issue can be reopened. The link at the top opens Proof.
+A table of every resolved and closed issue, with search and filters for place, status and time, grouped by month with how many were fixed within target. The board shows resolved issues for 14 days and closed ones for 30. After that they live here. Nothing is deleted, and any issue can be reopened. A status strip at the top shows the last anchor and opens Integrity.
 
 ### Report a fault
 
@@ -109,34 +109,35 @@ The "you" block at the foot of the sidebar opens Profile: your code and role, yo
 
 ### People
 
-![People page as the admin, with one person waiting for approval, the member list with Revoke, and the removed list](public/images/07-people.png)
+![People page as the super admin, with one person waiting for approval, the member list with admin controls, and the removed list](public/images/07-people.png)
 
-Every member sees People: each member's role, with staff named and residents named or shown as "pseudonym" and their code, and "Removed" (collapsed here), which says who removed each person, when and why. This is the admin's view, after one resident was removed. The admin also gets "Waiting for approval", with a reminder to grant a role only after the person reads their fingerprint aloud, can revoke a member (not themselves) with a reason after a confirm step, and offers "Grant again" under Removed. A line under each reason box says "Everyone in the site can see this reason."
+Every member sees People: each member's role, with staff named and residents named or shown as "pseudonym" and their code, and "Removed" (collapsed here), which says who removed each person, when and why. Residents and stewards see it read-only. Admins can approve people and revoke members. This is the super admin's view. The site creator's key is the first super admin, and a site has at most two. Only a super admin can grant or change admins, and an admin who tries sees "Only a super admin can change admins." A super admin can transfer the role, or move an admin to steward or remove them after a notice. Reasons are asked in a confirm step, and a line under each reason box says "Everyone in the site can see this reason."
 
 ### Places and the change log
 
 ![Places page as a resident, with the places list and the change log searched for "retired"](public/images/08-places-change-log.png)
 
-Every member sees Places, here as a resident. Each place shows its code (a link to that place in History), name, group, status and open issues, with a Changes link that searches the change log for it. The change log lists every place action (added, edited, renamed, retired, restored, removal started, removal undone and removed) with who did it, when and why, and one search field matches place, person, action or reason, here "retired". The admin also gets "Add a place" and Edit, Retire, Remove, Restore and Undo on each place.
+Every member sees Places as a table, here as a resident. Each place shows its code (a link to that place in History), name, group, status and open issues, with a Changes link that searches the change log for it. The change log lists every place action (added, edited, renamed, retired, restored, removal started, removal undone and removed) with who did it, when and why, as a table, and one search field matches place, person, action or reason, here "retired". The admin also gets "Add a place" and Edit, Retire, Remove, Restore and Undo on each place, and each of these asks for a reason in a confirm step.
 
-### Proof of history
+### Integrity
 
-![Proof page with the last anchor status and the three anchor steps](public/images/09-proof.png)
+![Integrity page with the last anchor status and the three anchor steps](public/images/09-proof.png)
 
-The Proof line in the sidebar opens this page, and History and Places link to it. The status block reports the newest anchor recorded in the site's history: when it was recorded and how many events it covers. It turns amber when the site was never anchored or the last anchor is older than 24 hours, and red when this device cannot rebuild the anchored root. It never says "verified", because the app does not read LEZ. Any member can anchor in three steps: compute the checkpoint, run the printed `spel` command, and record the reference it prints.
+The status strip at the top of History opens this page. The sidebar no longer has a Proof entry. The Board shows a red banner only on an anchor mismatch. The status block reports the newest anchor recorded in the site's history: when it was recorded and how many events it covers. It turns amber when the site was never anchored or the last anchor is older than 24 hours, and red when this device cannot rebuild the anchored root. It never says "verified", because the app does not read LEZ. Any member can anchor in three steps: compute the checkpoint, run the printed `spel` command, and record the reference it prints.
 
 ## Features
 
 - **Report** what's wrong and where: a category, one line, and a place picked from the site's grouped, searchable location list (or "Other" with a description).
 - **Staff workflow:** acknowledge, post updates with the next step and an ETA, claim a fix (a note is required), close as won't-fix, or mark a duplicate. Overdue and waiting-for-48 h cards are highlighted. Actions that cannot be undone ask for confirmation first, and a disabled button says why it is disabled.
 - **Two-key closure:** only the reporter, or two residents who aren't the claimant, can confirm a fix. The reporter can always reopen.
-- **People:** join with the site id; the admin approves each person after hearing their fingerprint read aloud. Staff are always named by the admin; the admin may name a resident too, and residents can change that name or stay pseudonymous. Every member sees who has which role and a Removed list that says who removed each person, when and why. The admin can revoke a role, with a reason everyone in the site can see, and can "Grant again". The removed person's app says who removed them and why, and their past reports and timeline entries are marked "former member".
+- **People:** join with the site id; the admin approves each person after hearing their fingerprint read aloud. Staff are always named by the admin; the admin may name a resident too, and residents can change that name or stay pseudonymous. Every member sees who has which role (residents and stewards read-only) and a Removed list that says who removed each person, when and why. Admins can revoke a role, with a reason everyone in the site can see asked in a confirm step, and can "Grant again". The removed person's app says who removed them and why, and their past reports and timeline entries are marked "former member".
+- **Super admins and admin notices:** the site creator's key is the first super admin. A site has at most two, and a super admin can transfer the role. Only super admins grant or change admins. A super admin can move an admin to steward or remove them after a notice (now, 1, 7 or 30 days, or a custom time). At the deadline every peer treats that person as the new role and rejects their later admin actions. A staff member's app seals the notice by itself 10 minutes after the deadline, which also defeats backdated events.
 - **Navigation:** Board, Report, History, People and Places for every member. The admin also sees a count of people waiting on People. A member who waits for approval sees one banner in place of controls they cannot use yet.
 - **Site setup:** the admin creates a site from a guided form: site name, their own name, editable categories, and a places table that starts empty (or from the Dhun sample). Service rules (acknowledge and fix targets in hours, open reports per person) are plain fields with explanations.
 - **Places:** every member sees the places with their status and open issues, and a change log they can search by place, person, action or reason. Only the admin adds places and can **edit** a place's name or group (its code never changes; old issues show "renamed from …"). A place in use can be **retired** (blocked while it has open issues), and a retired place offers "Report as Other at this spot". A place nobody ever reported can be **removed**: it shows as pending for 30 days with Undo, then is hidden from every list. The change log lists every place action with who did it, when and why. A duplicate code is refused, and the core rejects place changes from anyone but the admin.
 - **Profile:** the "you" block in the sidebar opens a page with your name, your identity backup, the site id to invite someone, your reports and "Leave this site".
 - **Identity backup:** on the Profile page, export a password-sealed copy of your identity (Argon2id + XChaCha20-Poly1305) and restore it on a new install. A restored identity waits for its own history before it can publish, so it can't fork its own chain.
-- **Proof of history:** compute a checkpoint of everyone's history and anchor it on LEZ with the printed `spel` command. Covered events show who recorded the anchor. The Proof page shows when the last anchor was recorded and what it covers, and warns when there is none, when it is older than 24 hours, or when this device cannot rebuild its root. The app does not read LEZ itself, so it never says an anchor is verified (see [Verifying an anchor yourself](#verifying-an-anchor-yourself)).
+- **Integrity (formerly Proof):** compute a checkpoint of everyone's history and anchor it on LEZ with the printed `spel` command. Covered events show who recorded the anchor. The Integrity page shows when the last anchor was recorded and what it covers, and warns when there is none, when it is older than 24 hours, or when this device cannot rebuild its root. The app does not read LEZ itself, so it never says an anchor is verified (see [Verifying an anchor yourself](#verifying-an-anchor-yourself)).
 - **Nothing is ever deleted:** rejected actions are kept and shown. "Removed" places are only hidden; their signed events stay in everyone's log. A forked chain is flagged, and every replica settles on the same branch.
 - **One identity, one device:** your key is your identity (there are no accounts). Run it on one device at a time; a restored identity waits for its own history before it can act.
 
@@ -147,7 +148,7 @@ The Proof line in the sidebar opens this page, and History and Places link to it
 | Rules engine (`pukaar_logic`): events, chains, reducer, sync, checkpoints, persistence, identity backup | `modules/pukaar_core/rust-lib/logic/` | **Done.** 121 tests, clippy `-D warnings` clean, fuzzed in CI |
 | Checkpoint registry (`pukaar_registry`), a SPEL program on LEZ | `programs/pukaar_registry/` | **Done.** Deployed and anchored on localnet ([record](programs/pukaar_registry/ANCHOR.md)) |
 | Logos core module (`pukaar_core`), a Rust cdylib plus Delivery glue | `modules/pukaar_core/` | **Done.** Runs in the standalone Logos host and inside Basecamp 0.3.1 |
-| QML UI module (`pukaar_ui`) | `modules/pukaar_ui/` | **Done.** Board, Report, History, People, Places, Profile and Proof pages; admin controls on People and Places. Offscreen screenshot harness (`scripts/ui-shots.sh`) |
+| QML UI module (`pukaar_ui`) | `modules/pukaar_ui/` | **Done.** Board, Report, History, People, Places, Profile and Integrity pages. History and Places are tables, with super admin and admin controls on People and Places. Offscreen screenshot harness (`scripts/ui-shots.sh`) |
 | Demo scripts and signed `.lgx` packages for Basecamp 0.3.1 | `scripts/`, [releases](https://github.com/adysingh5711/pukaar/releases) | **Done.** Packages signed with `lgx` (see Security) |
 | LAN relay and offline three-laptop dry run | | To be added in later version |
 
@@ -257,7 +258,7 @@ spel inspect <RECORD_PDA> --idl idl/pukaar_registry.json --type CheckpointRecord
 
 The `heads_root` and `n_events` it prints must equal the values that your own replica computes for that checkpoint. A mismatch means the anchored history and your history disagree.
 
-The Proof page in the app reports the newest anchor recorded in the site's own history, and whether this device can rebuild its root. It does not read LEZ, so only `spel inspect` confirms what is on chain.
+The Integrity page in the app reports the newest anchor recorded in the site's own history, and whether this device can rebuild its root. It does not read LEZ, so only `spel inspect` confirms what is on chain.
 
 ## Security
 
@@ -333,7 +334,8 @@ THIRD_PARTY_LICENSES       Lucide icon licence
 - **v0.2.2:** fix: sync works again (Pukaar turns off Delivery's SDS causal-history wait), moved to the `logos.dev` network, recovery after a Delivery restart, and names an admin gives residents now show on both sides.
 - **v0.2.3:** navigation built from the role, a Profile page, an admin Site page with a full place change log, a Proof page with the last-anchor status, issue pane actions above the timeline, confirm steps and reasons for disabled buttons, and revocations that say who removed whom, when and why.
 - **v0.2.4:** every member sees People (roles, pseudonyms and who was removed, when and why) and Places (status, open issues and a searchable change log); admin controls stay admin only. Packages now carry their real version (they all said 0.1.0 before), and CI fails when a release tag and the package version disagree.
-- **L1+:** anchoring from the app's Proof page on localnet and a testnet anchor; an "identity active on another device" warning; Heads messages that carry head ids, so anti-entropy also repairs equal-length forks.
+- **v0.3.0:** History and Places (with its change log) are tables, and reasons are asked in confirm steps. Integrity left the sidebar: a status strip on History opens it, and the Board shows a red banner only on an anchor mismatch. Super admins (at most two, with transfer) are the only ones who grant or change admins, and admin notice periods move an admin to steward or remove them after a notice, sealed by a staff member's app 10 minutes after the deadline. Breaking: v0.3.0 adds new event types, so every member must update. v0.2.4 apps cannot read the new events.
+- **L1+:** anchoring from the app's Integrity page on localnet and a testnet anchor; an "identity active on another device" warning; Heads messages that carry head ids, so anti-entropy also repairs equal-length forks.
 - **L2:** LAN relay for sites without internet, a password-sealed key file, a site-health view (category level only, no per-person ranking), export and verify bundles, evidence photos on Logos Storage (EXIF stripped), UI tests beyond the screenshot harness, and a steward guide in Hindi and English.
 - **L3:** an anonymous reporting lane with an RLN rate limit, a phone path, and 2-of-3 admin grants.
 
