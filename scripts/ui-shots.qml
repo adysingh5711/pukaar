@@ -15,6 +15,8 @@ Window {
     // The last-anchor states other than the default recent one: Proof's block, and the sidebar line on Board.
     readonly property var anchorStates: ["never", "stale", "mismatch"]
     // Revoked roles: a removed device ("removed", as Ravi Das), and the admin's view once r2 was removed ("former").
+    // Site with its change log opened and scrolled to (`log`), as the admin.
+    readonly property var logJobs: [["admin", "site"]]
     readonly property var revokeJobs: [["removed", "board"], ["removed", "profile"], ["admin", "board", true], ["admin", "issue", true], ["admin", "members", true]]
 
     QtObject {
@@ -48,6 +50,29 @@ Window {
             loc("P2", "Lane behind the clinic", "Paths", { state: "retired", retired: true, retired_reason: "Lane closed for construction" }),
             loc("L1", "Streetlight pole 17", "Paths", { state: "pending_removal", removal_reason: "Duplicate of P1", removes_at: now + 12 * 86400, ever_used: false })
         ]
+        // site_info place_log: every kind, newest first, one over the 20 shown before "+N older".
+        function pc(kind, code, age, reason, extra) {
+            var l = locations.filter(function (x) { return x.code === code })[0]
+            return Object.assign({ ts: h(age), by: keys.admin, by_name: names.admin, code: code,
+                                   label: l ? l.label : "Old toilet block", kind: kind, reason: reason }, extra || {})
+        }
+        readonly property var placeLog: [
+            pc("retired", "P2", 150, "Lane closed for construction"),
+            pc("removed", "T9", 280, "Demolished", { since: h(1000) }),
+            pc("removal_started", "L1", 432, "Duplicate of P1: the same pole was entered twice when the ward map was first set up, so this copy goes.",
+               { ends_at: now + 12 * 86400 }),
+            pc("renamed", "W2", 500, "", { from: "Old school tank", to: "Tank by the school" }),
+            pc("removal_undone", "L1", 650, "The pole is staying after all."),
+            pc("removal_started", "L1", 700, "Not needed", { ends_at: h(700) + 720 * 3600 }),
+            pc("restored", "P2", 900, "Lane reopened"),
+            pc("retired", "P2", 950, "Waterlogged"),
+            pc("removal_started", "T9", 1000, "Demolished", { ends_at: h(280) }),
+            pc("renamed", "P1", 1020, "", { from: "Drain, lane 4", to: "गली नंबर 4 की नाली" }),
+            pc("edited", "P1", 1050, ""),
+            pc("edited", "B1", 1100, ""),
+            pc("restored", "W1", 1150, "Pump repaired"),
+            pc("retired", "W1", 1200, "Pump dry"),
+        ].concat(["W1", "W2", "B1", "P1", "P2", "L1", "T9"].map(function (c, n) { return pc("added", c, 1400 + n, "") }))
         function progress(by, ts, note, next, eta) {
             return { by: keys[by], by_name: names[by], ts: h(ts), note: note, next_step: next, eta_h: eta, due_ts: eta ? h(ts) + eta * 3600 : 0 }
         }
@@ -106,6 +131,7 @@ Window {
                 locations: locations,
                 removed_locations: [{ code: "T9", label: "Old toilet block", group: "Rooms", by: keys.admin, by_name: names.admin,
                                       reason: "Demolished", since: h(1000), removed_at: h(280) }],
+                place_log: placeLog,
                 members: ["admin", "steward", "resident"].concat(former ? [] : ["r2"]).map(function (w) { var m = member(w); m.role = roles[w]; return m }),
                 pending: [member("pending")], revoked: revoked(), sla_ack_h: 24, sla_fix_h: 72, events: 42, forks: 0, forked_authors: [],
                 last_anchor: anchor === "never" ? null : { ts: h(anchor === "stale" ? 50 : 3), tx: "pda:Public/9f2c", by: keys.steward,
@@ -141,9 +167,17 @@ Window {
         anchorStates.forEach(function (a) {
             [800, 1400].forEach(function (w) { ["proof", "board"].forEach(function (p) { out.push({ state: "resident", width: w, page: p, anchor: a }) }) })
         })
+        logJobs.forEach(function (r) {
+            [800, 1400].forEach(function (w) { out.push({ state: r[0], width: w, page: r[1], log: true }) })
+        })
         return out
     }
     property int job: -1
+    function find(item, name) {
+        if (item.objectName === name) return item
+        for (var i = 0; i < item.children.length; i++) { var f = find(item.children[i], name); if (f) return f }
+        return null
+    }
     function next() {
         if (++job >= jobs.length) { Qt.quit(); return }
         var j = jobs[job], v = view.item
@@ -162,6 +196,8 @@ Window {
         if (pane >= 0) { v.openPage("board"); v.openIssue(logos.issues[pane ? 0 : j.former ? 1 : 3].id) }
         else if (j.page !== "first-run") v.openPage(j.page)
         if (j.page === "proof") v.checkpoint = logos.reply("checkpoint_now")
+        var log = find(v, "changeLog")
+        if (log) log.open = !!j.log
         focusSink.forceActiveFocus()
         shot.start()
     }
@@ -169,8 +205,13 @@ Window {
         id: shot; interval: 250
         onTriggered: {
             var j = win.jobs[win.job]
+            if (j.log) {   // scroll the page so the change log's header is at the top
+                var log = win.find(view.item, "changeLog"), f = log.parent
+                while (f.contentY === undefined) f = f.parent
+                f.contentY = Math.min(log.mapToItem(f.contentItem, 0, 0).y - 16, f.contentHeight - f.height)
+            }
             view.grabToImage(function (r) {
-                r.saveToFile(win.args[1] + "/" + j.state + "-" + j.page + (j.anchor ? "-anchor-" + j.anchor : "") + (j.former ? "-former" : "") + "-" + j.width + ".png")
+                r.saveToFile(win.args[1] + "/" + j.state + "-" + j.page + (j.anchor ? "-anchor-" + j.anchor : "") + (j.former ? "-former" : "") + (j.log ? "-log" : "") + "-" + j.width + ".png")
                 win.next()
             })
         }

@@ -17,7 +17,7 @@ Item {
     // rebuilt model would wipe typed text in the Members rows and reset the Report combos.
     property var categories: []
     property var locations: []
-    property var removedLocations: []    // the admin's change log: places whose 30-day removal is over
+    property var placeLog: []            // the admin's change log (site_info place_log), newest first
     property var members: []
     property var pending: []
     property var revoked: []             // members whose role the admin removed (site_info revoked), newest first
@@ -193,7 +193,7 @@ Item {
     function keep(name, value) { if (JSON.stringify(value) !== JSON.stringify(root[name])) root[name] = value }
     function setInfo(i) {
         info = i
-        keep("categories", i.categories); keep("locations", i.locations); keep("removedLocations", i.removed_locations || [])
+        keep("categories", i.categories); keep("locations", i.locations); keep("placeLog", i.place_log || [])
         keep("members", i.members); keep("pending", i.pending); keep("revoked", i.revoked || [])
         keep("groupNames", groupsOf(i.locations))
     }
@@ -287,6 +287,17 @@ Item {
     function who(key, name) { return name ? name : "pseudonym " + String(key).substr(0, 6) }
     function formerTag(former) { return former ? " (former member)" : "" }   // after a revoked author's name and code
     function when(ts, format) { return new Date(ts * 1000).toLocaleString(Qt.locale(), format || "d MMM HH:mm") }
+    // One change-log row in plain words, from site_info place_log.
+    function placeChange(c) {
+        var verb = ({ added: "added", edited: "edited", renamed: "renamed from “" + c.from + "” to “" + c.to + "”", retired: "retired",
+                      restored: "restored", removal_started: "removal started", removal_undone: "removal undone" })[c.kind]
+        var what = c.kind === "removed"
+            ? "removed on " + when(c.ts, "d MMM") + " (started by " + who(c.by, c.by_name) + " on " + when(c.since, "d MMM") + ")"
+            : verb + " by " + who(c.by, c.by_name) + ", " + when(c.ts)
+        var pending = locations.some(function (l) { return l.code === c.code && l.state === "pending_removal" && l.removes_at === c.ends_at })
+        if (c.kind === "removal_started" && pending) what += ". Hidden on " + when(c.ends_at, "d MMM") + " unless undone"
+        return c.code + " " + (c.label || "") + ": " + what + "." + (c.reason ? " Reason: " + c.reason.replace(/[.\s]+$/, "") + "." : "")
+    }
     function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") }
     function place(i) {
         var p = i.location === "other" ? "Other" : (i.location + " " + (i.location_label || ""))
@@ -1362,6 +1373,27 @@ Item {
         }
     }
 
+    // "+N more" under a capped list; the caller keeps `expanded` and flips it on click.
+    component MoreToggle: ItemDelegate {
+        id: more
+        property bool expanded: false
+        implicitHeight: Math.max(44, implicitContentHeight + topPadding + bottomPadding)
+        leftPadding: 12; rightPadding: 12
+        Accessible.role: Accessible.Button
+        Accessible.name: text + (expanded ? ", expanded" : ", collapsed")
+        Keys.onReturnPressed: clicked()
+        Keys.onEnterPressed: clicked()
+        background: Rectangle {
+            radius: 6; color: more.hovered ? root.t.hover : root.t.card
+            border.width: more.visualFocus ? 2 : 1; border.color: more.visualFocus ? root.t.focus : root.t.ctlBd
+        }
+        contentItem: RowLayout {
+            spacing: 8
+            Icon { name: "chev"; size: 16; color: root.t.accent; rotation: more.expanded ? -90 : 90 }
+            Label { Layout.fillWidth: true; text: more.text; wrapMode: Text.Wrap; color: root.t.accent; font.weight: Font.DemiBold }
+        }
+    }
+
     // A row of the change log: plain text under a rule.
     component LogRow: Note {
         leftPadding: 16; rightPadding: 16; topPadding: 10; bottomPadding: 10
@@ -2286,26 +2318,12 @@ Item {
                                             width: cardList.width
                                             topPadding: col.cards.length > 0 && (col.over > 0 || col.older > 0) ? 8 : 0
                                             spacing: 4
-                                            ItemDelegate {
-                                                id: more
+                                            MoreToggle {
                                                 visible: col.over > 0
-                                                width: parent.width; implicitHeight: Math.max(44, implicitContentHeight + topPadding + bottomPadding)
-                                                leftPadding: 12; rightPadding: 12
+                                                width: parent.width
+                                                expanded: col.showAll
                                                 text: col.showAll ? "Show fewer" : "+" + col.over + " more from the last " + root.windowDays(col.modelData.status) + " days"
-                                                Accessible.role: Accessible.Button
-                                                Accessible.name: text + (col.showAll ? ", expanded" : ", collapsed")
                                                 onClicked: col.showAll = !col.showAll
-                                                Keys.onReturnPressed: clicked()
-                                                Keys.onEnterPressed: clicked()
-                                                background: Rectangle {
-                                                    radius: 6; color: more.hovered ? root.t.hover : root.t.card
-                                                    border.width: more.visualFocus ? 2 : 1; border.color: more.visualFocus ? root.t.focus : root.t.ctlBd
-                                                }
-                                                contentItem: RowLayout {
-                                                    spacing: 8
-                                                    Icon { name: "chev"; size: 16; color: root.t.accent; rotation: col.showAll ? -90 : 90 }
-                                                    Label { Layout.fillWidth: true; text: more.text; wrapMode: Text.Wrap; color: root.t.accent; font.weight: Font.DemiBold }
-                                                }
                                             }
                                             ItemDelegate {
                                                 id: olderLink
@@ -2569,7 +2587,8 @@ Item {
                     maxWidth: 1040
                     enabled: !root.syncing
                     property bool adding: false    // "Add a place" was pressed: its form shows above the list
-                    readonly property var renamed: root.locations.filter(function (l) { return !!l.renamed_from })
+                    property bool fullLog: false    // the change log past its newest 20; forgotten once the page is left
+                    onVisibleChanged: if (!visible) fullLog = false
                     readonly property int retiredCount: root.locations.filter(function (l) { return l.state === "retired" }).length
                     PageHead { title: "Site"; lede: "Add, edit, retire and remove places, and see what changed." }
                     CollapsibleSection {
@@ -2736,32 +2755,31 @@ Item {
                         }
                     }
                     CollapsibleSection {
-                        title: "Change log"; aside: "· " + (root.removedLocations.length + sitePage.renamed.length)
+                        objectName: "changeLog"
+                        title: "Change log"; aside: "· " + root.placeLog.length
                         pad: 0
                         Help {
                             Layout.margins: 16; Layout.bottomMargin: 8
                             text: "Removed places are hidden from every list, retired ones included. Removed means hidden: the signed events stay in everyone's log."
                         }
                         Help {
-                            visible: root.removedLocations.length === 0 && sitePage.renamed.length === 0
+                            visible: root.placeLog.length === 0
                             Layout.margins: 16; Layout.topMargin: 0
-                            text: "Nothing removed or renamed yet."
+                            text: "No changes yet."
                         }
                         Repeater {
-                            model: root.removedLocations
+                            model: sitePage.fullLog ? root.placeLog : root.placeLog.slice(0, 20)
                             delegate: LogRow {
                                 required property var modelData
-                                text: modelData.code + "  " + modelData.label + " (" + modelData.group + "): removed " + root.when(modelData.removed_at)
-                                    + ". " + root.who(modelData.by, modelData.by_name) + " started the removal " + root.when(modelData.since)
-                                    + ", reason: " + modelData.reason
+                                text: root.placeChange(modelData)
                             }
                         }
-                        Repeater {
-                            model: sitePage.renamed
-                            delegate: LogRow {
-                                required property var modelData
-                                text: modelData.code + "  renamed from “" + modelData.renamed_from + "” to “" + modelData.label + "”"
-                            }
+                        MoreToggle {
+                            visible: root.placeLog.length > 20
+                            Layout.fillWidth: true; Layout.margins: 16
+                            expanded: sitePage.fullLog
+                            text: expanded ? "Show the newest 20" : "+" + root.plural(root.placeLog.length - 20, "older change")
+                            onClicked: sitePage.fullLog = !sitePage.fullLog
                         }
                     }
                     ProofLink { Layout.topMargin: 8 }
