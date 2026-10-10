@@ -14,7 +14,7 @@ Item {
     property var info: noInfo
     // The lists of site_info live in properties of their own, written only when their content
     // changed: info itself changes on every received event (it carries an event count), and a
-    // rebuilt model would wipe typed text in the Members rows and reset the Report combos.
+    // rebuilt model would wipe typed text in the People rows and reset the Report combos.
     property var categories: []
     property var locations: []
     property var placeLog: []            // the admin's change log (site_info place_log), newest first
@@ -42,7 +42,7 @@ Item {
     // A restored identity waits for its own history before signing anything (core refuses meanwhile).
     readonly property bool syncing: !!me.syncing_own_history
     // ---- shell (design/proposal/NOTES.md section 3) ----
-    readonly property var pages: ["board", "report", "members", "site", "proof", "profile", "history"]   // the StackLayout's children, in order
+    readonly property var pages: ["board", "report", "people", "site", "proof", "profile", "history"]   // the StackLayout's children, in order
     property string page: "board"
     // The sidebar is expanded (216 px) from 1100 px of window, an 80 px icon rail below; the user's
     // toggle ("expanded" / "collapsed", "" = never pressed) wins at every width and is remembered.
@@ -56,7 +56,7 @@ Item {
     readonly property int sidebarWidth: sidebarOpen && !overlay ? 216 : 80     // what the content gives up
     function toggleSidebar() { if (overlay) overlayOpen = !overlayOpen; else prefs.sidebar = sidebarOpen ? "collapsed" : "expanded" }
     function openPage(name) { page = name; overlayOpen = false }
-    onIsAdminChanged: if (!isAdmin && (page === "members" || page === "site")) { openPage("board"); notice = "Your admin role was removed, so the admin pages are closed." }
+    onIsAdminChanged: if (!isAdmin && page === "site") { openPage("board"); notice = "Your admin role was removed, so the Site page is closed." }
     // A place code's link: that place in History. Narrow, the pane covers the page, so it closes.
     function showPlace(code) { historyPlace = code; if (narrow) closeIssue(); openPage("history") }
     // The issue pane sits beside the Board and History pages (both open issues); narrow, it replaces them.
@@ -1464,7 +1464,7 @@ Item {
     }
 
     // A person the admin can give a role (waiting for approval, or removed and `again`): who they are
-    // (the content), then Grant resident, or a name and Grant steward.
+    // (the content), then, for the admin only, Grant resident, or a name and Grant steward.
     component GrantRow: ColumnLayout {
         id: grant
         required property var modelData
@@ -1481,11 +1481,13 @@ Item {
             columns: root.compactRows ? 2 : 3; columnSpacing: 12; rowSpacing: 8
             ColumnLayout { id: whoCell; Layout.fillWidth: true; spacing: 4 }
             ActionButton {
+                visible: root.isAdmin
                 text: "Grant resident" + grant.suffix; Accessible.name: text + ": " + grant.person
                 onClicked: root.run("grant_role", [grant.modelData.key, "resident", staffName.text])
             }
             LabelledField {
                 id: staffName
+                visible: root.isAdmin
                 Layout.fillWidth: root.compactRows; Layout.columnSpan: root.compactRows ? 2 : 1
                 Layout.preferredWidth: 330
                 name: "Name, optional for a resident"
@@ -1769,32 +1771,16 @@ Item {
                     model: [
                         { label: "Board", icon: "board", page: "board" },
                         { label: "Report", icon: "report", page: "report" },
-                        { label: "History", icon: "hist", page: "history" }
+                        { label: "History", icon: "hist", page: "history" },
+                        { label: "People", icon: "members", page: "people", count: root.isAdmin ? root.pending.length : 0 }   // the admin's waiting count
                     ].filter(function (e) { return root.approved || e.page !== "report" })   // a pending key cannot report
-                     .concat(root.isAdmin ? [{ label: "Members", icon: "members", page: "members", admin: true },   // admin: the heading and the waiting count
-                                             { label: "Site", icon: "pin", page: "site" }] : [])
-                    delegate: ColumnLayout {
-                        id: entry
+                     .concat(root.isAdmin ? [{ label: "Site", icon: "pin", page: "site" }] : [])
+                    delegate: NavItem {
                         required property var modelData
-                        readonly property bool admin: !!modelData.admin
-                        Layout.fillWidth: true
-                        spacing: 4
-                        Label {   // the admin items' heading; the rail shows a short rule instead
-                            visible: entry.admin && sidebar.open
-                            Layout.topMargin: 8; Layout.leftMargin: 12
-                            text: "Admin"; color: root.t.sbMuted; font.pointSize: root.smallSize; font.weight: Font.DemiBold
-                        }
-                        Rectangle {
-                            visible: entry.admin && !sidebar.open
-                            Layout.alignment: Qt.AlignHCenter; Layout.topMargin: 6; Layout.bottomMargin: 2
-                            implicitWidth: 40; implicitHeight: 1; color: root.t.sbLine
-                        }
-                        NavItem {
-                            text: entry.modelData.label; glyph: entry.modelData.icon
-                            current: root.page === entry.modelData.page; compact: !sidebar.open
-                            count: entry.admin ? root.pending.length : 0
-                            onClicked: root.openPage(entry.modelData.page)
-                        }
+                        text: modelData.label; glyph: modelData.icon
+                        current: root.page === modelData.page; compact: !sidebar.open
+                        count: modelData.count || 0
+                        onClicked: root.openPage(modelData.page)
                     }
                 }
             }
@@ -2459,14 +2445,15 @@ Item {
                     }
                 }
 
-                // Members (admin): grant pending keys after the fingerprint is read aloud. Two boxes,
-                // only "Waiting for approval" open at first (also when it is empty).
+                // People (everyone in the site): who has which role, and who was removed, by whom and why.
+                // The admin also grants pending keys after the fingerprint is read aloud, and revokes.
+                // Only the admin's "Waiting for approval" (or everyone else's member list) is open at first.
                 TabPage {
-                    id: membersPage
                     maxWidth: 1040
                     enabled: !root.syncing
-                    PageHead { title: "Members"; lede: "Approve people and manage their roles." }
+                    PageHead { title: "People"; lede: root.isAdmin ? "Approve people and manage their roles." : "Who is in this site." }
                     CollapsibleSection {
+                        visible: root.isAdmin
                         title: "Waiting for approval"; aside: "· " + root.pending.length
                         open: true; pad: 0
                         Flash { Layout.margins: 16; Layout.bottomMargin: 12; icon: "mega"; text: "Grant a role only after the person reads this fingerprint aloud." }
@@ -2494,8 +2481,9 @@ Item {
                         }
                     }
                     CollapsibleSection {
+                        objectName: "memberList"
                         title: "Members"; aside: "· " + root.members.length
-                        pad: 0
+                        open: !root.isAdmin; pad: 0
                         Repeater {
                             model: root.members
                             delegate: ColumnLayout {
@@ -2525,23 +2513,32 @@ Item {
                                             Label {
                                                 width: Math.min(implicitWidth, nameFlow.width)
                                                 wrapMode: Text.Wrap; textFormat: Text.PlainText; font.weight: Font.DemiBold
-                                                text: memberRow.modelData.name || "pseudonym"
+                                                text: root.who(memberRow.modelData.key, memberRow.modelData.name)
                                             }
                                             StatusChip { visible: root.compactRows; label: memberRow.modelData.role; stage: memberRow.elevated ? root.t.progress : root.t.closed }
                                         }
                                         Label { visible: memberRow.own; text: "you"; color: root.t.muted; font.pointSize: root.smallSize }
                                     }
-                                    FramedField {
-                                        id: revokeReason
-                                        Layout.preferredWidth: 210; Layout.fillWidth: root.compactRows; Layout.columnSpan: root.compactRows ? 2 : 1
-                                        maximumLength: 500
-                                        enabled: !memberRow.own
-                                        placeholderText: memberRow.own ? "you can't revoke yourself" : "reason, e.g. left the camp"
-                                        Accessible.name: "Reason for revoking " + memberRow.modelData.fingerprint
-                                        onAccepted: revoke.submit()
+                                    ColumnLayout {
+                                        visible: root.isAdmin
+                                        Layout.preferredWidth: 260; Layout.fillWidth: root.compactRows; Layout.columnSpan: root.compactRows ? 2 : 1
+                                        spacing: 4
+                                        FramedField {
+                                            id: revokeReason
+                                            Layout.fillWidth: true
+                                            maximumLength: 500
+                                            enabled: !memberRow.own
+                                            placeholderText: memberRow.own ? "you can't revoke yourself" : "reason, e.g. left the camp"
+                                            Accessible.name: "Reason for revoking " + memberRow.modelData.fingerprint
+                                            Accessible.description: revokeNote.text
+                                            onAccepted: revoke.submit()
+                                        }
+                                        Help { id: revokeNote; visible: !memberRow.own; text: "Everyone in the site can see this reason." }
                                     }
                                     ConfirmButton {
                                         id: revoke
+                                        visible: root.isAdmin
+                                        Layout.alignment: Qt.AlignTop; Layout.fillHeight: false   // the field's height, not the note's
                                         text: "Revoke"; kind: "danger"; confirmText: "Confirm revoke"
                                         effect: "They lose the " + memberRow.modelData.role + " role now."
                                         allowed: !memberRow.own && revokeReason.text.trim().length > 0
@@ -2556,7 +2553,9 @@ Item {
                         pad: 0
                         Blank {
                             visible: root.revoked.length === 0
-                            icon: "res"; title: "No one has been removed."; text: "When you revoke a role, the person shows here with your reason."
+                            icon: "res"; title: "No one has been removed."
+                            text: root.isAdmin ? "When you revoke a role, the person shows here with your reason."
+                                               : "When the admin removes someone's role, they show here with the reason."
                         }
                         Repeater {
                             model: root.revoked
@@ -2569,7 +2568,7 @@ Item {
                                     Fingerprint { text: removedRow.modelData.fingerprint }
                                     Label {
                                         Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText; font.weight: Font.DemiBold
-                                        text: removedRow.modelData.name || "pseudonym"
+                                        text: root.who(removedRow.modelData.key, removedRow.modelData.name)
                                     }
                                 }
                                 Help {

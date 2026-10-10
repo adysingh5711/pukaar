@@ -11,13 +11,13 @@ Window {
     readonly property var args: Qt.application.arguments.slice(Qt.application.arguments.indexOf("--") + 1)
     readonly property var widths: [800, 1280, 1400]
     readonly property var states: ["none", "pending", "resident", "steward", "admin"]
-    readonly property var pages: ["board", "history", "report", "members", "site", "proof", "profile", "issue", "issue-new"]
+    readonly property var pages: ["board", "history", "report", "people", "site", "proof", "profile", "issue", "issue-new"]
     // The last-anchor states other than the default recent one: Proof's block, and the sidebar line on Board.
     readonly property var anchorStates: ["never", "stale", "mismatch"]
     // Revoked roles: a removed device ("removed", as Ravi Das), and the admin's view once r2 was removed ("former").
     // Site with its change log opened and scrolled to (`log`), as the admin.
     readonly property var logJobs: [["admin", "site"]]
-    readonly property var revokeJobs: [["removed", "board"], ["removed", "profile"], ["admin", "board", true], ["admin", "issue", true], ["admin", "members", true]]
+    readonly property var revokeJobs: [["removed", "board"], ["removed", "profile"], ["admin", "board", true], ["admin", "issue", true], ["admin", "people", true]]
 
     QtObject {
         id: logos
@@ -198,6 +198,8 @@ Window {
         if (j.page === "proof") v.checkpoint = logos.reply("checkpoint_now")
         var log = find(v, "changeLog")
         if (log) log.open = !!j.log
+        var members = find(v, "memberList")
+        if (members && j.former) members.open = true   // the admin's revoke boxes, once r2 was removed
         focusSink.forceActiveFocus()
         shot.start()
     }
