@@ -11,7 +11,7 @@ Window {
     readonly property var args: Qt.application.arguments.slice(Qt.application.arguments.indexOf("--") + 1)
     readonly property var widths: [800, 1280, 1400]
     readonly property var states: ["none", "pending", "resident", "steward", "admin"]
-    readonly property var pages: ["board", "history", "report", "members", "site", "proof", "profile", "issue"]
+    readonly property var pages: ["board", "history", "report", "members", "site", "proof", "profile", "issue", "issue-new"]
 
     QtObject {
         id: logos
@@ -134,7 +134,8 @@ Window {
         }
         width = j.width
         v.closeIssue()
-        if (j.page === "issue") { v.openPage("board"); v.openIssue(logos.issues[3].id) }
+        var pane = ["issue", "issue-new"].indexOf(j.page)   // the pane on a claimed fix, and on a new report (More)
+        if (pane >= 0) { v.openPage("board"); v.openIssue(logos.issues[pane ? 0 : 3].id) }
         else if (j.page !== "first-run") v.openPage(j.page)
         if (j.page === "proof") v.checkpoint = logos.reply("checkpoint_now")
         focusSink.forceActiveFocus()

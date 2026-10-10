@@ -52,7 +52,8 @@ Item {
     function toggleSidebar() { if (overlay) overlayOpen = !overlayOpen; else prefs.sidebar = sidebarOpen ? "collapsed" : "expanded" }
     function openPage(name) { page = name; overlayOpen = false }
     onIsAdminChanged: if (!isAdmin && (page === "members" || page === "site")) { openPage("board"); notice = "Your admin role was removed, so the admin pages are closed." }
-    function showPlace(code) { historyPlace = code; openPage("history") }   // a place code's link: that place in History
+    // A place code's link: that place in History. Narrow, the pane covers the page, so it closes.
+    function showPlace(code) { historyPlace = code; if (narrow) closeIssue(); openPage("history") }
     // The issue pane sits beside the Board and History pages (both open issues); narrow, it replaces them.
     readonly property bool paneOpen: selected !== null && (page === "board" || page === "history")
     // Four board columns (160 each, 12 apart) + the 400 px pane, its 8 px gap and the content's 16 px
@@ -349,13 +350,13 @@ Item {
     function reopenWhy(i) { return isActionable(i.status) ? stageWhy(i.status) : canVote(i) ? "" : "only the reporter or a resident can" }
     function needsMe(i) { return i.reporter === me.key && confirmWhy(i) === "" }
     // "Not available to you": every action the pane hides or disables, one line per reason, in the
-    // mockup's words ("Reopen and Comment need a note first."). The core refuses these without a note.
+    // mockup's words ("Comment needs a note first."). The core refuses these without a note.
     function unavailable(i, hasNote) {
         var note = hasNote ? "" : "note", steward = stewardWhy(i), why = []
         // a resident's steward actions are hidden, not explained: only staff get their stage reasons
         if (staff) ["Post update", "Claim fixed", "Won't fix"].forEach(function (a) { why.push([a, steward || note]) })
-        // a finished issue's Reopen has its own reason box (Still broken? Reopen)
-        why.push(["Confirm it's fixed", confirmWhy(i)], ["Reopen", reopenWhy(i) || (isTerminal(i.status) ? "" : note)], ["Comment", note])
+        // Reopen has its own reason box (Still broken? Reopen), so it never waits on the note
+        why.push(["Confirm it's fixed", confirmWhy(i)], ["Reopen", reopenWhy(i)], ["Comment", note])
         var reasons = [], acts = {}
         why.forEach(function (w) {
             if (!w[1]) return
@@ -2943,8 +2944,8 @@ Item {
                 }
             }
 
-            // The issue pane: header, the report, why it isn't closed yet, the timeline, then the
-            // actions grouped by who they are for and what isn't available (and why). It scrolls whole.
+            // The issue pane: header, the report, why it isn't closed yet, then the actions grouped by
+            // who they are for, what isn't available (and why), and the timeline last. It scrolls whole.
             ScrollView {
                 id: detail
                 visible: root.paneOpen
@@ -3068,29 +3069,20 @@ Item {
                         title: detail.finished ? "How it was closed" : "Why it isn't closed yet"
                         icon: detail.finished ? root.stageIcon(detail.st) : "info"
                     }
-                    Label { Layout.bottomMargin: 8; text: "Timeline"; font.pointSize: root.smallSize; font.weight: Font.DemiBold; color: root.t.muted }
-                    Item {   // the events on one spine
-                        Layout.fillWidth: true; Layout.bottomMargin: 16
-                        implicitHeight: events.implicitHeight
-                        Rectangle { x: 13; y: 6; width: 2; height: Math.max(0, parent.height - 12); color: root.t.bd }
-                        ColumnLayout {
-                            id: events
-                            width: parent.width
-                            spacing: 12
-                            Repeater {
-                                model: root.selected ? root.selected.events : []
-                                delegate: TimelineRow {
-                                    required property var modelData
-                                    Layout.fillWidth: true
-                                    event: modelData
-                                    byReporter: modelData.author === detail.issue.reporter
-                                }
-                            }
+                    ActionGroup {
+                        // the reporter decides alone; another resident's confirm or reopen is one of two votes
+                        title: detail.mine ? "For the person who reported it" : "For residents"
+                        visible: detail.canConfirm
+                        enabled: !root.syncing
+                        Layout.bottomMargin: 14
+                        ActionButton {
+                            kind: "primary"
+                            text: detail.mine ? "Confirm it's fixed" : "Confirm (" + detail.issue.confirms + " of 2 residents so far)"
+                            onClicked: detail.act("confirm", 0)
                         }
                     }
-                    Rectangle { Layout.fillWidth: true; Layout.bottomMargin: 14; implicitHeight: 1; color: root.t.bd }
-                    Rectangle {   // a finished issue: reopen it rather than report it again (the Reopen rule below)
-                        visible: detail.finished && detail.canReopen
+                    Rectangle {   // a claimed fix or a finished issue: reopen it, with its own reason, rather than report it again
+                        visible: detail.canReopen
                         Layout.fillWidth: true; Layout.bottomMargin: 14
                         implicitHeight: stillCol.implicitHeight + 24
                         radius: 8; color: root.t.card; border.color: root.t.ctlBd
@@ -3118,7 +3110,7 @@ Item {
                                 }
                             }
                             ActionButton {
-                                kind: "primary"
+                                kind: detail.canConfirm ? "default" : "primary"
                                 allowed: reopenReason.text.trim() !== ""
                                 text: "Reopen (reason)" + (detail.issue.reopen_count > 0 ? ", reopened " + detail.issue.reopen_count + "×" : "")
                                 onClicked: detail.reopenOld()
@@ -3165,8 +3157,10 @@ Item {
                                 allowed: detail.hasNote; kind: detail.st === "Open" ? "default" : "primary"
                                 text: "Claim fixed (say what was done)"; onClicked: detail.act("claim_resolved", 0)
                             }
-                            ActionButton { allowed: detail.hasNote; kind: "danger"; text: "Won't fix (reason)"; onClicked: detail.act("close_wontfix", 0) }
+                            FramedButton { id: more; checkable: true; text: "More"; iconName: checked ? "chevd" : "chev" }   // close without a fix
+                            ActionButton { visible: more.checked; allowed: detail.hasNote; kind: "danger"; text: "Won't fix (reason)"; onClicked: detail.act("close_wontfix", 0) }
                             RowLayout {   // close this one as a duplicate of another open issue
+                                visible: more.checked
                                 width: parent.width
                                 spacing: 8
                                 FramedCombo {
@@ -3192,23 +3186,6 @@ Item {
                                     onClicked: root.run("act", [detail.issue.id, "mark_duplicate", dupOf.target, "", 0],
                                                         function () { dupOf.target = "" })
                                 }
-                            }
-                        }
-                        ActionGroup {
-                            // the reporter decides alone; another resident's confirm or reopen is one of two votes
-                            title: detail.mine ? "For the person who reported it" : "For residents"
-                            visible: detail.canConfirm || (detail.canReopen && !detail.finished)
-                            ActionButton {
-                                visible: detail.canConfirm; kind: "primary"
-                                text: detail.mine ? "Confirm it's fixed" : "Confirm (" + detail.issue.confirms + " of 2 residents so far)"
-                                onClicked: detail.act("confirm", 0)
-                            }
-                            ActionButton {
-                                visible: detail.canReopen && !detail.finished
-                                kind: detail.canConfirm ? "default" : "primary"
-                                allowed: detail.hasNote
-                                text: "Reopen (reason)" + (detail.issue.reopen_count > 0 ? ", reopened " + detail.issue.reopen_count + "×" : "")
-                                onClicked: detail.act("reopen", 0)
                             }
                         }
                         ActionGroup {
@@ -3240,6 +3217,27 @@ Item {
                                     required property string modelData
                                     width: naCol.width; wrapMode: Text.Wrap
                                     text: modelData; font.pointSize: root.smallSize; color: root.t.muted
+                                }
+                            }
+                        }
+                    }
+                    Rectangle { Layout.fillWidth: true; Layout.bottomMargin: 14; implicitHeight: 1; color: root.t.bd }
+                    Label { Layout.bottomMargin: 8; text: "Timeline"; font.pointSize: root.smallSize; font.weight: Font.DemiBold; color: root.t.muted }
+                    Item {   // the events on one spine
+                        Layout.fillWidth: true; Layout.bottomMargin: 16
+                        implicitHeight: events.implicitHeight
+                        Rectangle { x: 13; y: 6; width: 2; height: Math.max(0, parent.height - 12); color: root.t.bd }
+                        ColumnLayout {
+                            id: events
+                            width: parent.width
+                            spacing: 12
+                            Repeater {
+                                model: root.selected ? root.selected.events : []
+                                delegate: TimelineRow {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    event: modelData
+                                    byReporter: modelData.author === detail.issue.reporter
                                 }
                             }
                         }
