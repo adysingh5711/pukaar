@@ -18,9 +18,11 @@ Window {
     // Places with its change log opened and scrolled to (`log`): as the admin, then searched (a third
     // item, `search`) by a resident for an action word, and by a steward for something no row has.
     readonly property var logJobs: [["admin", "places"], ["resident", "places", "retired"], ["steward", "places", "tank lid"]]
-    // Places as the admin with retired places shown and a confirm step open on a row (its code, the core method).
-    readonly property var confirmJobs: [["W2", "retire_location"], ["L1", "undo_remove_location"]]
-    readonly property var revokeJobs: [["removed", "board"], ["removed", "profile"], ["admin", "board", true], ["admin", "issue", true], ["admin", "people", true]]
+    // Places as the admin with retired places shown and a confirm step open on a row (its objectName, the panel).
+    readonly property var confirmJobs: [["placeRow-W2", "retire_location"], ["placeRow-L1", "undo_remove_location"]]
+    // The last item: rows whose panel opens before the shot (People's revoke step on Meera's row).
+    readonly property var revokeJobs: [["removed", "board"], ["removed", "profile"], ["admin", "board", true], ["admin", "issue", true],
+                                       ["admin", "people", true, [["memberRow-7e7e7e", "revoke"]]]]
 
     QtObject {
         id: logos
@@ -165,7 +167,7 @@ Window {
             })
         })
         revokeJobs.forEach(function (r) {
-            [800, 1400].forEach(function (w) { out.push({ state: r[0], width: w, page: r[1], former: !!r[2] }) })
+            [800, 1400].forEach(function (w) { out.push({ state: r[0], width: w, page: r[1], former: !!r[2], panels: r[3] }) })
         })
         anchorStates.forEach(function (a) {
             [800, 1400].forEach(function (w) { ["proof", "board", "history"].forEach(function (p) { out.push({ state: "resident", width: w, page: p, anchor: a }) }) })
@@ -173,7 +175,7 @@ Window {
         logJobs.forEach(function (r) {
             [800, 1400].forEach(function (w) { out.push({ state: r[0], width: w, page: r[1], log: true, search: r[2] || "" }) })
         })
-        ;[800, 1400].forEach(function (w) { out.push({ state: "admin", width: w, page: "places", rows: true }) })
+        ;[800, 1400].forEach(function (w) { out.push({ state: "admin", width: w, page: "places", rows: true, panels: confirmJobs }) })
         return out
     }
     property int job: -1
@@ -215,9 +217,9 @@ Window {
         id: shot; interval: 250
         onTriggered: {
             var j = win.jobs[win.job]
-            if (j.rows && !j.armed) {   // the rows exist now: open their confirm steps, then wait for the layout
+            if (j.panels && !j.armed) {   // the rows exist now: open their panels, then wait for the layout
                 j.armed = true
-                win.confirmJobs.forEach(function (c) { win.find(view.item, "placeRow-" + c[0]).panel = c[1] })
+                j.panels.forEach(function (c) { win.find(view.item, c[0]).panel = c[1] })
                 return shot.restart()
             }
             if (j.rows) {   // scrolled to the end of the page: the last row's confirm step
@@ -229,6 +231,7 @@ Window {
                 while (f.contentY === undefined) f = f.parent
                 f.contentY = Math.min(log.mapToItem(f.contentItem, 0, 0).y - 16, f.contentHeight - f.height)
             }
+            focusSink.forceActiveFocus()   // again: an opened panel puts the cursor in its field
             view.grabToImage(function (r) {
                 r.saveToFile(win.args[1] + "/" + j.state + "-" + j.page + (j.anchor ? "-anchor-" + j.anchor : "") + (j.former ? "-former" : "") + (j.log ? "-log" : "") + (j.rows ? "-rows" : "") + (j.search ? "-search" : "") + "-" + j.width + ".png")
                 win.next()

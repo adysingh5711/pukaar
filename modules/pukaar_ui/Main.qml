@@ -1639,6 +1639,51 @@ Item {
         }
     }
 
+    // A row's inline confirm step: the question, any `extra` choices, the reason the core requires
+    // (every member can read it), what happens, then the confirm button and Cancel.
+    component ReasonPanel: ColumnLayout {
+        id: rp
+        property string title
+        property string effect
+        property string okText
+        property string kind: "danger"
+        property string reasonName           // what a screen reader says for the reason field
+        property bool withReason: true
+        property bool ready: true            // the `extra` choices are complete
+        property alias reason: reasonField.text
+        default property alias extra: extras.data
+        signal confirmed()
+        signal cancelled()
+        // The owner calls this when the step opens or changes: a fresh reason, and the cursor in it.
+        function reset() { reasonField.text = ""; Qt.callLater(function () { if (rp.visible && rp.withReason) reasonField.forceActiveFocus() }) }
+        Layout.fillWidth: true; Layout.maximumWidth: 560; Layout.rightMargin: 16; Layout.bottomMargin: 12
+        spacing: 6
+        Label { Layout.fillWidth: true; wrapMode: Text.Wrap; font.weight: Font.DemiBold; textFormat: Text.PlainText; text: rp.title }
+        ColumnLayout { id: extras; visible: children.length > 0; Layout.fillWidth: true; spacing: 6 }
+        FormRow {
+            visible: rp.withReason
+            label: "Reason (required)"; compact: true
+            FramedField {
+                id: reasonField
+                Layout.fillWidth: true; maximumLength: 500
+                placeholderText: "Everyone on the site can read this."
+                Accessible.name: rp.reasonName
+                onAccepted: ok.submit()
+            }
+        }
+        Help { text: rp.effect }
+        RowLayout {
+            spacing: 8
+            ActionButton {
+                id: ok
+                text: rp.okText; kind: rp.kind
+                allowed: rp.ready && (!rp.withReason || reasonField.text.trim() !== "")
+                onClicked: rp.confirmed()
+            }
+            FramedButton { text: "Cancel"; onClicked: rp.cancelled() }
+        }
+    }
+
     // A text field with its submit button glued on: the "paste id / type name, then act" row.
     // `label` sits above it. `large` is the 40 px first-run size, `mono` a monospace field.
     component LabelledField: FormRow {
@@ -2600,16 +2645,20 @@ Item {
                             model: root.members
                             delegate: ColumnLayout {
                                 id: memberRow
+                                objectName: "memberRow-" + modelData.fingerprint
                                 required property var modelData
                                 required property int index
                                 readonly property bool own: modelData.key === root.me.key
                                 readonly property bool elevated: modelData.role === "Admin" || modelData.role === "Steward"
+                                readonly property string person: root.who(modelData.key, modelData.name)
+                                property string panel                // "" or the open confirm step: "revoke"
+                                onPanelChanged: memberStep.reset()
                                 Layout.fillWidth: true
                                 spacing: 0
                                 Rectangle { visible: memberRow.index > 0; Layout.fillWidth: true; implicitHeight: 1; color: root.t.bd }
                                 GridLayout {
                                     Layout.fillWidth: true; Layout.margins: 10; Layout.leftMargin: 16; Layout.rightMargin: 16
-                                    columns: root.compactRows ? 3 : 5; columnSpacing: 12; rowSpacing: 8
+                                    columns: root.compactRows ? 3 : 4; columnSpacing: 12; rowSpacing: 8
                                     Fingerprint { Layout.preferredWidth: 92; text: memberRow.modelData.fingerprint }
                                     Item {   // the role chip has its own column; a narrow row puts it after the name
                                         visible: !root.compactRows
@@ -2617,7 +2666,7 @@ Item {
                                         StatusChip { id: roleChip; label: memberRow.modelData.role; stage: memberRow.elevated ? root.t.progress : root.t.closed }
                                     }
                                     ColumnLayout {
-                                        Layout.fillWidth: true; Layout.columnSpan: root.compactRows ? 2 : 1
+                                        Layout.fillWidth: true
                                         spacing: 0
                                         Flow {
                                             id: nameFlow
@@ -2625,37 +2674,29 @@ Item {
                                             Label {
                                                 width: Math.min(implicitWidth, nameFlow.width)
                                                 wrapMode: Text.Wrap; textFormat: Text.PlainText; font.weight: Font.DemiBold
-                                                text: root.who(memberRow.modelData.key, memberRow.modelData.name)
+                                                text: memberRow.person
                                             }
                                             StatusChip { visible: root.compactRows; label: memberRow.modelData.role; stage: memberRow.elevated ? root.t.progress : root.t.closed }
                                         }
                                         Label { visible: memberRow.own; text: "you"; color: root.t.muted; font.pointSize: root.smallSize }
                                     }
-                                    ColumnLayout {
-                                        visible: root.isAdmin
-                                        Layout.preferredWidth: 260; Layout.fillWidth: root.compactRows; Layout.columnSpan: root.compactRows ? 2 : 1
-                                        spacing: 4
-                                        FramedField {
-                                            id: revokeReason
-                                            Layout.fillWidth: true
-                                            maximumLength: 500
-                                            enabled: !memberRow.own
-                                            placeholderText: memberRow.own ? "you can't revoke yourself" : "reason, e.g. left the camp"
-                                            Accessible.name: "Reason for revoking " + memberRow.modelData.fingerprint
-                                            Accessible.description: revokeNote.text
-                                            onAccepted: revoke.submit()
-                                        }
-                                        Help { id: revokeNote; visible: !memberRow.own; text: "Everyone in the site can see this reason." }
+                                    ActionButton {
+                                        visible: root.isAdmin; shown: !memberRow.own
+                                        Layout.alignment: Qt.AlignTop
+                                        text: "Revoke"; kind: "danger"; Accessible.name: "Revoke " + memberRow.person
+                                        onClicked: memberRow.panel = "revoke"
                                     }
-                                    ConfirmButton {
-                                        id: revoke
-                                        visible: root.isAdmin
-                                        Layout.alignment: Qt.AlignTop; Layout.fillHeight: false   // the field's height, not the note's
-                                        text: "Revoke"; kind: "danger"; confirmText: "Confirm revoke"
-                                        effect: "They lose the " + memberRow.modelData.role + " role now."
-                                        allowed: !memberRow.own && revokeReason.text.trim().length > 0
-                                        onConfirmed: root.run("revoke_role", [memberRow.modelData.key, revokeReason.text])
-                                    }
+                                }
+                                ReasonPanel {
+                                    id: memberStep
+                                    visible: memberRow.panel === "revoke" && root.isAdmin
+                                    Layout.leftMargin: 16 + 92 + 12
+                                    title: "Revoke " + memberRow.person + "?"
+                                    reasonName: "Reason for revoking " + memberRow.person
+                                    effect: "They lose the " + memberRow.modelData.role + " role now. Everyone on the site can see the reason."
+                                    okText: "Confirm revoke"
+                                    onConfirmed: root.run("revoke_role", [memberRow.modelData.key, reason], function () { memberRow.panel = "" })
+                                    onCancelled: memberRow.panel = ""
                                 }
                             }
                         }
@@ -2822,7 +2863,7 @@ Item {
                                         restore_location: { title: "Restore", ok: "Confirm restore", kind: "primary", effect: " takes reports again." },
                                         remove_location: { title: "Remove", ok: "Confirm remove", kind: "danger", effect: " is hidden after 30 days. You can undo until then." },
                                         undo_remove_location: { title: "Undo the removal of", ok: "Confirm undo", kind: "primary", effect: " stays in the lists." } })[panel]
-                                    onPanelChanged: { reason.text = ""; if (ask) Qt.callLater(reason.forceActiveFocus) }
+                                    onPanelChanged: confirmStep.reset()
                                     width: ListView.view.width
                                     height: stack.implicitHeight + 1
                                     color: panel !== "" ? root.t.accentBg : st === "active" ? root.t.card : root.t.well
@@ -2910,34 +2951,16 @@ Item {
                                                 }
                                             }
                                         }
-                                        ColumnLayout {   // the confirm step: under the name, with the reason the core needs
+                                        ReasonPanel {   // the confirm step: under the name, with the reason the core needs
+                                            id: confirmStep
                                             visible: !!locRow.ask && root.isAdmin
-                                            Layout.fillWidth: true; Layout.maximumWidth: 560
-                                            Layout.leftMargin: 16 + root.placeTable.w[0] + 12; Layout.rightMargin: 16; Layout.bottomMargin: 12
-                                            spacing: 6
-                                            Label { Layout.fillWidth: true; wrapMode: Text.Wrap; font.weight: Font.DemiBold; textFormat: Text.PlainText
-                                                    text: locRow.ask ? locRow.ask.title + " " + locRow.modelData.code + ", " + locRow.modelData.label + "?" : "" }
-                                            FormRow {
-                                                label: "Reason (required)"; compact: true
-                                                FramedField {
-                                                    id: reason
-                                                    Layout.fillWidth: true; maximumLength: 500
-                                                    placeholderText: "Everyone on the site can read this."
-                                                    Accessible.name: "Reason for changing " + locRow.modelData.code
-                                                    onAccepted: confirm.submit()
-                                                }
-                                            }
-                                            Help { text: locRow.ask ? locRow.modelData.label + locRow.ask.effect : "" }
-                                            RowLayout {
-                                                spacing: 8
-                                                ActionButton {
-                                                    id: confirm
-                                                    text: locRow.ask ? locRow.ask.ok : ""; kind: locRow.ask ? locRow.ask.kind : "default"
-                                                    allowed: reason.text.trim() !== ""
-                                                    onClicked: root.run(locRow.panel, [locRow.modelData.code, reason.text], function () { locRow.panel = "" })
-                                                }
-                                                FramedButton { text: "Cancel"; onClicked: locRow.panel = "" }
-                                            }
+                                            Layout.leftMargin: 16 + root.placeTable.w[0] + 12
+                                            title: locRow.ask ? locRow.ask.title + " " + locRow.modelData.code + ", " + locRow.modelData.label + "?" : ""
+                                            reasonName: "Reason for changing " + locRow.modelData.code
+                                            effect: locRow.ask ? locRow.modelData.label + locRow.ask.effect : ""
+                                            okText: locRow.ask ? locRow.ask.ok : ""; kind: locRow.ask ? locRow.ask.kind : "default"
+                                            onConfirmed: root.run(locRow.panel, [locRow.modelData.code, reason], function () { locRow.panel = "" })
+                                            onCancelled: locRow.panel = ""
                                         }
                                         RowLayout {   // the code is the place's identity: only name and group change
                                             visible: locRow.panel === "edit" && root.isAdmin
