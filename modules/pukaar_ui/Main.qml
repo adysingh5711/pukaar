@@ -1212,6 +1212,7 @@ Item {
         property string buttonText
         property string buttonIcon
         property string buttonName: buttonText     // what a screen reader says for the button
+        property string buttonEffect               // set: the button asks first (ConfirmButton)
         signal activated()
         Layout.fillWidth: true
         implicitHeight: row.implicitHeight + 22
@@ -1228,12 +1229,12 @@ Item {
                 font.bold: flash.bold; color: flash.err && flash.bold ? root.t.danger : root.t.fg
                 text: (flash.lead ? "<b><font color='" + root.t.danger + "'>" + root.esc(flash.lead) + "</font></b> " : "") + root.esc(flash.text)
             }
-            ActionButton {
+            ConfirmButton {
                 visible: flash.buttonText !== "" || flash.buttonIcon !== ""
                 Layout.alignment: Qt.AlignTop
                 text: flash.buttonText; iconName: flash.buttonIcon
-                Accessible.name: flash.buttonName
-                onClicked: flash.activated()
+                name: flash.buttonName; effect: flash.buttonEffect
+                onConfirmed: flash.activated()
             }
         }
     }
@@ -1391,6 +1392,34 @@ Item {
         function submit() { if (enabled) clicked() }
     }
 
+    // An ActionButton that asks first: with an `effect` (one short line), a click swaps it for that
+    // line over the confirm button and Cancel. With no `effect` it fires at once (Flash, LabelledField).
+    component ConfirmButton: ColumnLayout {
+        id: cb
+        property alias text: first.text
+        property alias kind: first.kind
+        property alias iconName: first.iconName
+        property alias allowed: first.allowed
+        property string name: text           // what a screen reader says for the first button
+        property string confirmText: "Confirm"
+        property string effect
+        property bool armed: false
+        signal confirmed()
+        function submit() { first.submit() }
+        spacing: 6
+        Help { visible: cb.armed; text: cb.effect }
+        RowLayout {
+            Layout.fillHeight: true
+            spacing: 8
+            ActionButton {
+                id: first; visible: !cb.armed; Layout.fillHeight: true; Accessible.name: cb.name
+                onClicked: { if (!cb.effect) return cb.confirmed(); cb.armed = true; yes.forceActiveFocus() }   // keyboard focus follows to Confirm
+            }
+            ActionButton { id: yes; visible: cb.armed; Layout.fillHeight: true; allowed: cb.allowed; text: cb.confirmText; kind: "danger"; onClicked: { cb.armed = false; cb.confirmed() } }
+            FramedButton { visible: cb.armed; Layout.fillHeight: true; text: "Cancel"; onClicked: cb.armed = false }
+        }
+    }
+
     // A text field with its submit button glued on: the "paste id / type name, then act" row.
     // `label` sits above it. `large` is the 40 px first-run size, `mono` a monospace field.
     component LabelledField: FormRow {
@@ -1404,7 +1433,9 @@ Item {
         property bool mono: false
         property string buttonText: "Go"
         property string buttonKind: "default"
-        property bool buttonEnabled: true
+        property string buttonEffect                // set: the button asks first (ConfirmButton)
+        property string missing                     // what still blocks the button, in words ("" = ready)
+        property bool buttonEnabled: missing === ""
         signal submitted()
         RowLayout {
             Layout.fillWidth: true
@@ -1418,13 +1449,14 @@ Item {
                 Accessible.name: lf.name
                 onAccepted: go.submit()
             }
-            ActionButton {
+            ConfirmButton {
                 id: go
                 Layout.preferredHeight: lf.large ? 40 : -1
-                text: lf.buttonText; kind: lf.buttonKind; allowed: lf.buttonEnabled
-                onClicked: lf.submitted()
+                text: lf.buttonText; kind: lf.buttonKind; allowed: lf.buttonEnabled; effect: lf.buttonEffect
+                onConfirmed: lf.submitted()
             }
         }
+        Help { visible: lf.missing !== ""; text: lf.missing }
     }
 
     // Group title inside a list (a place group, a History month). The list's `pad` is the row inset.
@@ -1721,6 +1753,7 @@ Item {
                         }
                         ColumnLayout {
                             Layout.fillWidth: true; Layout.preferredWidth: 0; Layout.minimumWidth: 0   // the rail sets the width: a long fingerprint or role must wrap, not widen the column
+                            Layout.maximumWidth: Infinity   // not the children's: they cap at this column's width, which would pin it at 0 in the rail
                             spacing: 2
                             readonly property int align: sidebar.open ? Qt.AlignLeft : Qt.AlignHCenter
                             Label { visible: sidebar.open; text: "you:"; color: root.t.sbMuted; font.pointSize: root.smallSize }
@@ -1784,6 +1817,7 @@ Item {
 
         Flash {   // the last refused action; stays until dismissed or the next action replaces it
             visible: root.message !== ""
+            Accessible.role: Accessible.AlertMessage
             err: true; bold: true
             text: root.message.replace(/^error: /, "")   // the red warning icon already says so
             buttonIcon: "x"; buttonName: "Dismiss this error"
@@ -1816,6 +1850,7 @@ Item {
             err: true; icon: "update"
             text: "Restoring your earlier reports from the network. Actions are paused until they arrive, so your new ones can't conflict with them."
             buttonText: "Skip waiting (history lost)"
+            buttonEffect: "Your earlier reports may then be lost for good."
             onActivated: root.run("skip_history_sync", [])
         }
 
@@ -2055,7 +2090,8 @@ Item {
                     placeholder: "the password you set when exporting"
                     echoMode: TextInput.Password
                     buttonText: "Import identity"; buttonKind: "primary"
-                    buttonEnabled: importBlob.text.trim() !== "" && importPassword.text !== ""
+                    buttonEffect: "It replaces any key on this device."
+                    missing: importBlob.text.trim() === "" ? "Paste the backup first." : importPassword.text === "" ? "Type its password." : ""
                     onSubmitted: {
                         root.run("import_identity", [importBlob.text, importPassword.text],
                                  function () { importBlob.text = ""; importPassword.text = "" })
@@ -2422,15 +2458,16 @@ Item {
                                         Layout.preferredWidth: 210; Layout.fillWidth: root.compactRows; Layout.columnSpan: root.compactRows ? 2 : 1
                                         maximumLength: 500
                                         enabled: !memberRow.own
-                                        placeholderText: memberRow.own ? "you can't revoke yourself" : "e.g. left the camp"
+                                        placeholderText: memberRow.own ? "you can't revoke yourself" : "reason, e.g. left the camp"
                                         Accessible.name: "Reason for revoking " + memberRow.modelData.fingerprint
                                         onAccepted: revoke.submit()
                                     }
-                                    ActionButton {
+                                    ConfirmButton {
                                         id: revoke
-                                        text: "Revoke"; kind: "danger"
+                                        text: "Revoke"; kind: "danger"; confirmText: "Confirm revoke"
+                                        effect: "They lose the " + memberRow.modelData.role + " role now."
                                         allowed: !memberRow.own && revokeReason.text.trim().length > 0
-                                        onClicked: root.run("revoke_role", [memberRow.modelData.key, revokeReason.text])
+                                        onConfirmed: root.run("revoke_role", [memberRow.modelData.key, revokeReason.text])
                                     }
                                 }
                             }
@@ -2503,13 +2540,18 @@ Item {
                                     FramedField { id: locLabel; Layout.fillWidth: true; maximumLength: 500; Accessible.name: "Name"; placeholderText: "e.g. Tap behind tent 4"; onAccepted: addLoc.submit() }
                                 }
                             }
-                            ActionButton {
-                                id: addLoc
-                                text: "Add place"; kind: "primary"
-                                readonly property string group: locGroup.currentIndex === root.groupNames.length ? locNewGroup.text.trim() : locGroup.currentText
-                                allowed: locCode.text.trim() !== "" && locLabel.text.trim() !== "" && group !== ""
-                                onClicked: root.run("add_location", [locCode.text, locLabel.text, group],
-                                                    function () { locCode.text = ""; locLabel.text = ""; locNewGroup.text = "" })
+                            RowLayout {
+                                spacing: 12
+                                ActionButton {
+                                    id: addLoc
+                                    text: "Add place"; kind: "primary"
+                                    readonly property string group: locGroup.currentIndex === root.groupNames.length ? locNewGroup.text.trim() : locGroup.currentText
+                                    readonly property string missing: group === "" ? "Name the new group." : locCode.text.trim() === "" ? "Type a code." : locLabel.text.trim() === "" ? "Type a name." : ""
+                                    allowed: missing === ""
+                                    onClicked: root.run("add_location", [locCode.text, locLabel.text, group],
+                                                        function () { locCode.text = ""; locLabel.text = ""; locNewGroup.text = "" })
+                                }
+                                Help { visible: addLoc.missing !== ""; text: addLoc.missing }
                             }
                         }
                         PlaceBrowser {
@@ -2551,7 +2593,7 @@ Item {
                                                 Layout.preferredWidth: 180; Layout.fillWidth: root.compactRows
                                                 maximumLength: 500
                                                 enabled: !locRow.blocked
-                                                placeholderText: locRow.blocked ? "close its issues first" : "e.g. duplicate"
+                                                placeholderText: locRow.blocked ? "close its issues first" : "reason, e.g. duplicate"
                                                 Accessible.name: "Reason for changing " + locRow.modelData.code
                                             }
                                             ActionButton {   // slot 1: Retire / Restore
@@ -2680,7 +2722,7 @@ Item {
                             placeholder: "e.g. 0x9f2c…e1 or pda:<account id>"
                             mono: true
                             buttonText: "Record"
-                            buttonEnabled: !!root.checkpoint && anchorField.text.trim() !== ""
+                            missing: !root.checkpoint ? "Compute the checkpoint first (step 1)." : anchorField.text.trim() === "" ? "Paste the reference first." : ""
                             onSubmitted: {
                                 root.run("record_anchor", [JSON.stringify(root.checkpoint.heads), anchorField.text],
                                          function () { anchorField.text = ""; root.checkpoint = null })
@@ -2692,7 +2734,9 @@ Item {
                 // Profile (the you block opens it): me on this device. Name, backup, invite, leave.
                 TabPage {
                     id: profilePage
-                    property bool leaving: false    // "Leave this site…" was pressed: Confirm and Cancel show
+                    readonly property string myName: root.me.name || ""   // a string: changes only when the name does, not on every refresh
+                    readonly property var myReports: root.issues.filter(function (i) { return i.reporter === root.me.key })
+                    readonly property int mineOpen: myReports.filter(function (i) { return !root.isTerminal(i.status) }).length
                     PageHead { title: "You"; lede: root.esc(root.me.name || "pseudonym") + " · " + (root.me.role || "Pending") }
                     FormRow {
                         label: "Your code"; sub: root.approved ? "" : "(read it aloud at the kiosk)"
@@ -2705,6 +2749,7 @@ Item {
                         id: nameField
                         visible: !root.staff
                         label: "Display name"
+                        text: profilePage.myName
                         placeholder: "e.g. Asha (or leave empty to stay pseudonymous)"
                         buttonText: "Set name"
                         onSubmitted: root.run("set_profile", [nameField.text])
@@ -2730,7 +2775,8 @@ Item {
                         placeholder: "type the same password again"
                         echoMode: TextInput.Password
                         buttonText: "Export identity"; buttonKind: "primary"
-                        buttonEnabled: exportPassword.text.length >= 8 && exportConfirm.text === exportPassword.text
+                        missing: exportPassword.text.length < 8 ? "The password needs at least 8 characters."
+                               : exportConfirm.text !== exportPassword.text ? "Repeat the same password." : ""
                         onSubmitted: {
                             root.run("export_identity", [exportPassword.text],
                                      function (r) { exportOut.text = r; exportPassword.text = ""; exportConfirm.text = "" })
@@ -2754,16 +2800,19 @@ Item {
                         Label { text: "Site id  " + root.shortId(root.me.site || ""); font.family: "monospace" }
                         FramedButton { text: "Copy"; iconName: "copy"; Accessible.name: "Copy the full site id"; onClicked: root.copyText(root.me.site) }
                     }
-                    Heading { text: "Leave this site" }
-                    Help {
-                        text: profilePage.leaving ? "Leave " + (root.info.name || "this site") + " on this device? Its copy of the site is removed and you go back to the start screen. Your key stays, so you can join again as the same person."
-                                                  : "Removes this device's copy of the site. Your key stays."
-                    }
+                    Heading { visible: root.approved; text: "My reports" }
                     RowLayout {
-                        spacing: 8
-                        ActionButton { visible: !profilePage.leaving; text: "Leave this site…"; kind: "danger"; onClicked: profilePage.leaving = true }
-                        ActionButton { visible: profilePage.leaving; text: "Confirm leave"; kind: "danger"; onClicked: { profilePage.leaving = false; root.leave() } }
-                        FramedButton { visible: profilePage.leaving; text: "Cancel"; onClicked: profilePage.leaving = false }
+                        visible: root.approved
+                        spacing: 12
+                        Label { text: profilePage.mineOpen + " open · " + (profilePage.myReports.length - profilePage.mineOpen) + " closed" }
+                        LinkButton { text: "Show on the Board  ›"; onClicked: { root.onlyMine = true; root.openPage("board") } }
+                    }
+                    Heading { text: "Leave this site" }
+                    Help { text: "Removes this device's copy of the site. Your key stays." }
+                    ConfirmButton {
+                        text: "Leave this site…"; kind: "danger"; confirmText: "Confirm leave"
+                        effect: "You go back to the start screen."
+                        onConfirmed: root.leave()
                     }
                 }
 
@@ -2971,6 +3020,8 @@ Item {
                 readonly property bool finished: root.isTerminal(st)   // resolved or closed: Still broken? Reopen
                 Keys.onEscapePressed: root.closeIssue()
                 property bool hasNote: note.text.trim() !== ""   // the core rejects these without one
+                readonly property string issueId: issue.id || ""
+                onIssueIdChanged: { wontFix.armed = false; markDup.armed = false }   // a confirm never carries over to another issue
                 readonly property int etaHours: parseInt(eta.text) || 0
                 function act(a, eta) {
                     root.run("act", [issue.id, a, note.text, nextStep.text, eta | 0],
@@ -3158,7 +3209,12 @@ Item {
                                 text: "Claim fixed (say what was done)"; onClicked: detail.act("claim_resolved", 0)
                             }
                             FramedButton { id: more; checkable: true; text: "More"; iconName: checked ? "chevd" : "chev" }   // close without a fix
-                            ActionButton { visible: more.checked; allowed: detail.hasNote; kind: "danger"; text: "Won't fix (reason)"; onClicked: detail.act("close_wontfix", 0) }
+                            ConfirmButton {
+                                id: wontFix
+                                visible: more.checked; allowed: detail.hasNote; kind: "danger"; text: "Won't fix (reason)"; confirmText: "Confirm won't fix"
+                                effect: "Closes it without a fix."
+                                onConfirmed: detail.act("close_wontfix", 0)
+                            }
                             RowLayout {   // close this one as a duplicate of another open issue
                                 visible: more.checked
                                 width: parent.width
@@ -3180,11 +3236,13 @@ Item {
                                     model: root.duplicateTargets(detail.issue.id)
                                     onActivated: function (index) { target = valueAt(index); targetLabel = textAt(index) }
                                 }
-                                ActionButton {
-                                    text: "Mark duplicate"
+                                ConfirmButton {
+                                    id: markDup
+                                    text: "Mark duplicate"; confirmText: "Confirm duplicate"
+                                    effect: "Closes it in favour of the other."
                                     allowed: dupOf.target !== ""
-                                    onClicked: root.run("act", [detail.issue.id, "mark_duplicate", dupOf.target, "", 0],
-                                                        function () { dupOf.target = "" })
+                                    onConfirmed: root.run("act", [detail.issue.id, "mark_duplicate", dupOf.target, "", 0],
+                                                          function () { dupOf.target = "" })
                                 }
                             }
                         }
