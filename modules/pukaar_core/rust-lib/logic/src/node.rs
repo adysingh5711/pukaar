@@ -6,7 +6,7 @@ use crate::event::{
     decode, sign, Body, DecodeError, Event, Id, Key, Location, Unsigned, MAX_EVENT_BYTES, MAX_TEXT,
     OTHER_LOCATION, VERSION, ZERO,
 };
-use crate::reducer::{reduce, require, Issue, State, Status};
+use crate::reducer::{reduce, require, Issue, Revocation, State, Status};
 use crate::store::{Accept, Store};
 use ed25519_dalek::SigningKey;
 use serde_json::{json, Value};
@@ -199,6 +199,7 @@ impl Node {
             "fingerprint": fingerprint(&me),
             "role": s.roles.get(&me).map(|r| format!("{r:?}")),
             "name": s.names.get(&me),
+            "revoked": s.revoked.get(&me).map(|r| revocation_json(&s, r)),
             "site": hex::encode(self.store.site),
             "syncing_own_history": self.restore.is_some(),
         })
@@ -216,6 +217,8 @@ impl Node {
                     .get(&l.code)
                     .is_some_and(|r| r.is_done(now))
             });
+        let mut revoked: Vec<_> = s.revoked.iter().collect();
+        revoked.sort_by_key(|(_, r)| std::cmp::Reverse(r.ts));
         let member = |k: &Key| json!({ "key": hex::encode(k), "fingerprint": fingerprint(k), "name": s.names.get(k) });
         json!({
             "site": hex::encode(self.store.site),
@@ -225,6 +228,7 @@ impl Node {
             "removed_locations": removed.into_iter().map(|l| removed_json(&s, l)).collect::<Vec<_>>(),
             "members": s.roles.iter().map(|(k, r)| { let mut m = member(k); m["role"] = json!(format!("{r:?}")); m }).collect::<Vec<_>>(),
             "pending": s.pending_members.iter().map(member).collect::<Vec<_>>(),
+            "revoked": revoked.into_iter().map(|(k, r)| { let mut m = member(k); merge(&mut m, revocation_json(&s, r)); m }).collect::<Vec<_>>(),
             "sla_ack_h": s.config.sla_ack_h,
             "sla_fix_h": s.config.sla_fix_h,
             "events": self.store.events.len(),
@@ -423,6 +427,7 @@ impl Node {
                     "kind": kind_name(&e.u.body),
                     "author": hex::encode(e.u.author),
                     "author_name": s.names.get(&e.u.author),
+                    "former": s.revoked.contains_key(&e.u.author),
                     "ts": e.u.ts,
                     "body": body_text(&e.u.body),
                     "rejected": s.rejected.get(&e.id),
@@ -601,6 +606,18 @@ fn location_json(s: &State, l: &Location, now: u64) -> Value {
     v
 }
 
+/// Who took a member's role away, when and why.
+fn revocation_json(s: &State, r: &Revocation) -> Value {
+    json!({ "by": hex::encode(r.by), "by_name": s.names.get(&r.by), "ts": r.ts, "reason": r.reason })
+}
+
+/// Copy `extra`'s fields into the object `v`.
+fn merge(v: &mut Value, extra: Value) {
+    if let (Value::Object(v), Value::Object(extra)) = (v, extra) {
+        v.extend(extra);
+    }
+}
+
 /// A change-log row for a location whose removal is over.
 fn removed_json(s: &State, l: &Location) -> Value {
     let r = &s.pending_removal[&l.code];
@@ -643,6 +660,7 @@ fn issue_json(s: &State, i: &Issue, now: u64) -> Value {
         "progress": progress,
         "reporter": hex::encode(i.reporter),
         "reporter_name": s.names.get(&i.reporter),
+        "former": s.revoked.contains_key(&i.reporter),
         "claimant": i.claimant.map(hex::encode),
         "confirms": i.confirms.len(),
         "reopen_count": i.reopen_count,

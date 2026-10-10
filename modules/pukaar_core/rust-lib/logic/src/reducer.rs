@@ -99,6 +99,8 @@ pub struct State {
     pub roles: BTreeMap<Key, Role>,
     pub names: BTreeMap<Key, String>,
     pub pending_members: BTreeSet<Key>,
+    /// key -> its latest revoke, while it has no role again since (a grant clears it).
+    pub revoked: BTreeMap<Key, Revocation>,
     pub issues: BTreeMap<Id, Issue>,
     pub rejected: BTreeMap<Id, String>,
     pub checkpoints: Vec<CheckpointRecord>,
@@ -109,6 +111,14 @@ pub struct State {
 // replica agrees; a skewed admin clock can shift the window. Anchor-backed time if that matters.
 pub const REMOVAL_COOLDOWN: u64 = 30 * 24 * 3600;
 const DAY: u64 = 24 * 3600;
+
+/// A member's role taken away: by which admin, when (event ts) and why.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Revocation {
+    pub by: Key,
+    pub ts: u64,
+    pub reason: String,
+}
 
 /// A location on its way out: who started it, when (event ts) and why.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -425,12 +435,21 @@ fn apply(s: &mut State, e: &Event) -> Result<(), String> {
             }
             s.roles.insert(*subject, *role);
             s.pending_members.remove(subject);
+            s.revoked.remove(subject);
             Ok(())
         }
-        RoleRevoke { subject, .. } => {
+        RoleRevoke { subject, reason } => {
             require(admin, "only admin revokes roles")?;
             require(Some(*subject) != s.admin, "admin cannot be revoked")?;
             s.roles.remove(subject);
+            s.revoked.insert(
+                *subject,
+                Revocation {
+                    by: a,
+                    ts: e.u.ts,
+                    reason: reason.clone(),
+                },
+            );
             Ok(())
         }
         b @ (LocationsAdd { .. }

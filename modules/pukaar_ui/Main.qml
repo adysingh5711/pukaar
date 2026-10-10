@@ -492,8 +492,8 @@ Item {
     }
     function openIssuesText(n) { return plural(n, "open issue") }
 
-    // ---- icons: the mockup's 20x20 stroke set (1.6 stroke, round caps), as SVG path data.
-    // `icons` is stroked, `iconFills` adds a filled part, `iconDashes` a dashed one. ----
+    // ---- icons: Lucide (lucide.dev, ISC licence, see THIRD_PARTY_LICENSES), 24x24 stroke set (2 stroke, round caps),
+    // as SVG path data. `icons` is stroked, `iconFills` adds a filled part. `prog` is our own: a half-filled circle. ----
     function circ(cx, cy, r) { return "M" + (cx - r) + " " + cy + "a" + r + " " + r + " 0 1 0 " + 2 * r + " 0a" + r + " " + r + " 0 1 0 " + -2 * r + " 0" }
     function box(x, y, w, h, r) {
         const a = "a" + r + " " + r + " 0 0 1 "
@@ -501,38 +501,44 @@ Item {
              + "h" + (2 * r - w) + a + -r + " " + -r + "v" + (2 * r - h) + a + r + " " + -r + "z"
     }
     readonly property var icons: ({
-        board: box(2, 3, 4.5, 14, 1) + box(7.75, 3, 4.5, 10, 1) + box(13.5, 3, 4.5, 7, 1),
-        report: "M3 8.5v3h2.5l6 4v-11l-6 4z" + "M14.5 7.5a3.5 3.5 0 0 1 0 5",
-        members: circ(7.5, 7, 3) + "M2 17c.6-3 2.8-4.5 5.5-4.5S12.4 14 13 17" + circ(14, 6.5, 2.3) + "M14.5 11c1.9.3 3 1.7 3.5 4",
-        anchor: circ(10, 4.5, 2) + "M10 6.5V17M6.5 9.5h7M3.5 11.5a6.5 6.5 0 0 0 13 0",
-        signal: "M10 11.5v6" + circ(10, 10, 1.5) + "M6.5 6.5a5 5 0 0 0 0 7M13.5 6.5a5 5 0 0 1 0 7M4 4a8.5 8.5 0 0 0 0 12M16 4a8.5 8.5 0 0 1 0 12",
-        user: circ(10, 6.5, 3.2) + "M3.5 17.5c.7-3.5 3.3-5.3 6.5-5.3s5.8 1.8 6.5 5.3",
-        copy: box(7, 7, 10, 10, 1.5) + "M13 7V4.5A1.5 1.5 0 0 0 11.5 3h-7A1.5 1.5 0 0 0 3 4.5v7A1.5 1.5 0 0 0 4.5 13H7",
-        dup: box(3, 3, 10, 10, 1.5) + box(7, 7, 10, 10, 1.5),
-        chev: "M7.5 4.5l5.5 5.5-5.5 5.5", chevl: "M12.5 4.5L7 10l5.5 5.5", chevd: "M5 8l5 5 5-5",
-        back: "M16 10H4.5M9 5l-5 5 5 5", x: "M5 5l10 10M15 5L5 15", plus: "M10 4v12M4 10h12", tick: "M5 10.5l3.2 3.2L15 6.5",
-        warn: "M10 2.5l8 14H2z" + "M10 8v4M10 14.2v.1",
-        info: circ(10, 10, 7.5) + "M10 9v5M10 6.2v.1",
-        bell: "M5 14V9a5 5 0 0 1 10 0v5l1.5 1.5h-13z" + "M8.5 17.5a1.6 1.6 0 0 0 3 0",
-        rep: circ(10, 10, 7.5), prog: circ(10, 10, 7.5), await: "M10 6v4.5l3 1.8",
-        res: circ(10, 10, 7.5) + "M6.5 10.3l2.4 2.4 4.6-5",
-        clo: circ(10, 10, 7.5) + "M5.2 14.8l9.6-9.6",
-        reject: circ(10, 10, 7.5) + "M7 7l6 6M13 7l-6 6",
-        radio: circ(10, 10, 7), radioOn: circ(10, 10, 7),
-        cmt: "M3 4h14v9.5H9.5L5.5 17v-3.5H3z",
-        reopen: "M4 10a6 6 0 1 0 2-4.5" + "M4 3v4h4",
-        flag: "M5 18V3M5 3.5h10l-2.5 3.5L15 10.5H5",
-        pin: "M10 18s-5.5-5.2-5.5-9.5a5.5 5.5 0 0 1 11 0C15.5 12.8 10 18 10 18z" + circ(10, 8.5, 2),
-        eye: "M1.5 10S4.5 4.5 10 4.5 18.5 10 18.5 10 15.5 15.5 10 15.5 1.5 10 1.5 10z" + circ(10, 10, 2.5),
-        update: "M16 4v4h-4" + "M15.5 8A6 6 0 1 0 16 12",
-        search: circ(8.5, 8.5, 5) + "M12.5 12.5L17 17",
-        shield: "M10 2.5l6.5 2.5v5c0 4-3 6.5-6.5 7.5C6.5 16.5 3.5 14 3.5 10V5z",
-        mega: "M3 8v4h2l7 4V4L5 8z" + "M15 7.5v5",
-        hist: "M3.5 10a6.5 6.5 0 1 0 1.9-4.6" + "M3.5 3.5v3h3" + "M10 6.5V10l2.5 1.5",
-        pin: "M10 18s-5.5-5.2-5.5-9.5a5.5 5.5 0 0 1 11 0C15.5 12.8 10 18 10 18z" + circ(10, 8.5, 2)
+        board: "M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2zM8 7v7M12 7v4M16 7v9",
+        report: "M11 6a13 13 0 0 0 8.4-2.8A1 1 0 0 1 21 4v12a1 1 0 0 1-1.6.8A13 13 0 0 0 11 14H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2zM6 14a12 12 0 0 0 2.4 7.2 2 2 0 0 0 3.2-2.4A8 8 0 0 1 10 14M8 6v8",
+        mega: "M11 6a13 13 0 0 0 8.4-2.8A1 1 0 0 1 21 4v12a1 1 0 0 1-1.6.8A13 13 0 0 0 11 14H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2zM6 14a12 12 0 0 0 2.4 7.2 2 2 0 0 0 3.2-2.4A8 8 0 0 1 10 14M8 6v8",
+        members: "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M16 3.128a4 4 0 0 1 0 7.744M22 21v-2a4 4 0 0 0-3-3.87M5 7a4 4 0 1 0 8 0a4 4 0 1 0 -8 0",
+        anchor: "M12 6v16M19 13l2-1a9 9 0 0 1-18 0l2 1M9 11h6M10 4a2 2 0 1 0 4 0a2 2 0 1 0 -4 0",
+        signal: "M4.9 16.1C1 12.2 1 5.8 4.9 1.9M7.8 4.7a6.14 6.14 0 0 0-.8 7.5M10 9a2 2 0 1 0 4 0a2 2 0 1 0 -4 0M16.2 4.8c2 2 2.26 5.11.8 7.47M19.1 1.9a9.96 9.96 0 0 1 0 14.1M9.5 18h5M8 22l4-11 4 11",
+        user: "M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2M8 7a4 4 0 1 0 8 0a4 4 0 1 0 -8 0",
+        copy: "M10 8h10a2 2 0 0 1 2 2v10a2 2 0 0 1 -2 2h-10a2 2 0 0 1 -2 -2v-10a2 2 0 0 1 2 -2zM4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2",
+        dup: "M15 12L15 18M12 15L18 15M10 8h10a2 2 0 0 1 2 2v10a2 2 0 0 1 -2 2h-10a2 2 0 0 1 -2 -2v-10a2 2 0 0 1 2 -2zM4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2",
+        chev: "M9 18l6-6-6-6",
+        chevl: "M15 18l-6-6 6-6",
+        chevd: "M6 9l6 6 6-6",
+        back: "M12 19l-7-7 7-7M19 12H5",
+        x: "M18 6 6 18M6 6l12 12",
+        plus: "M5 12h14M12 5v14",
+        tick: "M20 6 9 17l-5-5",
+        warn: "M21.73 18l-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3M12 9v4M12 17h.01",
+        info: "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0M12 16v-4M12 8h.01",
+        bell: "M10.268 21a2 2 0 0 0 3.464 0M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326",
+        rep: "M11 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0",
+        await: "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0M12 6v6l4 2",
+        res: "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0M16 9l-5.5 5.5L8 12",
+        clo: "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0M9 15L15 9",
+        reject: "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0M15 9l-6 6M9 9l6 6",
+        radio: "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0",
+        radioOn: "M11 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0",
+        cmt: "M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z",
+        reopen: "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8M3 3v5h5",
+        flag: "M4 22V4a1 1 0 0 1 .4-.8A6 6 0 0 1 8 2c3 0 5 2 7.333 2q2 0 3.067-.8A1 1 0 0 1 20 4v10a1 1 0 0 1-.4.8A6 6 0 0 1 16 16c-3 0-5-2-8-2a6 6 0 0 0-4 1.528",
+        pin: "M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0M9 10a3 3 0 1 0 6 0a3 3 0 1 0 -6 0",
+        eye: "M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0M9 12a3 3 0 1 0 6 0a3 3 0 1 0 -6 0",
+        update: "M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8M21 3v5h-5M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16M8 16H3v5",
+        search: "M21 21l-4.34-4.34M3 11a8 8 0 1 0 16 0a8 8 0 1 0 -16 0",
+        shield: "M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z",
+        hist: "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8M3 3v5h5M12 7v5l4 2",
+        prog: "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0"
     })
-    readonly property var iconFills: ({ rep: circ(10, 10, 2), prog: "M10 5a5 5 0 0 1 0 10z", radioOn: circ(10, 10, 3.5) })
-    readonly property var iconDashes: ({ await: circ(10, 10, 7.5) })
+    readonly property var iconFills: ({ prog: "M12 6a6 6 0 0 1 0 12z" })
     // A named icon, `size` px square, drawn in `color`.
     component Icon: Item {
         id: icon
@@ -542,20 +548,15 @@ Item {
         implicitWidth: size; implicitHeight: size
         Accessible.ignored: true
         Shape {
-            width: 20; height: 20
-            scale: icon.size / 20; transformOrigin: Item.TopLeft
+            width: 24; height: 24
+            scale: icon.size / 24; transformOrigin: Item.TopLeft
             preferredRendererType: Shape.CurveRenderer
             ShapePath {
-                strokeColor: icon.color; strokeWidth: 1.6; fillColor: "transparent"
+                strokeColor: icon.color; strokeWidth: 2; fillColor: "transparent"
                 capStyle: ShapePath.RoundCap; joinStyle: ShapePath.RoundJoin
                 PathSvg { path: root.icons[icon.name] || "" }
             }
             ShapePath { strokeColor: "transparent"; fillColor: icon.color; PathSvg { path: root.iconFills[icon.name] || "" } }
-            ShapePath {     // dash and gap are in stroke widths: 3 and 2.2 px of the 20 px box
-                strokeColor: icon.color; strokeWidth: 1.6; fillColor: "transparent"
-                capStyle: ShapePath.RoundCap; strokeStyle: ShapePath.DashLine; dashPattern: [1.9, 1.4]
-                PathSvg { path: root.iconDashes[icon.name] || "" }
-            }
         }
     }
 

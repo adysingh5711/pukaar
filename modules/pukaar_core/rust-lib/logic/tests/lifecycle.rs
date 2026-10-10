@@ -724,6 +724,107 @@ fn the_admin_revokes_a_steward_with_a_reason() {
     let admin = hex::encode(s.admin.me());
     let r = s.asha.revoke_role(&admin, "coup", 6).unwrap();
     assert_eq!(s.asha.state().rejected[&r.id], "only admin revokes roles");
+    assert!(
+        json(&s.asha.site_info_json(0))["revoked"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "an inert revoke records nothing"
+    );
+}
+
+fn json(s: &str) -> serde_json::Value {
+    serde_json::from_str(s).unwrap()
+}
+
+#[test]
+fn a_revoke_is_kept_with_who_when_and_why_until_a_new_grant() {
+    let mut s = Site::new();
+    let i = report(&mut s.asha);
+    s.asha
+        .publish(
+            Body::Comment {
+                issue: i,
+                text: "still leaking".into(),
+            },
+            11,
+        )
+        .unwrap();
+    s.sync();
+    let asha = hex::encode(s.asha.me());
+    let admin = hex::encode(s.admin.me());
+    s.admin.revoke_role(&asha, "left the camp", 20).unwrap();
+    s.sync();
+
+    let info = json(&s.steward.site_info_json(0));
+    let r = &info["revoked"][0];
+    assert_eq!(info["revoked"].as_array().unwrap().len(), 1);
+    assert_eq!(r["key"], asha);
+    assert_eq!(r["fingerprint"].as_str().unwrap().len(), 6);
+    assert!(r["name"].is_null(), "asha is a pseudonym");
+    assert_eq!(r["by"], admin);
+    assert_eq!(r["by_name"], "Site admin");
+    assert_eq!(r["ts"], 20);
+    assert_eq!(r["reason"], "left the camp");
+
+    let me = json(&s.asha.identity_json());
+    assert!(me["role"].is_null());
+    assert_eq!(me["revoked"]["by"], admin);
+    assert_eq!(me["revoked"]["by_name"], "Site admin");
+    assert_eq!(me["revoked"]["ts"], 20);
+    assert_eq!(me["revoked"]["reason"], "left the camp");
+    assert!(json(&s.ravi.identity_json())["revoked"].is_null());
+
+    // their past report and its timeline say "former member"; everyone else's do not
+    assert_eq!(issues(&s.steward, 30)[0]["former"], true);
+    let tl = json(&s.steward.timeline_json(&hex::encode(i), 30));
+    assert_eq!(tl["issue"]["former"], true);
+    let events = tl["events"].as_array().unwrap();
+    assert_eq!(events.len(), 2);
+    assert!(events.iter().all(|e| e["former"] == true));
+
+    // granted again: no longer removed, no longer former
+    s.admin
+        .publish(
+            Body::RoleGrant {
+                subject: s.asha.me(),
+                role: Role::Resident,
+                name: None,
+            },
+            25,
+        )
+        .unwrap();
+    s.sync();
+    assert!(json(&s.steward.site_info_json(0))["revoked"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(json(&s.asha.identity_json())["revoked"].is_null());
+    assert_eq!(issues(&s.steward, 30)[0]["former"], false);
+    let tl = json(&s.steward.timeline_json(&hex::encode(i), 30));
+    assert!(tl["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|e| e["former"] == false));
+}
+
+#[test]
+fn removed_members_are_listed_newest_first_and_the_genesis_admin_stays() {
+    let mut s = Site::new();
+    let [asha, ravi, admin] = [s.asha.me(), s.ravi.me(), s.admin.me()].map(hex::encode);
+    s.admin.revoke_role(&asha, "left", 20).unwrap();
+    s.admin.revoke_role(&ravi, "moved", 30).unwrap();
+    let e = s.admin.revoke_role(&admin, "oops", 40).unwrap();
+    assert_eq!(s.admin.state().rejected[&e.id], "admin cannot be revoked");
+    let keys: Vec<_> = json(&s.admin.site_info_json(0))["revoked"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["key"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(keys, [ravi, asha]);
+    assert!(json(&s.admin.identity_json())["revoked"].is_null());
 }
 
 // ---- board order, SLA flags ----
