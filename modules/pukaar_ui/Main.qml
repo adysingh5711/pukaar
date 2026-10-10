@@ -3048,7 +3048,14 @@ Item {
                     RowLayout {
                         Layout.fillWidth: true; Layout.bottomMargin: 8
                         Item { visible: !root.narrow; Layout.fillWidth: true }
-                        FramedButton { text: !root.narrow ? "Close" : root.page === "history" ? "← History" : "← Board"; onClicked: root.closeIssue() }
+                        FramedButton {   // wide: an icon-only ×; narrow: back to the page underneath ("Close" reads like an outcome)
+                            id: paneBack
+                            readonly property string pageName: root.page === "history" ? "History" : "Board"
+                            text: root.narrow ? "Back" : ""; iconName: root.narrow ? "chevl" : "x"
+                            Accessible.name: root.narrow ? "Back to " + pageName : "Close panel"
+                            onClicked: root.closeIssue()
+                            SideTip { visible: !root.narrow && (paneBack.hovered || paneBack.visualFocus); text: "Close panel"; x: parent.width - width; y: parent.height + 6 }
+                        }
                     }
                     Flow {   // code, stage, reopens, the reporter's call to action, category
                         Layout.fillWidth: true; Layout.bottomMargin: 4
