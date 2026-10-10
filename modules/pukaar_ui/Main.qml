@@ -2612,9 +2612,11 @@ Item {
                             Layout.fillWidth: true; Layout.margins: 16; Layout.bottomMargin: 8
                             spacing: 12
                             Help {
-                                text: "Nothing is deleted. A retired place takes no new reports; one with open issues can't be retired. "
-                                    + "A place nobody ever reported can be removed: it is hidden after 30 days (undo until then), and its signed events stay in everyone's log. "
-                                    + (root.isAdmin ? "Edit changes a place's name and group; its code never changes." : "A code opens that place in History.")
+                                text: root.isAdmin
+                                    ? "Nothing is deleted. A retired place takes no new reports; one with open issues can't be retired. "
+                                      + "A place nobody ever reported can be removed: it is hidden after 30 days (undo until then), and its signed events stay in everyone's log. "
+                                      + "Edit changes a place's name and group; its code never changes."
+                                    : "Nothing is deleted. A retired place takes no new reports. A place marked \"hidden on\" a date will leave the lists then; its history stays. A code opens that place in History."
                             }
                             FramedButton {
                                 visible: root.isAdmin
