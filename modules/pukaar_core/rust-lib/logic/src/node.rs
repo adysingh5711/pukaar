@@ -3,7 +3,7 @@
 
 use crate::checkpoint::{checkpoint_now, n_events, root_for};
 use crate::event::{
-    decode, sign, Body, DecodeError, Event, Id, Key, Location, NoticeOutcome, Unsigned,
+    decode, sign, Body, DecodeError, Event, Id, Key, Location, NoticeOutcome, Role, Unsigned,
     MAX_EVENT_BYTES, MAX_TEXT, OTHER_LOCATION, VERSION, ZERO,
 };
 use crate::reducer::{
@@ -19,6 +19,9 @@ use std::collections::BTreeSet;
 pub const HEADS_TO_SETTLE: u32 = 3;
 /// Seconds after a restore before the user may skip the wait (history lost with the old device).
 pub const SKIP_SYNC_AFTER: u64 = 600;
+/// Seconds past a notice's deadline before a node signs the seal on its own: a politeness to
+/// the admin, not a validity rule (the reducer accepts a seal from the deadline on).
+pub const SEAL_GRACE: u64 = 10 * 60;
 const SYNCING: &str = "still syncing your history, try again shortly";
 
 /// A restored identity's chain lives on other devices: signing before it's back would reuse
@@ -400,18 +403,27 @@ impl Node {
         })
     }
 
-    /// Seal every notice whose deadline has passed by `now` and that no seal has closed yet,
-    /// unless we already signed one for it. Any member's node does this, unasked: the first
-    /// seal applied wins and later ones change nothing. The events signed, to send.
+    /// Seal every notice whose deadline passed `SEAL_GRACE` ago and that no seal has closed yet,
+    /// unless we already signed one for it. Any staff member's node does this, unasked, for a
+    /// notice that isn't theirs: the first seal applied wins and later ones change nothing.
+    /// The events signed, to send.
     pub fn auto_seal(&mut self, now: u64) -> Vec<Event> {
         let s = self.state();
-        if self.restore.is_some() || s.role_at(&self.me(), now).is_none() {
+        let me = self.me();
+        if self.restore.is_some()
+            || !matches!(s.role_at(&me, now), Some(Role::Steward | Role::Admin))
+        {
             return Vec::new();
         }
         let due: Vec<(Key, u64)> = s
             .notices
             .iter()
-            .filter(|(k, n)| n.sealed.is_none() && now >= n.deadline && !self.sealed_by_me(k, n))
+            .filter(|(k, n)| {
+                **k != me
+                    && n.sealed.is_none()
+                    && now >= n.deadline + SEAL_GRACE
+                    && !self.sealed_by_me(k, n)
+            })
             .map(|(k, _)| (*k, self.store.next_seq(k).0))
             .collect();
         due.into_iter()
@@ -755,12 +767,16 @@ fn location_json(s: &State, l: &Location, now: u64) -> Value {
     v
 }
 
-/// A notice on `subject`: who gave it, the outcome, the deadline, why, and whether it's sealed.
+/// A notice on `subject`: who gave it, the outcome, the deadline, why, and whether (and by
+/// whom, when) it's sealed.
 fn notice_json(s: &State, subject: &Key, n: &Notice) -> Value {
     json!({
         "subject": hex::encode(subject), "subject_name": s.names.get(subject),
         "by": hex::encode(n.by), "by_name": s.names.get(&n.by), "ts": n.ts,
         "outcome": n.outcome, "deadline": n.deadline, "reason": n.reason, "sealed": n.sealed.is_some(),
+        "sealed_by": n.sealed.map(|x| hex::encode(x.by)),
+        "sealed_by_name": n.sealed.and_then(|x| s.names.get(&x.by)),
+        "sealed_ts": n.sealed.map(|x| x.ts),
     })
 }
 

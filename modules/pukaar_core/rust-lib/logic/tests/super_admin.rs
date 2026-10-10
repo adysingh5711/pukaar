@@ -5,10 +5,12 @@ mod common;
 mod util;
 use common::*;
 use pukaar_logic::event::{Body, Event, Key, Location, NoticeOutcome, Role};
-use pukaar_logic::node::Node;
+use pukaar_logic::node::{Node, SEAL_GRACE};
 use serde_json::Value;
 
 const DEADLINE: u64 = 100;
+/// The first moment a node signs the seal on its own.
+const SEALED_AT: u64 = DEADLINE + SEAL_GRACE;
 
 fn hexk(n: &Node) -> String {
     hex::encode(n.me())
@@ -420,7 +422,7 @@ fn a_backdated_act_after_the_seal_is_rejected() {
         s.asha.publish(profile(&format!("Asha {ts}")), ts).unwrap();
     }
     copy_all(&s.asha, &mut s.admin);
-    let seal = s.admin.auto_seal(DEADLINE).pop().unwrap();
+    let seal = s.admin.auto_seal(SEALED_AT).pop().unwrap();
     let late = add_place(&mut s.steward, "L-2", 50);
     assert!(late.u.lamport < seal.u.lamport, "orders before the seal");
     s.sync();
@@ -441,18 +443,18 @@ fn a_backdated_act_after_the_seal_is_rejected() {
 fn the_first_seal_wins_and_later_ones_change_nothing() {
     let mut s = deputy_site();
     notice(&mut s, "steward");
-    let first = s.admin.auto_seal(DEADLINE).pop().unwrap();
+    let first = s.admin.auto_seal(SEALED_AT).pop().unwrap();
     s.sync();
     // a seal that arrives after the first: accepted, a no-op
     let d = s.steward.me();
     let later = s
-        .asha
+        .admin
         .publish(
             Body::NoticeSeal {
                 subject: d,
                 seen_seq: 99,
             },
-            DEADLINE + 1,
+            SEALED_AT + 1,
         )
         .unwrap();
     s.sync();
@@ -461,7 +463,7 @@ fn the_first_seal_wins_and_later_ones_change_nothing() {
     let Body::NoticeSeal { seen_seq, .. } = first.u.body else {
         unreachable!()
     };
-    assert_eq!(st.notices[&d].sealed, Some(seen_seq));
+    assert_eq!(st.notices[&d].sealed.map(|x| x.seen_seq), Some(seen_seq));
     let history = &st.demotions[&d];
     assert_eq!(history.len(), 1);
     assert_eq!(history[0].deadline, DEADLINE);
@@ -487,7 +489,7 @@ fn a_seal_before_the_deadline_is_rejected() {
     notice(&mut s, "steward");
     let d = s.steward.me();
     let early = s
-        .asha
+        .admin
         .publish(
             Body::NoticeSeal {
                 subject: d,
@@ -496,8 +498,8 @@ fn a_seal_before_the_deadline_is_rejected() {
             DEADLINE - 1,
         )
         .unwrap();
-    assert!(rejected(&s.asha, &early).is_some());
-    assert_eq!(role(&s.asha, d), Some(Role::Admin));
+    assert!(rejected(&s.admin, &early).is_some());
+    assert_eq!(role(&s.admin, d), Some(Role::Admin));
 }
 
 #[test]
@@ -506,12 +508,12 @@ fn a_cancelled_notice_changes_nothing() {
     notice(&mut s, "remove");
     s.admin.cancel_notice(&hexk(&s.steward), 20).unwrap();
     s.sync();
-    assert!(s.admin.auto_seal(DEADLINE).is_empty());
+    assert!(s.admin.auto_seal(SEALED_AT).is_empty());
     let after = add_place(&mut s.steward, "L-1", DEADLINE + 1);
     assert_eq!(rejected(&s.steward, &after), None);
     // nothing left to cancel once sealed
     notice(&mut s, "steward");
-    s.admin.auto_seal(DEADLINE);
+    s.admin.auto_seal(SEALED_AT);
     let late = s
         .admin
         .cancel_notice(&hexk(&s.steward), DEADLINE + 2)
@@ -533,14 +535,14 @@ fn end_now_demotes_at_once() {
     assert_eq!(st.demotions[&d][0].deadline, 20);
     let after = add_place(&mut s.steward, "L-1", 21);
     assert!(rejected(&s.steward, &after).is_some());
-    assert!(s.admin.auto_seal(DEADLINE).is_empty());
+    assert!(s.admin.auto_seal(SEALED_AT).is_empty());
 }
 
 #[test]
 fn a_remove_outcome_revokes_the_admin() {
     let mut s = deputy_site();
     notice(&mut s, "remove");
-    s.asha.auto_seal(DEADLINE);
+    s.admin.auto_seal(SEALED_AT);
     s.sync();
     let d = s.steward.me();
     let st = s.admin.state();
@@ -568,14 +570,108 @@ fn a_remove_outcome_revokes_the_admin() {
 }
 
 #[test]
-fn the_auto_seal_is_signed_once() {
+fn the_auto_seal_waits_the_grace_and_is_signed_once() {
     let mut s = deputy_site();
     notice(&mut s, "steward");
-    assert!(s.admin.auto_seal(DEADLINE - 1).is_empty());
-    assert_eq!(s.admin.auto_seal(DEADLINE).len(), 1);
-    assert!(s.admin.auto_seal(DEADLINE + 60).is_empty());
+    assert!(s.admin.auto_seal(DEADLINE).is_empty());
+    assert!(s.admin.auto_seal(SEALED_AT - 1).is_empty());
+    assert_eq!(s.admin.auto_seal(SEALED_AT).len(), 1);
+    assert!(s.admin.auto_seal(SEALED_AT + 60).is_empty());
     // a pending member's node doesn't try
     let mut stranger = Node::join_announced(pukaar_logic::event::new_key(), s.admin.store.site, 1);
     copy_all(&s.asha, &mut stranger);
-    assert!(stranger.auto_seal(DEADLINE).is_empty());
+    assert!(stranger.auto_seal(SEALED_AT).is_empty());
+}
+
+#[test]
+fn only_staff_other_than_the_subject_auto_seal() {
+    let mut s = deputy_site();
+    notice(&mut s, "steward");
+    assert!(s.asha.auto_seal(SEALED_AT).is_empty(), "a resident");
+    assert!(s.steward.auto_seal(SEALED_AT).is_empty(), "the subject");
+    // another steward may
+    let r = s.ravi.me();
+    s.admin
+        .publish(grant(r, Role::Steward, "Ravi"), 11)
+        .unwrap();
+    s.sync();
+    assert_eq!(s.ravi.auto_seal(SEALED_AT).len(), 1);
+}
+
+#[test]
+fn a_residents_seal_is_rejected() {
+    let mut s = deputy_site();
+    notice(&mut s, "steward");
+    let d = s.steward.me();
+    let seal = |s: &mut Site, ts| {
+        s.asha
+            .publish(
+                Body::NoticeSeal {
+                    subject: d,
+                    seen_seq: 9,
+                },
+                ts,
+            )
+            .unwrap()
+    };
+    let e = seal(&mut s, SEALED_AT);
+    assert_eq!(
+        rejected(&s.asha, &e).as_deref(),
+        Some("only staff can seal a notice")
+    );
+    assert_eq!(s.asha.state().notices[&d].sealed, None);
+    // and a resident cannot pre-empt the staff seal that follows
+    s.sync();
+    s.admin.auto_seal(SEALED_AT);
+    s.sync();
+    assert!(s.asha.state().notices[&d].sealed.is_some());
+}
+
+#[test]
+fn the_subject_cannot_seal_their_own_notice() {
+    let mut s = deputy_site();
+    notice(&mut s, "steward");
+    let d = s.steward.me();
+    let e = s
+        .steward
+        .publish(
+            Body::NoticeSeal {
+                subject: d,
+                seen_seq: 9,
+            },
+            SEALED_AT,
+        )
+        .unwrap();
+    assert_eq!(
+        rejected(&s.steward, &e).as_deref(),
+        Some("a member cannot seal their own notice")
+    );
+    assert_eq!(s.steward.state().notices[&d].sealed, None);
+}
+
+#[test]
+fn the_notice_json_says_who_sealed_it_and_when() {
+    let mut s = deputy_site();
+    notice(&mut s, "steward");
+    let n = json(&s.admin.site_info_json(DEADLINE))["notices"][0].clone();
+    assert_eq!(n["sealed"], false);
+    assert!(n["sealed_by"].is_null() && n["sealed_by_name"].is_null() && n["sealed_ts"].is_null());
+    s.admin.auto_seal(SEALED_AT);
+    s.sync();
+    let n = json(&s.admin.site_info_json(SEALED_AT))["notices"][0].clone();
+    assert_eq!(n["sealed"], true);
+    assert_eq!(n["sealed_by"], hexk(&s.admin));
+    assert_eq!(n["sealed_by_name"], s.admin.state().names[&s.admin.me()]);
+    assert_eq!(n["sealed_ts"], SEALED_AT);
+}
+
+#[test]
+fn end_now_is_sealed_by_the_super_admin_who_ended_it() {
+    let mut s = deputy_site();
+    notice(&mut s, "steward");
+    s.admin.end_notice_now(&hexk(&s.steward), 20).unwrap();
+    s.sync();
+    let n = json(&s.admin.site_info_json(21))["notices"][0].clone();
+    assert_eq!(n["sealed_by"], hexk(&s.admin));
+    assert_eq!(n["sealed_ts"], 20);
 }

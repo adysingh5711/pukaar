@@ -124,8 +124,17 @@ pub struct Notice {
     pub outcome: NoticeOutcome,
     pub deadline: u64,
     pub reason: String,
-    /// The winning seal's `seen_seq`, once sealed.
-    pub sealed: Option<u64>,
+    /// The winning seal, once sealed.
+    pub sealed: Option<Seal>,
+}
+
+/// The seal that made a notice final.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Seal {
+    /// The subject's next seq as the sealer saw it (see `Body::NoticeSeal`).
+    pub seen_seq: u64,
+    pub by: Key,
+    pub ts: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
@@ -341,7 +350,7 @@ impl State {
         self.demotions
             .values()
             .flatten()
-            .filter_map(|n| Some((n.id, n.sealed?)))
+            .filter_map(|n| Some((n.id, n.sealed?.seen_seq)))
             .collect()
     }
 
@@ -376,11 +385,11 @@ impl State {
     }
 
     /// Make `subject`'s open notice final: its outcome for good, and a line in their history.
-    fn seal(&mut self, subject: Key, seen_seq: u64) {
+    fn seal(&mut self, subject: Key, seal: Seal) {
         let Ok(n) = self.open_notice(&subject) else {
             return;
         };
-        n.sealed = Some(seen_seq);
+        n.sealed = Some(seal);
         let n = n.clone();
         match n.outcome.role() {
             Some(r) => {
@@ -466,6 +475,16 @@ impl State {
                 self.place_log.push(c);
             }
             _ => {}
+        }
+    }
+}
+
+impl Seal {
+    fn new(seen_seq: u64, e: &Event) -> Self {
+        Self {
+            seen_seq,
+            by: e.u.author,
+            ts: e.u.ts,
         }
     }
 }
@@ -702,10 +721,12 @@ fn apply(s: &mut State, e: &Event, seals: &BTreeMap<Id, u64>) -> Result<(), Stri
         AdminNoticeEndNow { subject, seen_seq } => {
             require(sup, ONLY_SUPER)?;
             s.open_notice(subject)?.deadline = e.u.ts;
-            s.seal(*subject, *seen_seq);
+            s.seal(*subject, Seal::new(*seen_seq, e));
             Ok(())
         }
         NoticeSeal { subject, seen_seq } => {
+            require(staff, "only staff can seal a notice")?;
+            require(*subject != a, "a member cannot seal their own notice")?;
             let n = s.notices.get(subject).ok_or("no notice for this member")?;
             if n.sealed.is_some() {
                 return Ok(()); // the first seal won; a later one changes nothing
@@ -713,7 +734,7 @@ fn apply(s: &mut State, e: &Event, seals: &BTreeMap<Id, u64>) -> Result<(), Stri
             // ponytail: the sealer's clock (event ts), like REMOVAL_COOLDOWN: a fast clock seals
             // early. Anchor-backed time if that matters.
             require(e.u.ts >= n.deadline, "the notice has not ended yet")?;
-            s.seal(*subject, *seen_seq);
+            s.seal(*subject, Seal::new(*seen_seq, e));
             Ok(())
         }
         Report {

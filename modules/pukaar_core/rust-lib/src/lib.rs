@@ -179,7 +179,7 @@ impl Shared {
         }
     }
 
-    /// Seal every notice whose deadline has passed (`Node::auto_seal` signs each one once),
+    /// Seal every notice that ended `SEAL_GRACE` ago (`Node::auto_seal`: staff only, once each),
     /// save, and queue the seals to go out.
     fn auto_seal(&mut self) {
         let Some(node) = self.node.as_mut() else {
