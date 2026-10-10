@@ -23,3 +23,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
       - run: cargo install cargo-fuzz --locked
       - run: cargo +nightly fuzz run decode -- -max_total_time=60
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The .lgx version comes from metadata.json: both modules must agree, and a v* tag must match them.
+      - run: |
+          v=$(jq -r .version modules/pukaar_ui/metadata.json)
+          [ "$v" = "$(jq -r .version modules/pukaar_core/metadata.json)" ] || { echo "metadata.json versions differ"; exit 1; }
+          [[ "$GITHUB_REF" != refs/tags/v* ]] || [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME != v$v in metadata.json"; exit 1; }

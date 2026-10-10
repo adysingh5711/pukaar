@@ -1,7 +1,7 @@
 {
   "name": "pukaar_core",
   "display_name": "Pukaar Core",
-  "version": "0.1.0",
+  "version": "0.2.4",
   "type": "core",
   "interface": "cdylib",
   "category": "civic",
