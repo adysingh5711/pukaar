@@ -20,6 +20,7 @@ Item {
     property var removedLocations: []    // the admin's change log: places whose 30-day removal is over
     property var members: []
     property var pending: []
+    property var revoked: []             // members whose role the admin removed (site_info revoked), newest first
     property var groupNames: []             // place groups in first-seen order; written only when they change
     property var issues: []
     property var selected: null          // issue_timeline() result
@@ -32,8 +33,12 @@ Item {
     readonly property bool inSite: !!(me && me.site)
     readonly property bool staff: me.role === "Steward" || me.role === "Admin"
     readonly property bool approved: !!me.role      // a pending key has no role yet; the core rejects its reports
-    readonly property bool awaitingApproval: inSite && !approved && !!info.name   // joined, genesis here, not yet granted a role
+    // Our role was revoked, and we have not asked to join again (a new profile puts us back in pending).
+    readonly property bool removed: inSite && !approved && !!me.revoked && !pending.some(function (p) { return p.key === me.key })
+    readonly property bool unapproved: !approved && !removed      // no role, and it is ours to ask for: read the fingerprint at the kiosk
+    readonly property bool awaitingApproval: inSite && unapproved && !!info.name   // joined, genesis here, not yet granted a role
     readonly property bool isAdmin: me.role === "Admin"
+    readonly property string roleName: me.role || (removed ? "Removed" : "Pending")
     // A restored identity waits for its own history before signing anything (core refuses meanwhile).
     readonly property bool syncing: !!me.syncing_own_history
     // ---- shell (design/proposal/NOTES.md section 3) ----
@@ -189,7 +194,7 @@ Item {
     function setInfo(i) {
         info = i
         keep("categories", i.categories); keep("locations", i.locations); keep("removedLocations", i.removed_locations || [])
-        keep("members", i.members); keep("pending", i.pending)
+        keep("members", i.members); keep("pending", i.pending); keep("revoked", i.revoked || [])
         keep("groupNames", groupsOf(i.locations))
     }
     // Opening a card moves the cursor to the note, so a steward can type straight away.
@@ -280,6 +285,7 @@ Item {
     function initials(name) { return String(name || "").split(/[\s\-_]+/).filter(Boolean).slice(0, 2).map(function (w) { return w[0] }).join("").toUpperCase() }
     function shortId(hex) { return String(hex).substr(0, 8) + "…" + String(hex).substr(-4) }
     function who(key, name) { return name ? name : "pseudonym " + String(key).substr(0, 6) }
+    function formerTag(former) { return former ? " (former member)" : "" }   // after a revoked author's name and code
     function when(ts, format) { return new Date(ts * 1000).toLocaleString(Qt.locale(), format || "d MMM HH:mm") }
     function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") }
     function place(i) {
@@ -452,7 +458,7 @@ Item {
             : needsMe(i) ? "Needs your confirmation. "
             : "Fix claimed: waiting for " + (i.claimant === i.reporter ? "2 residents" : "the reporter") + " to confirm. "
         var since = isTerminal(i.status) ? closedVerb(i) + " " + age(closedAt(i)) : "Reported " + age(i.reported_ts)
-        return since + ". " + waiting + nextLine(i)
+        return since + ". " + (i.former ? "The reporter is a former member. " : "") + waiting + nextLine(i)
     }
     // "Next: fit washer · due in 5 h"
     function nextLine(i) {
@@ -920,7 +926,7 @@ Item {
                 Icon { Layout.alignment: Qt.AlignTop; Layout.topMargin: 2; name: "user"; size: 13; color: root.t.muted }
                 Label {
                     Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.RichText; font.pointSize: root.smallSize; color: root.t.muted
-                    text: root.esc(root.who(row.event.author, row.event.author_name)) + " " + root.mono(String(row.event.author).substr(0, 6))
+                    text: root.esc(root.who(row.event.author, row.event.author_name)) + " " + root.mono(String(row.event.author).substr(0, 6)) + root.formerTag(row.event.former)
                           + " · " + root.when(row.event.ts)
                 }
             }
@@ -1425,6 +1431,40 @@ Item {
         function submit() { if (enabled) clicked() }
     }
 
+    // A person the admin can give a role (waiting for approval, or removed and `again`): who they are
+    // (the content), then Grant resident, or a name and Grant steward.
+    component GrantRow: ColumnLayout {
+        id: grant
+        required property var modelData
+        required property int index
+        property bool again: false
+        default property alias who: whoCell.data
+        readonly property string suffix: again ? " again" : ""
+        readonly property string person: modelData.name || modelData.fingerprint
+        Layout.fillWidth: true
+        spacing: 0
+        Rectangle { visible: grant.index > 0; Layout.fillWidth: true; implicitHeight: 1; color: root.t.bd }
+        GridLayout {
+            Layout.fillWidth: true; Layout.margins: 12; Layout.leftMargin: 16; Layout.rightMargin: 16
+            columns: root.compactRows ? 2 : 3; columnSpacing: 12; rowSpacing: 8
+            ColumnLayout { id: whoCell; Layout.fillWidth: true; spacing: 4 }
+            ActionButton {
+                text: "Grant resident" + grant.suffix; Accessible.name: text + ": " + grant.person
+                onClicked: root.run("grant_role", [grant.modelData.key, "resident", staffName.text])
+            }
+            LabelledField {
+                id: staffName
+                Layout.fillWidth: root.compactRows; Layout.columnSpan: root.compactRows ? 2 : 1
+                Layout.preferredWidth: 330
+                name: "Name, optional for a resident"
+                placeholder: "Name, e.g. Ravi Kumar (a steward needs one)"
+                buttonText: "Grant steward" + grant.suffix
+                buttonEnabled: staffName.text.trim().length > 0
+                onSubmitted: root.run("grant_role", [grant.modelData.key, "steward", staffName.text])
+            }
+        }
+    }
+
     // An ActionButton that asks first: with an `effect` (one short line), a click swaps it for that
     // line over the confirm button and Cancel. With no `effect` it fires at once (Flash, LabelledField).
     component ConfirmButton: ColumnLayout {
@@ -1764,7 +1804,7 @@ Item {
                     padding: 6
                     hoverEnabled: true
                     focusPolicy: Qt.StrongFocus
-                    Accessible.name: "You: " + (root.me.name || "pseudonym") + ", " + (root.me.role || "pending") + ". Open Profile"
+                    Accessible.name: "You: " + (root.me.name || "pseudonym") + ", " + root.roleName + ". Open Profile"
                     HoverHandler { cursorShape: Qt.PointingHandCursor }
                     SideTip { text: "Profile"; visible: !sidebar.open && (you.hovered || you.visualFocus) }
                     onClicked: root.openPage("profile")
@@ -1800,7 +1840,7 @@ Item {
                                 Layout.alignment: parent.align; Layout.maximumWidth: parent.width; wrapMode: Text.WrapAnywhere
                                 text: sidebar.fp; color: root.t.sbFg; font.pointSize: root.smallSize; font.family: "monospace"
                             }
-                            Rectangle {   // role chip; a key with no role yet is "pending"
+                            Rectangle {   // role chip; a key with no role yet is "pending", or "removed" after a revoke
                                 readonly property bool pending: !root.me.role
                                 Layout.alignment: parent.align; Layout.maximumWidth: parent.width
                                 implicitWidth: roleText.implicitWidth + (sidebar.open ? 16 : 12); implicitHeight: roleText.implicitHeight
@@ -1809,7 +1849,7 @@ Item {
                                     id: roleText
                                     width: parent.width; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap
                                     lineHeight: 20; lineHeightMode: Text.FixedHeight
-                                    text: root.me.role || (sidebar.open ? "pending: read your fingerprint at the kiosk" : "Pending")
+                                    text: sidebar.open && root.unapproved ? "pending: read your fingerprint at the kiosk" : root.roleName
                                     color: parent.pending ? root.t.sbDanger : root.t.sbFg; font.pointSize: root.smallSize
                                 }
                             }
@@ -1878,6 +1918,12 @@ Item {
         Flash {   // joined and waiting for a role: what to do, and what comes after
             visible: root.awaitingApproval
             text: "Waiting for the admin to approve you. Your fingerprint: " + (root.me.fingerprint || "") + ". Read it aloud at the kiosk. After approval you can report faults, confirm fixes and comment."
+        }
+        Flash {   // our role was revoked: by whom, when, why, and what is left
+            visible: root.removed
+            err: true
+            text: root.removed ? "Your role was removed by " + root.who(root.me.revoked.by, root.me.revoked.by_name) + " on " + root.when(root.me.revoked.ts, "d MMM")
+                                 + ": " + root.me.revoked.reason + " You can still read the board, and your past reports stay. To take part again, ask the admin to grant you a role." : ""
         }
         Flash {
             visible: root.inSite && root.syncing
@@ -2413,37 +2459,17 @@ Item {
                         }
                         Repeater {
                             model: root.pending
-                            delegate: ColumnLayout {
+                            delegate: GrantRow {
                                 id: pendingRow
-                                required property var modelData
-                                required property int index
-                                Layout.fillWidth: true
-                                spacing: 0
-                                Rectangle { visible: pendingRow.index > 0; Layout.fillWidth: true; implicitHeight: 1; color: root.t.bd }
-                                GridLayout {
-                                    Layout.fillWidth: true; Layout.margins: 12; Layout.leftMargin: 16; Layout.rightMargin: 16
-                                    columns: root.compactRows ? 2 : 3; columnSpacing: 12; rowSpacing: 8
-                                    RowLayout {
-                                        Layout.fillWidth: true
-                                        spacing: 10
-                                        Fingerprint { big: true; text: pendingRow.modelData.fingerprint }
-                                        Label {
-                                            Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
-                                            text: pendingRow.modelData.name || "(no name)"
-                                            color: pendingRow.modelData.name ? root.t.fg : root.t.muted
-                                            font.weight: pendingRow.modelData.name ? Font.DemiBold : Font.Normal
-                                        }
-                                    }
-                                    ActionButton { text: "Grant resident"; onClicked: root.run("grant_role", [pendingRow.modelData.key, "resident", staffName.text]) }
-                                    LabelledField {
-                                        id: staffName
-                                        Layout.fillWidth: root.compactRows; Layout.columnSpan: root.compactRows ? 2 : 1
-                                        Layout.preferredWidth: 330
-                                        name: "Name, optional for a resident"
-                                        placeholder: "Name, e.g. Ravi Kumar (a steward needs one)"
-                                        buttonText: "Grant steward"
-                                        buttonEnabled: staffName.text.trim().length > 0
-                                        onSubmitted: root.run("grant_role", [pendingRow.modelData.key, "steward", staffName.text])
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 10
+                                    Fingerprint { big: true; text: pendingRow.modelData.fingerprint }
+                                    Label {
+                                        Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
+                                        text: pendingRow.modelData.name || "(no name)"
+                                        color: pendingRow.modelData.name ? root.t.fg : root.t.muted
+                                        font.weight: pendingRow.modelData.name ? Font.DemiBold : Font.Normal
                                     }
                                 }
                             }
@@ -2503,6 +2529,34 @@ Item {
                                         allowed: !memberRow.own && revokeReason.text.trim().length > 0
                                         onConfirmed: root.run("revoke_role", [memberRow.modelData.key, revokeReason.text])
                                     }
+                                }
+                            }
+                        }
+                    }
+                    CollapsibleSection {
+                        title: "Removed"; aside: "· " + root.revoked.length
+                        pad: 0
+                        Blank {
+                            visible: root.revoked.length === 0
+                            icon: "res"; title: "No one has been removed."; text: "When you revoke a role, the person shows here with your reason."
+                        }
+                        Repeater {
+                            model: root.revoked
+                            delegate: GrantRow {
+                                id: removedRow
+                                again: true
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 10
+                                    Fingerprint { text: removedRow.modelData.fingerprint }
+                                    Label {
+                                        Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText; font.weight: Font.DemiBold
+                                        text: removedRow.modelData.name || "pseudonym"
+                                    }
+                                }
+                                Help {
+                                    text: "Removed by " + root.who(removedRow.modelData.by, removedRow.modelData.by_name) + " on "
+                                          + root.when(removedRow.modelData.ts, "d MMM") + ": " + removedRow.modelData.reason
                                 }
                             }
                         }
@@ -2782,10 +2836,10 @@ Item {
                     readonly property string myName: root.me.name || ""   // a string: changes only when the name does, not on every refresh
                     readonly property var myReports: root.issues.filter(function (i) { return i.reporter === root.me.key })
                     readonly property int mineOpen: myReports.filter(function (i) { return !root.isTerminal(i.status) }).length
-                    PageHead { title: "You"; lede: root.esc(root.me.name || "pseudonym") + " · " + (root.me.role || "Pending") }
+                    PageHead { title: "You"; lede: root.esc(root.me.name || "pseudonym") + " · " + root.roleName }
                     FormRow {
-                        label: "Your code"; sub: root.approved ? "" : "(read it aloud at the kiosk)"
-                        Fingerprint { text: root.me.fingerprint || ""; big: !root.approved }
+                        label: "Your code"; sub: root.unapproved ? "(read it aloud at the kiosk)" : ""
+                        Fingerprint { text: root.me.fingerprint || ""; big: root.unapproved }
                     }
                     Heading { text: "Name" }
                     Note { visible: root.staff; text: root.me.name || ""; font.weight: Font.DemiBold }
@@ -2803,6 +2857,7 @@ Item {
                         visible: !root.staff
                         text: "The admin may have named you when approving you; this replaces it. Set it empty to stay a pseudonym; the admin who granted your role can still link it. Staff are always named."
                     }
+                    Help { visible: root.removed; text: "Setting your name asks to join again: you then wait for the admin's approval." }
                     Heading { text: "Back up this identity" }
                     Help { text: "Your identity is a key on this device. A backup lets you continue as the same person after a reinstall." }
                     Flash {
@@ -3151,7 +3206,7 @@ Item {
                                 leftPadding: 12; rightPadding: 12; topPadding: 6; bottomPadding: 6
                                 font.pointSize: root.smallSize; color: root.t.muted
                                 text: "Reported by " + root.esc(root.who(detail.issue.reporter, detail.issue.reporter_name)) + " "
-                                      + root.mono(String(detail.issue.reporter).substr(0, 6)) + " · " + root.when(detail.issue.reported_ts)
+                                      + root.mono(String(detail.issue.reporter).substr(0, 6)) + root.formerTag(detail.issue.former) + " · " + root.when(detail.issue.reported_ts)
                                 background: Rectangle {
                                     color: root.t.well; topLeftRadius: 5; topRightRadius: 5
                                     Rectangle { width: parent.width; height: 1; anchors.bottom: parent.bottom; color: root.t.bd }

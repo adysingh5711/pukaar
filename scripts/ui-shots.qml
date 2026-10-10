@@ -14,19 +14,28 @@ Window {
     readonly property var pages: ["board", "history", "report", "members", "site", "proof", "profile", "issue", "issue-new"]
     // The last-anchor states other than the default recent one: Proof's block, and the sidebar line on Board.
     readonly property var anchorStates: ["never", "stale", "mismatch"]
+    // Revoked roles: a removed device ("removed", as Ravi Das), and the admin's view once r2 was removed ("former").
+    readonly property var revokeJobs: [["removed", "board"], ["removed", "profile"], ["admin", "board", true], ["admin", "issue", true], ["admin", "members", true]]
 
     QtObject {
         id: logos
         property string state: "none"
         property string anchor: "recent"     // site_info last_anchor: recent, never, stale or mismatch
+        property bool former: false          // r2 was removed: their reports and timeline entries say so
         // Fixed within each half hour, so two runs in the same half hour give the same pixels.
         readonly property int now: Math.floor(Date.now() / 1800000) * 1800
         readonly property string site: "5173".repeat(16)
-        readonly property var keys: ({ admin: "a1".repeat(32), steward: "5e".repeat(32), resident: "7e".repeat(32), r2: "72".repeat(32), pending: "9e".repeat(32) })
-        readonly property var names: ({ admin: "Asha Verma", steward: "Suresh Kumar", resident: "Meera", r2: null, pending: null })
+        readonly property var keys: ({ admin: "a1".repeat(32), steward: "5e".repeat(32), resident: "7e".repeat(32), r2: "72".repeat(32), pending: "9e".repeat(32), gone: "6a".repeat(32) })
+        readonly property var names: ({ admin: "Asha Verma", steward: "Suresh Kumar", resident: "Meera", r2: null, pending: null, gone: "Ravi Das" })
         readonly property var roles: ({ admin: "Admin", steward: "Steward", resident: "Resident", r2: "Resident" })
         function h(n) { return now - n * 3600 }
         function member(who) { return { key: keys[who], fingerprint: keys[who].substr(0, 6), name: names[who] } }
+        function revocation(age, reason) { return { by: keys.admin, by_name: names.admin, ts: h(age), reason: reason } }
+        readonly property var revocations: ({ gone: revocation(30, "Left the camp."), r2: revocation(5, "Shared the site id outside the ward.") })
+        function revoked() {
+            return (former ? ["r2", "gone"] : ["gone"]).map(function (w) { return Object.assign(member(w), revocations[w]) })
+        }
+        function marked(i) { return Object.assign({}, i, { former: former && i.reporter === keys.r2 }) }
         function loc(code, label, group, extra) {
             return Object.assign({ code: code, label: label, group: group, state: "active", retired: false, retired_reason: "",
                 removal_reason: "", removes_at: 0, renamed_from: null, ever_used: true, open_issues: 0 }, extra || {})
@@ -69,12 +78,13 @@ Window {
         ]
         function ev(n, kind, who, age, body, o) {
             return Object.assign({ id: String(n).repeat(64).substr(0, 64), kind: kind, author: keys[who], author_name: names[who], ts: h(age),
-                body: body, rejected: null, anchored_tx: null, anchored_by: null, anchored_by_name: null }, o || {})
+                body: body, rejected: null, anchored_tx: null, anchored_by: null, anchored_by_name: null, former: former && who === "r2" }, o || {})
         }
         function timeline(id) {
             var i = issues.filter(function (x) { return x.id === id })[0]
             if (!i) return null
-            var events = [ev("e0", "report", "resident", i.reported_ts ? (now - i.reported_ts) / 3600 : 0, i.text)]
+            var rep = Object.keys(keys).filter(function (w) { return keys[w] === i.reporter })[0]
+            var events = [ev("e0", "report", rep, i.reported_ts ? (now - i.reported_ts) / 3600 : 0, i.text)]
             if (i.status === "AwaitingConfirmation") events = events.concat([
                 ev("e1", "acknowledge", "steward", 110, "Seen. Plumber on Thursday."),
                 ev("e2", "claim_resolved", "steward", 90, "Fixed the tap."),
@@ -83,21 +93,21 @@ Window {
                 ev("e5", "update", "steward", 70, "Ordered a new washer.", { anchored_tx: "ab12".repeat(16), anchored_by: keys.admin, anchored_by_name: names.admin }),
                 ev("e6", "claim_resolved", "steward", 60, "Washer replaced."),
                 ev("e7", "comment", "r2", 30, "Looks fine from outside.")])
-            return { issue: i, events: events }
+            return { issue: marked(i), events: events }
         }
         function me() {
             if (state === "none") return { site: null, delivery: "Open" }
-            var who = state
+            var who = state === "removed" ? "gone" : state
             return { key: keys[who], fingerprint: keys[who].substr(0, 6), role: roles[who] || null, name: names[who], site: site,
-                     syncing_own_history: false, delivery: "Open" }
+                     revoked: revocations[who] || null, syncing_own_history: false, delivery: "Open" }
         }
         function siteInfo() {
             return { site: site, name: "Ward 12, Shivaji Nagar", categories: ["Water", "Garbage", "Drainage", "Streetlight"],
                 locations: locations,
                 removed_locations: [{ code: "T9", label: "Old toilet block", group: "Rooms", by: keys.admin, by_name: names.admin,
                                       reason: "Demolished", since: h(1000), removed_at: h(280) }],
-                members: ["admin", "steward", "resident", "r2"].map(function (w) { var m = member(w); m.role = roles[w]; return m }),
-                pending: [member("pending")], sla_ack_h: 24, sla_fix_h: 72, events: 42, forks: 0, forked_authors: [],
+                members: ["admin", "steward", "resident"].concat(former ? [] : ["r2"]).map(function (w) { var m = member(w); m.role = roles[w]; return m }),
+                pending: [member("pending")], revoked: revoked(), sla_ack_h: 24, sla_fix_h: 72, events: 42, forks: 0, forked_authors: [],
                 last_anchor: anchor === "never" ? null : { ts: h(anchor === "stale" ? 50 : 3), tx: "pda:Public/9f2c", by: keys.steward,
                     by_name: names.steward, events_covered: 33, reproducible: anchor !== "mismatch" } }
         }
@@ -105,7 +115,7 @@ Window {
             switch (method) {
             case "my_identity": return me()
             case "site_info": return siteInfo()
-            case "list_issues": return issues
+            case "list_issues": return issues.map(marked)
             case "issue_timeline": return timeline(a[0])
             case "checkpoint_now": return { heads: [[keys.admin, 12]], heads_root: "c0ffee".repeat(10) + "abcd", n_events: 42, signer: keys.admin,
                 sig: "5a".repeat(64), spel: "spel anchor --site-id " + site + " --heads-root … --payer <YOUR_PUBLIC_ACCOUNT>" }
@@ -125,6 +135,9 @@ Window {
                 (s === "none" ? ["first-run"] : pages).forEach(function (p) { out.push({ state: s, width: w, page: p }) })
             })
         })
+        revokeJobs.forEach(function (r) {
+            [800, 1400].forEach(function (w) { out.push({ state: r[0], width: w, page: r[1], former: !!r[2] }) })
+        })
         anchorStates.forEach(function (a) {
             [800, 1400].forEach(function (w) { ["proof", "board"].forEach(function (p) { out.push({ state: "resident", width: w, page: p, anchor: a }) }) })
         })
@@ -135,17 +148,18 @@ Window {
         if (++job >= jobs.length) { Qt.quit(); return }
         var j = jobs[job], v = view.item
         var anchor = j.anchor || "recent"
-        if (!v || logos.state !== j.state || logos.anchor !== anchor) {
+        if (!v || logos.state !== j.state || logos.anchor !== anchor || logos.former !== !!j.former) {
             logos.state = j.state
             logos.anchor = anchor
+            logos.former = !!j.former
             view.source = ""
             view.source = "file://" + args[0]
             v = view.item
         }
         width = j.width
         v.closeIssue()
-        var pane = ["issue", "issue-new"].indexOf(j.page)   // the pane on a claimed fix, and on a new report (More)
-        if (pane >= 0) { v.openPage("board"); v.openIssue(logos.issues[pane ? 0 : 3].id) }
+        var pane = ["issue", "issue-new"].indexOf(j.page)   // the pane on a claimed fix (a removed member's report with `former`), and on a new report (More)
+        if (pane >= 0) { v.openPage("board"); v.openIssue(logos.issues[pane ? 0 : j.former ? 1 : 3].id) }
         else if (j.page !== "first-run") v.openPage(j.page)
         if (j.page === "proof") v.checkpoint = logos.reply("checkpoint_now")
         focusSink.forceActiveFocus()
@@ -156,7 +170,7 @@ Window {
         onTriggered: {
             var j = win.jobs[win.job]
             view.grabToImage(function (r) {
-                r.saveToFile(win.args[1] + "/" + j.state + "-" + j.page + (j.anchor ? "-anchor-" + j.anchor : "") + "-" + j.width + ".png")
+                r.saveToFile(win.args[1] + "/" + j.state + "-" + j.page + (j.anchor ? "-anchor-" + j.anchor : "") + (j.former ? "-former" : "") + "-" + j.width + ".png")
                 win.next()
             })
         }
