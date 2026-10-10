@@ -286,16 +286,21 @@ Item {
     function who(key, name) { return name ? name : "pseudonym " + String(key).substr(0, 6) }
     function formerTag(former) { return former ? " (former member)" : "" }   // after a revoked author's name and code
     function when(ts, format) { return new Date(ts * 1000).toLocaleString(Qt.locale(), format || "d MMM HH:mm") }
-    // One change-log row in plain words, from site_info place_log.
+    // The change log's action chip per kind: its label and colour group (blue in motion, green restored, grey ended).
+    readonly property var placeActions: ({ added: ["Added", "closed"], edited: ["Edited", "progress"], renamed: ["Renamed", "progress"],
+        retired: ["Retired", "closed"], restored: ["Restored", "resolved"], removal_started: ["Removal started", "progress"],
+        removal_undone: ["Removal undone", "progress"], removed: ["Removed", "closed"] })
+    // A change-log row's reason/detail, from site_info place_log.
+    function placeDetail(c) {
+        var reason = (c.reason || "").replace(/[.\s]+$/, "")
+        if (c.kind === "renamed") return "from “" + c.from + "” to “" + c.to + "”"
+        if (c.kind === "removed") return (reason ? reason + " " : "") + "(started by " + who(c.by, c.by_name) + " on " + when(c.since, "d MMM") + ")"
+        var pending = c.kind === "removal_started" && locations.some(function (l) { return l.code === c.code && l.state === "pending_removal" && l.removes_at === c.ends_at })
+        return pending ? (reason ? reason + ". " : "") + "Hidden on " + when(c.ends_at, "d MMM") + " unless undone" : reason
+    }
+    // One change-log row in plain words: what the search matches and a screen reader says.
     function placeChange(c) {
-        var verb = ({ added: "added", edited: "edited", renamed: "renamed from “" + c.from + "” to “" + c.to + "”", retired: "retired",
-                      restored: "restored", removal_started: "removal started", removal_undone: "removal undone" })[c.kind]
-        var what = c.kind === "removed"
-            ? "removed on " + when(c.ts, "d MMM") + " (started by " + who(c.by, c.by_name) + " on " + when(c.since, "d MMM") + ")"
-            : verb + " by " + who(c.by, c.by_name) + ", " + when(c.ts)
-        var pending = locations.some(function (l) { return l.code === c.code && l.state === "pending_removal" && l.removes_at === c.ends_at })
-        if (c.kind === "removal_started" && pending) what += ". Hidden on " + when(c.ends_at, "d MMM") + " unless undone"
-        return c.code + " " + (c.label || "") + ": " + what + "." + (c.reason ? " Reason: " + c.reason.replace(/[.\s]+$/, "") + "." : "")
+        return [c.code, c.label, placeActions[c.kind][0], "by", who(c.by, c.by_name), when(c.ts), placeDetail(c)].join(" ")
     }
     function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") }
     function place(i) {
@@ -791,6 +796,11 @@ Item {
             Rectangle { anchors { fill: parent; margins: -3 } radius: 4; color: "transparent"; border.width: link.visualFocus ? 2 : 0; border.color: root.t.focus }
         }
     }
+    // A place's "Changes" link; the caller says what a click does.
+    component ChangesLink: LinkButton {
+        property string code
+        text: "Changes"; Accessible.name: "Changes to " + code
+    }
     // A place code that opens that place in History. A button of its own, so a click on it never
     // reaches the card it sits in.
     component PlaceLink: LinkButton {
@@ -906,28 +916,39 @@ Item {
         }
     }
 
-    // History's table: each column's width (Place, Issue and Closing note also share what is left);
-    // the last four columns drop out when the page is narrow, or the issue pane is open beside it.
-    readonly property var histColW: [62, 170, 220, 150, 80, 170, 90, 60]
-    readonly property bool histCompact: compactRows || paneOpen
+    // A table's columns: each one's width (the `fill` ones also share what is left) and the `low` priority
+    // ones that drop out when `compact`. History's drop out on a narrow page or beside the issue pane.
+    readonly property var histTable: ({ w: [62, 170, 220, 150, 80, 170, 90, 60], fill: [1, 2, 5], low: [4, 5, 6, 7], compact: compactRows || paneOpen })
+    readonly property var placeTable: ({ w: [56, 0, 110, 130, 84, 76, 296], fill: [1], low: [2, 4, 5], compact: compactRows })
+    readonly property var logTable: ({ w: [64, 190, 140, 100, 200], fill: [1, 4], low: [3], compact: compactRows })
     // One table cell: a text, then whatever it holds (flag lines, chips). The header row uses it too.
     component HistCell: Column {
         required property int col
+        property var cols: root.histTable
         property string text
         property int format: Text.PlainText
         property bool muted: false      // meta text: smaller, grey
         property color ink: muted ? root.t.muted : root.t.fg
         property bool bold: false
         property int align: Text.AlignLeft
-        Layout.preferredWidth: root.histColW[col]; Layout.fillWidth: col === 1 || col === 2 || col === 5
+        Layout.preferredWidth: cols.w[col]; Layout.fillWidth: cols.fill.indexOf(col) >= 0
         Layout.alignment: Qt.AlignTop
-        visible: col < 4 || !root.histCompact
+        visible: !(cols.compact && cols.low.indexOf(col) >= 0)
         spacing: 2
         Label {
             visible: parent.text !== ""
             width: parent.width; wrapMode: Text.Wrap; text: parent.text; textFormat: parent.format; horizontalAlignment: parent.align
             color: parent.ink; font.pointSize: parent.muted ? root.smallSize : root.baseSize; font.weight: parent.bold ? Font.DemiBold : Font.Normal
         }
+    }
+    component PlaceCell: HistCell { cols: root.placeTable }
+    component LogCell: HistCell { cols: root.logTable }
+    // A table's column titles: a tinted strip over its rows, inset like them.
+    component TableHead: Rectangle {
+        default property alias cells: heads.data
+        Layout.fillWidth: true; implicitHeight: heads.implicitHeight + 16; color: root.t.well
+        Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: root.t.bd }
+        RowLayout { id: heads; x: 16; y: 8; width: parent.width - 32; spacing: 12 }
     }
     // One closed issue as a table row; a click opens the pane. A retired place's row is quieter.
     component HistRow: ItemDelegate {
@@ -1487,10 +1508,23 @@ Item {
         }
     }
 
-    // A row of the change log: plain text under a rule.
-    component LogRow: Note {
-        leftPadding: 16; rightPadding: 16; topPadding: 10; bottomPadding: 10
-        background: Rectangle { color: "transparent"; Rectangle { width: parent.width; height: 1; color: root.t.bd } }
+    // A row of the change log's table, from one site_info place_log entry.
+    component LogRow: Rectangle {
+        id: log
+        required property var modelData
+        readonly property var action: root.placeActions[modelData.kind]
+        Layout.fillWidth: true; implicitHeight: cells.implicitHeight + 20; color: "transparent"
+        Accessible.role: Accessible.StaticText; Accessible.name: root.placeChange(modelData)
+        Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: root.t.bd }
+        RowLayout {
+            id: cells
+            x: 16; y: 10; width: parent.width - 32; spacing: 12
+            LogCell { col: 0; muted: true; text: root.when(log.modelData.ts, "d MMM") }
+            LogCell { col: 1; format: Text.RichText; text: root.mono(log.modelData.code) + " " + root.esc(log.modelData.label || "") }
+            LogCell { col: 2; StatusChip { label: log.action[0]; stage: root.t[log.action[1]] } }
+            LogCell { col: 3; muted: true; text: root.who(log.modelData.by, log.modelData.by_name) }
+            LogCell { col: 4; text: root.placeDetail(log.modelData) }
+        }
     }
 
     // The one multi-line text box: visible frame, scrolls, optional placeholder. Read-only boxes
@@ -1750,7 +1784,7 @@ Item {
                     model: ["All groups"].concat(root.groupNames)
                 }
             }
-            FramedCheck { id: showRetired; text: "Show retired places"; Layout.alignment: Qt.AlignBottom }
+            FramedCheck { id: showRetired; objectName: "showRetired"; text: "Show retired places"; Layout.alignment: Qt.AlignBottom }
         }
         Rectangle { visible: pb.bare; Layout.fillWidth: true; implicitHeight: 1; color: root.t.bd }
         Label {
@@ -1776,7 +1810,7 @@ Item {
                 cacheBuffer: 100000      // keep every row alive: text typed into a row survives scrolling
                 model: pb.places
                 delegate: pb.rowDelegate
-                section.property: "group"
+                section.property: pb.bare ? "" : "group"   // a table has a Group column instead
                 section.delegate: SectionHeader {}
                 header: Loader { width: list.width; sourceComponent: pb.listHeader }
                 ScrollBar.vertical: ScrollBar {}
@@ -2677,6 +2711,7 @@ Item {
                 // also adds, edits, retires and removes places here.
                 TabPage {
                     id: placesPage
+                    objectName: "placesPage"
                     maxWidth: 1040
                     enabled: !root.syncing
                     property bool adding: false    // "Add a place" was pressed: its form shows above the list
@@ -2773,93 +2808,154 @@ Item {
                         }
                         PlaceBrowser {
                             bare: true
-                            maxHeight: 420
+                            maxHeight: 900
+                            listHeader: Component {
+                                TableHead {
+                                    PlaceCell { col: 0; muted: true; bold: true; text: "Code" }
+                                    PlaceCell { col: 1; muted: true; bold: true; text: "Name" }
+                                    PlaceCell { col: 2; muted: true; bold: true; text: "Group" }
+                                    PlaceCell { col: 3; muted: true; bold: true; text: "Status" }
+                                    PlaceCell { col: 4; muted: true; bold: true; align: Text.AlignRight; text: "Open issues" }
+                                    PlaceCell { col: 5; muted: true; bold: true; text: "Log" }
+                                    PlaceCell { col: 6; visible: root.isAdmin; muted: true; bold: true; text: "Actions" }
+                                }
+                            }
                             rowDelegate: Component {
                                 Rectangle {
                                     id: locRow
+                                    objectName: "placeRow-" + modelData.code
                                     required property var modelData
                                     readonly property string st: modelData.state
                                     readonly property bool pending: st === "pending_removal"
                                     // The core refuses a retire while issues are open; disabling is only a courtesy.
                                     readonly property bool blocked: st === "active" && modelData.open_issues > 0
-                                    readonly property bool hasReason: reason.text.trim() !== ""
-                                    readonly property string status: pending ? "hidden on " + root.when(modelData.removes_at, "d MMM") + ": " + modelData.removal_reason
-                                        : st === "retired" ? "retired: " + modelData.retired_reason : "active"
-                                    property bool editing: false
-                                    function change(method) { root.run(method, [modelData.code, reason.text], function () { reason.text = "" }) }
+                                    // What the row's inline panel is doing: "" (nothing), "edit", or the core method a confirm step
+                                    // will run (each asks for a reason, which the core requires and every member can read).
+                                    property string panel
+                                    readonly property var ask: ({
+                                        retire_location: { title: "Retire", ok: "Confirm retire", kind: "danger", effect: " takes no new reports. Its history stays, and you can restore it later." },
+                                        restore_location: { title: "Restore", ok: "Confirm restore", kind: "primary", effect: " takes reports again." },
+                                        remove_location: { title: "Remove", ok: "Confirm remove", kind: "danger", effect: " is hidden after 30 days. You can undo until then." },
+                                        undo_remove_location: { title: "Undo the removal of", ok: "Confirm undo", kind: "primary", effect: " stays in the lists." } })[panel]
+                                    onPanelChanged: { reason.text = ""; if (ask) Qt.callLater(reason.forceActiveFocus) }
                                     width: ListView.view.width
                                     height: stack.implicitHeight + 1
-                                    color: editing ? root.t.accentBg : st === "active" ? root.t.card : root.t.well
+                                    color: panel !== "" ? root.t.accentBg : st === "active" ? root.t.card : root.t.well
                                     Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: root.t.bd }
                                     ColumnLayout {
                                         id: stack
                                         width: parent.width
                                         spacing: 0
-                                        GridLayout {   // name, reason, then three fixed slots: every row's boxes and buttons line up
-                                            Layout.fillWidth: true; Layout.margins: 8; Layout.leftMargin: 16; Layout.rightMargin: 16
-                                            columns: root.compactRows ? 4 : 5; columnSpacing: 8; rowSpacing: 6
-                                            Flow {   // code (its History), name, status and open issues, then its changes
-                                                id: placeLine
-                                                Layout.fillWidth: true; Layout.columnSpan: root.compactRows ? 4 : 1
-                                                spacing: 8
-                                                PlaceLink { code: locRow.modelData.code; height: placeName.height }
+                                        RowLayout {
+                                            Layout.fillWidth: true; Layout.margins: 10; Layout.leftMargin: 16; Layout.rightMargin: 16
+                                            spacing: 12
+                                            PlaceCell { col: 0; PlaceLink { code: locRow.modelData.code } }
+                                            PlaceCell {
+                                                col: 1; text: locRow.modelData.label; ink: locRow.st === "active" ? root.t.fg : root.t.muted
                                                 Label {
-                                                    id: placeName
-                                                    width: Math.min(implicitWidth, placeLine.width)
-                                                    wrapMode: Text.Wrap; textFormat: Text.PlainText
-                                                    color: locRow.st === "active" ? root.t.fg : root.t.muted
-                                                    text: locRow.modelData.label
+                                                    visible: !!locRow.modelData.renamed_from
+                                                    width: parent.width; wrapMode: Text.Wrap; textFormat: Text.PlainText
+                                                    font.pointSize: root.smallSize; color: root.t.muted
+                                                    text: "was “" + locRow.modelData.renamed_from + "”"
+                                                }
+                                            }
+                                            PlaceCell { col: 2; muted: true; text: locRow.modelData.group }
+                                            PlaceCell {
+                                                col: 3
+                                                StatusChip {
+                                                    visible: !locRow.pending
+                                                    label: locRow.st === "retired" ? "Retired" : "Active"
+                                                    stage: locRow.st === "retired" ? root.t.closed : root.t.resolved
                                                 }
                                                 Label {
-                                                    width: Math.min(implicitWidth, placeLine.width); height: placeName.height
-                                                    verticalAlignment: Text.AlignVCenter; wrapMode: Text.Wrap; textFormat: Text.PlainText
+                                                    visible: text !== ""
+                                                    width: parent.width; wrapMode: Text.Wrap; textFormat: Text.PlainText
                                                     color: locRow.pending ? root.t.danger : root.t.muted
                                                     font.pointSize: root.smallSize; font.weight: locRow.pending ? Font.DemiBold : Font.Normal
-                                                    text: [locRow.status].concat(locRow.modelData.open_issues > 0 ? [root.openIssuesText(locRow.modelData.open_issues)] : []).join(" · ")
+                                                    text: locRow.pending ? "hidden on " + root.when(locRow.modelData.removes_at, "d MMM") + ": " + locRow.modelData.removal_reason
+                                                        : locRow.st === "retired" ? locRow.modelData.retired_reason : ""
                                                 }
-                                                LinkButton {
-                                                    height: placeName.height
-                                                    text: "Changes"; Accessible.name: "Changes to " + locRow.modelData.code
-                                                    onClicked: placesPage.showChanges(locRow.modelData.code)
+                                                Flow {   // the Open issues and Log columns, once they have dropped out
+                                                    visible: root.placeTable.compact
+                                                    width: parent.width; spacing: 8
+                                                    Label {
+                                                        visible: locRow.modelData.open_issues > 0
+                                                        font.pointSize: root.smallSize; color: root.t.muted; text: root.openIssuesText(locRow.modelData.open_issues)
+                                                    }
+                                                    ChangesLink { code: locRow.modelData.code; onClicked: placesPage.showChanges(code) }
                                                 }
                                             }
-                                            FramedField {
-                                                id: reason
-                                                visible: root.isAdmin
-                                                Layout.preferredWidth: 180; Layout.fillWidth: root.compactRows
-                                                maximumLength: 500
-                                                enabled: !locRow.blocked
-                                                placeholderText: locRow.blocked ? "close its issues first" : "reason, e.g. duplicate"
-                                                Accessible.name: "Reason for changing " + locRow.modelData.code
+                                            PlaceCell {
+                                                col: 4; align: Text.AlignRight; text: locRow.modelData.open_issues
+                                                ink: locRow.modelData.open_issues > 0 ? root.t.fg : root.t.muted
                                             }
-                                            ActionButton {   // slot 1: Retire / Restore
-                                                visible: root.isAdmin
-                                                shown: !locRow.pending
-                                                Layout.preferredWidth: 92
-                                                text: locRow.st === "retired" ? "Restore" : "Retire"
-                                                allowed: locRow.hasReason && !locRow.blocked
-                                                onClicked: locRow.change(locRow.st === "retired" ? "restore_location" : "retire_location")
+                                            PlaceCell { col: 5; ChangesLink { code: locRow.modelData.code; onClicked: placesPage.showChanges(code) } }
+                                            PlaceCell {   // three fixed slots, so every row's buttons line up
+                                                col: 6; visible: root.isAdmin
+                                                RowLayout {
+                                                    width: parent.width; spacing: 6
+                                                    ActionButton {   // slot 1: Retire / Restore
+                                                        shown: !locRow.pending
+                                                        Layout.preferredWidth: 80
+                                                        text: locRow.st === "retired" ? "Restore" : "Retire"
+                                                        allowed: !locRow.blocked
+                                                        Accessible.name: text + " " + locRow.modelData.code
+                                                        onClicked: locRow.panel = locRow.st === "retired" ? "restore_location" : "retire_location"
+                                                    }
+                                                    ActionButton {   // slot 2: Remove / Undo removal; only for a place no report ever named, the core decides
+                                                        shown: locRow.pending || !locRow.modelData.ever_used
+                                                        Layout.preferredWidth: 124
+                                                        kind: locRow.pending ? "default" : "danger"
+                                                        text: locRow.pending ? "Undo removal" : "Remove"
+                                                        Accessible.name: text + " " + locRow.modelData.code
+                                                        onClicked: locRow.panel = locRow.pending ? "undo_remove_location" : "remove_location"
+                                                    }
+                                                    ActionButton {   // slot 3: Edit
+                                                        shown: !locRow.pending
+                                                        Layout.preferredWidth: 76
+                                                        text: locRow.panel === "edit" ? "Cancel" : "Edit"
+                                                        Accessible.name: (locRow.panel === "edit" ? "Cancel editing " : "Edit ") + locRow.modelData.code
+                                                        onClicked: locRow.panel = locRow.panel === "edit" ? "" : "edit"
+                                                    }
+                                                }
+                                                Label {
+                                                    visible: locRow.blocked
+                                                    width: parent.width; wrapMode: Text.Wrap
+                                                    font.pointSize: root.smallSize; color: root.t.muted; text: "Close its issues first to retire it."
+                                                }
                                             }
-                                            ActionButton {   // slot 2: Remove / Undo removal; only for a place no report ever named, the core decides
-                                                visible: root.isAdmin
-                                                shown: locRow.pending || !locRow.modelData.ever_used
-                                                Layout.preferredWidth: 132
-                                                kind: locRow.pending ? "default" : "danger"
-                                                text: locRow.pending ? "Undo removal" : "Remove"
-                                                allowed: locRow.hasReason
-                                                onClicked: locRow.change(locRow.pending ? "undo_remove_location" : "remove_location")
+                                        }
+                                        ColumnLayout {   // the confirm step: under the name, with the reason the core needs
+                                            visible: !!locRow.ask && root.isAdmin
+                                            Layout.fillWidth: true; Layout.maximumWidth: 560
+                                            Layout.leftMargin: 16 + root.placeTable.w[0] + 12; Layout.rightMargin: 16; Layout.bottomMargin: 12
+                                            spacing: 6
+                                            Label { Layout.fillWidth: true; wrapMode: Text.Wrap; font.weight: Font.DemiBold; textFormat: Text.PlainText
+                                                    text: locRow.ask ? locRow.ask.title + " " + locRow.modelData.code + ", " + locRow.modelData.label + "?" : "" }
+                                            FormRow {
+                                                label: "Reason (required)"; compact: true
+                                                FramedField {
+                                                    id: reason
+                                                    Layout.fillWidth: true; maximumLength: 500
+                                                    placeholderText: "Everyone on the site can read this."
+                                                    Accessible.name: "Reason for changing " + locRow.modelData.code
+                                                    onAccepted: confirm.submit()
+                                                }
                                             }
-                                            ActionButton {   // slot 3: Edit
-                                                visible: root.isAdmin
-                                                shown: !locRow.pending
-                                                Layout.preferredWidth: 84
-                                                text: locRow.editing ? "Cancel" : "Edit"
-                                                Accessible.name: (locRow.editing ? "Cancel editing " : "Edit ") + locRow.modelData.code
-                                                onClicked: locRow.editing = !locRow.editing
+                                            Help { text: locRow.ask ? locRow.modelData.label + locRow.ask.effect : "" }
+                                            RowLayout {
+                                                spacing: 8
+                                                ActionButton {
+                                                    id: confirm
+                                                    text: locRow.ask ? locRow.ask.ok : ""; kind: locRow.ask ? locRow.ask.kind : "default"
+                                                    allowed: reason.text.trim() !== ""
+                                                    onClicked: root.run(locRow.panel, [locRow.modelData.code, reason.text], function () { locRow.panel = "" })
+                                                }
+                                                FramedButton { text: "Cancel"; onClicked: locRow.panel = "" }
                                             }
                                         }
                                         RowLayout {   // the code is the place's identity: only name and group change
-                                            visible: locRow.editing && root.isAdmin
+                                            visible: locRow.panel === "edit" && root.isAdmin
                                             Layout.fillWidth: true
                                             Layout.leftMargin: 16; Layout.rightMargin: 16; Layout.bottomMargin: 12
                                             spacing: 8
@@ -2878,7 +2974,7 @@ Item {
                                                 text: "Save"; kind: "primary"
                                                 allowed: editLabel.text.trim() !== "" && editGroup.text.trim() !== ""
                                                 onClicked: root.run("edit_location", [locRow.modelData.code, editLabel.text, editGroup.text],
-                                                                    function () { locRow.editing = false })
+                                                                    function () { locRow.panel = "" })
                                             }
                                         }
                                     }
@@ -2920,12 +3016,17 @@ Item {
                             text: "Search by place code or name, a person, an action or a reason."
                             FramedButton { text: "Clear"; Accessible.name: "Clear the change log search"; onClicked: logSearch.text = "" }
                         }
+                        TableHead {
+                            visible: placesPage.logMatches.length > 0
+                            LogCell { col: 0; muted: true; bold: true; text: "When" }
+                            LogCell { col: 1; muted: true; bold: true; text: "Place" }
+                            LogCell { col: 2; muted: true; bold: true; text: "Action" }
+                            LogCell { col: 3; muted: true; bold: true; text: "By" }
+                            LogCell { col: 4; muted: true; bold: true; text: "Reason / detail" }
+                        }
                         Repeater {
                             model: placesPage.fullLog || placesPage.query ? placesPage.logMatches : root.placeLog.slice(0, 20)
-                            delegate: LogRow {
-                                required property var modelData
-                                text: root.placeChange(modelData)
-                            }
+                            delegate: LogRow {}
                         }
                         MoreToggle {
                             visible: !placesPage.query && root.placeLog.length > 20
@@ -3247,38 +3348,33 @@ Item {
                             x: 1; y: 1; width: parent.width - 2; height: contentHeight
                             interactive: false
                             model: hist.rows
-                            header: Rectangle {   // the column titles; only Closed sorts
-                                width: histList.width; implicitHeight: heads.implicitHeight + 16; color: root.t.well
-                                Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: root.t.bd }
-                                RowLayout {
-                                    id: heads
-                                    x: 16; y: 8; width: parent.width - 32; spacing: 12
-                                    HistCell {
-                                        col: 0
-                                        AbstractButton {
-                                            id: sort
-                                            text: "Closed " + (hist.oldestFirst ? "▲" : "▼")
-                                            focusPolicy: Qt.StrongFocus
-                                            Accessible.name: "Sort by closed date, " + (hist.oldestFirst ? "oldest" : "newest") + " first"
-                                            onClicked: hist.oldestFirst = !hist.oldestFirst
-                                            Keys.onReturnPressed: clicked()
-                                            Keys.onEnterPressed: clicked()
-                                            HoverHandler { cursorShape: Qt.PointingHandCursor }
-                                            contentItem: Label {
-                                                text: sort.text; font.pointSize: root.smallSize; font.weight: Font.DemiBold
-                                                color: sort.hovered ? root.t.fg : root.t.muted
-                                            }
-                                            background: Rectangle { anchors { fill: parent; margins: -3 } radius: 4; color: "transparent"; border.width: sort.visualFocus ? 2 : 0; border.color: root.t.focus }
+                            header: TableHead {   // the column titles; only Closed sorts
+                                width: histList.width
+                                HistCell {
+                                    col: 0
+                                    AbstractButton {
+                                        id: sort
+                                        text: "Closed " + (hist.oldestFirst ? "▲" : "▼")
+                                        focusPolicy: Qt.StrongFocus
+                                        Accessible.name: "Sort by closed date, " + (hist.oldestFirst ? "oldest" : "newest") + " first"
+                                        onClicked: hist.oldestFirst = !hist.oldestFirst
+                                        Keys.onReturnPressed: clicked()
+                                        Keys.onEnterPressed: clicked()
+                                        HoverHandler { cursorShape: Qt.PointingHandCursor }
+                                        contentItem: Label {
+                                            text: sort.text; font.pointSize: root.smallSize; font.weight: Font.DemiBold
+                                            color: sort.hovered ? root.t.fg : root.t.muted
                                         }
+                                        background: Rectangle { anchors { fill: parent; margins: -3 } radius: 4; color: "transparent"; border.width: sort.visualFocus ? 2 : 0; border.color: root.t.focus }
                                     }
-                                    HistCell { col: 1; muted: true; bold: true; text: "Place" }
-                                    HistCell { col: 2; muted: true; bold: true; text: "Issue" }
-                                    HistCell { col: 3; muted: true; bold: true; text: "Status" }
-                                    HistCell { col: 4; muted: true; bold: true; text: "Category" }
-                                    HistCell { col: 5; muted: true; bold: true; text: "Closing note" }
-                                    HistCell { col: 6; muted: true; bold: true; text: "Reported by" }
-                                    HistCell { col: 7; muted: true; bold: true; align: Text.AlignRight; text: "Took" }
                                 }
+                                HistCell { col: 1; muted: true; bold: true; text: "Place" }
+                                HistCell { col: 2; muted: true; bold: true; text: "Issue" }
+                                HistCell { col: 3; muted: true; bold: true; text: "Status" }
+                                HistCell { col: 4; muted: true; bold: true; text: "Category" }
+                                HistCell { col: 5; muted: true; bold: true; text: "Closing note" }
+                                HistCell { col: 6; muted: true; bold: true; text: "Reported by" }
+                                HistCell { col: 7; muted: true; bold: true; align: Text.AlignRight; text: "Took" }
                             }
                             section.property: "month"
                             section.delegate: SectionHeader { aside: hist.monthAside(section) }

@@ -18,6 +18,8 @@ Window {
     // Places with its change log opened and scrolled to (`log`): as the admin, then searched (a third
     // item, `search`) by a resident for an action word, and by a steward for something no row has.
     readonly property var logJobs: [["admin", "places"], ["resident", "places", "retired"], ["steward", "places", "tank lid"]]
+    // Places as the admin with retired places shown and a confirm step open on a row (its code, the core method).
+    readonly property var confirmJobs: [["W2", "retire_location"], ["L1", "undo_remove_location"]]
     readonly property var revokeJobs: [["removed", "board"], ["removed", "profile"], ["admin", "board", true], ["admin", "issue", true], ["admin", "people", true]]
 
     QtObject {
@@ -171,6 +173,7 @@ Window {
         logJobs.forEach(function (r) {
             [800, 1400].forEach(function (w) { out.push({ state: r[0], width: w, page: r[1], log: true, search: r[2] || "" }) })
         })
+        ;[800, 1400].forEach(function (w) { out.push({ state: "admin", width: w, page: "places", rows: true }) })
         return out
     }
     property int job: -1
@@ -201,6 +204,8 @@ Window {
         if (log) log.open = !!j.log
         var search = find(v, "logSearch")
         if (search) search.text = j.search || ""
+        var rows = find(v, "placesPage")
+        if (rows) find(rows, "showRetired").checked = !!j.rows
         var members = find(v, "memberList")
         if (members && j.former) members.open = true   // the admin's revoke boxes, once r2 was removed
         focusSink.forceActiveFocus()
@@ -210,13 +215,22 @@ Window {
         id: shot; interval: 250
         onTriggered: {
             var j = win.jobs[win.job]
+            if (j.rows && !j.armed) {   // the rows exist now: open their confirm steps, then wait for the layout
+                j.armed = true
+                win.confirmJobs.forEach(function (c) { win.find(view.item, "placeRow-" + c[0]).panel = c[1] })
+                return shot.restart()
+            }
+            if (j.rows) {   // scrolled to the end of the page: the last row's confirm step
+                var page = win.find(view.item, "placesPage").contentItem
+                page.contentY = page.contentHeight - page.height
+            }
             if (j.log) {   // scroll the page so the change log's header is at the top
                 var log = win.find(view.item, "changeLog"), f = log.parent
                 while (f.contentY === undefined) f = f.parent
                 f.contentY = Math.min(log.mapToItem(f.contentItem, 0, 0).y - 16, f.contentHeight - f.height)
             }
             view.grabToImage(function (r) {
-                r.saveToFile(win.args[1] + "/" + j.state + "-" + j.page + (j.anchor ? "-anchor-" + j.anchor : "") + (j.former ? "-former" : "") + (j.log ? "-log" : "") + (j.search ? "-search" : "") + "-" + j.width + ".png")
+                r.saveToFile(win.args[1] + "/" + j.state + "-" + j.page + (j.anchor ? "-anchor-" + j.anchor : "") + (j.former ? "-former" : "") + (j.log ? "-log" : "") + (j.rows ? "-rows" : "") + (j.search ? "-search" : "") + "-" + j.width + ".png")
                 win.next()
             })
         }
