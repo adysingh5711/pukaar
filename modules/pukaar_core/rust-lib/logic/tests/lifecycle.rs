@@ -325,6 +325,49 @@ fn anchored_checkpoint_shows_in_timeline() {
 }
 
 #[test]
+fn site_info_reports_the_latest_anchor() {
+    let mut s = Site::new();
+    let info =
+        |n: &Node| -> serde_json::Value { serde_json::from_str(&n.site_info_json(0)).unwrap() };
+    assert!(
+        info(&s.steward)["last_anchor"].is_null(),
+        "nothing anchored yet"
+    );
+    report(&mut s.asha);
+    s.sync();
+    let cp: serde_json::Value = serde_json::from_str(&s.ravi.checkpoint_json()).unwrap();
+    s.ravi
+        .record_anchor(&cp["heads"].to_string(), "pda:Public/old", 30)
+        .unwrap();
+    s.ravi
+        .record_anchor(&cp["heads"].to_string(), "pda:Public/abc", 50)
+        .unwrap();
+    s.sync();
+    let last = &info(&s.steward)["last_anchor"];
+    assert_eq!(last["tx"], "pda:Public/abc", "newest by ts");
+    assert_eq!(last["ts"], 50);
+    assert_eq!(last["by"], hex::encode(s.ravi.me()));
+    assert!(last["by_name"].is_null(), "ravi is a pseudonym");
+    assert_eq!(last["events_covered"], cp["n_events"]);
+    assert_eq!(last["reproducible"], true);
+    // the two checkpoint events themselves are newer than what they cover
+    let total = info(&s.steward)["events"].as_u64().unwrap();
+    assert_eq!(total - cp["n_events"].as_u64().unwrap(), 2);
+
+    let ghost = format!("[[\"{}\", 99]]", hex::encode(s.ravi.me()));
+    s.ravi
+        .record_anchor(&ghost, "pda:Public/ghost", 60)
+        .unwrap();
+    s.sync();
+    let last = &info(&s.steward)["last_anchor"];
+    assert_eq!(last["tx"], "pda:Public/ghost");
+    assert_eq!(
+        last["reproducible"], false,
+        "heads name an event nobody has"
+    );
+}
+
+#[test]
 fn site_info_lists_members_and_map() {
     let s = Site::new();
     let info: serde_json::Value = serde_json::from_str(&s.admin.site_info_json(0)).unwrap();

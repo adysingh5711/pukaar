@@ -1,7 +1,7 @@
 //! One participant: their key plus their replica of the site. Everything the
 //! Logos module exposes is a thin wrapper over this, so it's all testable with `cargo test`.
 
-use crate::checkpoint::{checkpoint_now, root_for};
+use crate::checkpoint::{checkpoint_now, n_events, root_for};
 use crate::event::{
     decode, sign, Body, DecodeError, Event, Id, Key, Location, Unsigned, MAX_EVENT_BYTES, MAX_TEXT,
     OTHER_LOCATION, VERSION, ZERO,
@@ -183,10 +183,10 @@ impl Node {
     /// Gives the tx and who recorded it (any member can; only the root is checked here).
     #[must_use]
     pub fn anchored<'s>(&self, s: &'s State, author: &Key, seq: u64) -> Option<(&'s str, Key)> {
-        s.checkpoints.iter().find_map(|(by, heads, tx)| {
-            let covers = heads.iter().any(|(a, h)| a == author && *h >= seq);
-            (covers && !tx.is_empty() && root_for(&self.store, heads).is_some())
-                .then_some((tx.as_str(), *by))
+        s.checkpoints.iter().find_map(|c| {
+            let covers = c.heads.iter().any(|(a, h)| a == author && *h >= seq);
+            (covers && !c.lez_tx.is_empty() && root_for(&self.store, &c.heads).is_some())
+                .then_some((c.lez_tx.as_str(), c.by))
         })
     }
 
@@ -230,6 +230,15 @@ impl Node {
             "events": self.store.events.len(),
             "forks": self.store.fork_count(),
             "forked_authors": self.store.forked_authors().iter().map(hex::encode).collect::<Vec<_>>(),
+            // newest by the recorder's clock; on a tie, max_by_key keeps the later-applied one
+            "last_anchor": s.checkpoints.iter().max_by_key(|c| c.ts).map(|c| json!({
+                "ts": c.ts,
+                "tx": c.lez_tx,
+                "by": hex::encode(c.by),
+                "by_name": s.names.get(&c.by),
+                "events_covered": n_events(&c.heads),
+                "reproducible": root_for(&self.store, &c.heads).is_some(),
+            })),
         })
         .to_string()
     }

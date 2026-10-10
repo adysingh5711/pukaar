@@ -43,6 +43,12 @@ pub fn root_for(store: &Store, heads: &[(Key, u64)]) -> Option<[u8; 32]> {
     leaves.map(merkle_root)
 }
 
+/// How many events the heads cover: seqs start at 0, so each author's head counts seq + 1.
+#[must_use]
+pub fn n_events(heads: &[(Key, u64)]) -> u64 {
+    heads.iter().map(|(_, s)| s + 1).sum()
+}
+
 pub struct Checkpoint {
     pub heads: Vec<(Key, u64)>,
     pub heads_root: [u8; 32],
@@ -58,7 +64,7 @@ fn cp_message(site: &Id, root: &[u8; 32], n_events: u64) -> Vec<u8> {
 pub fn checkpoint_now(store: &Store, key: &SigningKey) -> Checkpoint {
     let heads = store.head_seqs();
     let heads_root = root_for(store, &heads).expect("own heads are always present");
-    let n_events = heads.iter().map(|(_, s)| s + 1).sum();
+    let n_events = n_events(&heads);
     let sig = key
         .sign(&cp_message(&store.site, &heads_root, n_events))
         .to_bytes();

@@ -75,8 +75,15 @@ pub struct Config {
     pub max_open_per_author: u32,
 }
 
-/// (who recorded it, heads it covers, LEZ tx)
-pub type CheckpointRecord = (Key, Vec<(Key, u64)>, String);
+/// A recorded anchor: who recorded it, the heads it covers, the claimed LEZ tx, and when
+/// (the recorder's clock, `Unsigned::ts`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CheckpointRecord {
+    pub by: Key,
+    pub heads: Vec<(Key, u64)>,
+    pub lez_tx: String,
+    pub ts: u64,
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct State {
@@ -494,7 +501,12 @@ fn apply(s: &mut State, e: &Event) -> Result<(), String> {
             Ok(())
         }
         Checkpoint { heads, lez_tx } => {
-            s.checkpoints.push((a, heads.clone(), lez_tx.clone()));
+            s.checkpoints.push(CheckpointRecord {
+                by: a,
+                heads: heads.clone(),
+                lez_tx: lez_tx.clone(),
+                ts: e.u.ts,
+            });
             Ok(())
         }
         MarkDuplicate { issue, of } => {
