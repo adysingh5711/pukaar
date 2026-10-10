@@ -6,13 +6,13 @@
 
 [![ci](https://github.com/adysingh5711/pukaar/actions/workflows/ci.yml/badge.svg)](https://github.com/adysingh5711/pukaar/actions/workflows/ci.yml)
 ![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)
-![status](https://img.shields.io/badge/status-pilot--ready%20v0.1-blue)
+![status](https://img.shields.io/badge/status-pilot--ready%20v0.2.3-blue)
 
 | | |
 |---|---|
 | Demo video | To be added in later version |
 | Screenshots | [See the walkthrough](#screenshots) |
-| Latest release | [v0.2.2](https://github.com/adysingh5711/pukaar/releases/tag/v0.2.2): signed `.lgx` packages for Logos Basecamp 0.3.1 |
+| Latest release | [v0.2.3](https://github.com/adysingh5711/pukaar/releases/tag/v0.2.3): signed `.lgx` packages for Logos Basecamp 0.3.1 |
 
 ---
 
@@ -69,66 +69,74 @@ Pukaar takes that power away from the operator:
 
 ## Screenshots
 
-Pukaar running in Logos Basecamp, in the order you would meet the screens.
+Pukaar's own screens in the order you would meet them, rendered offscreen with sample data by `scripts/ui-shots.sh` (light theme, 1400 px wide). They are not Basecamp window captures: in Basecamp the same view sits inside Basecamp's window.
 
 ### The board
 
-![Pukaar board with four columns of fault reports and overdue warnings](public/images/01-board.png)
+![Pukaar board with four columns of fault reports, overdue warnings and the admin's sidebar](public/images/01-board.png)
 
-Pukaar's board for the Dhun site, with four columns: reported, in progress, resolved and closed without fix. Cards that no steward has acknowledged within 12 h, or that are past their target, are marked in red, so a stalled report is visible to everyone. The "Fix claimed, awaiting confirmation" card is still in progress, not resolved.
+The board for a sample site, seen by the admin, with four columns: reported, in progress, resolved and closed without fix. Cards that no steward acknowledged within 24 h, or that are past their target, are marked in red, so a stalled report is visible to everyone. The "Fix claimed, awaiting confirmation" card is still in progress, not resolved. The sidebar comes from the role: Board, Report and History for everyone, and for the admin also Members (with a count of people waiting) and Site. Its foot shows the delivery status, the Proof line and the "you" block that opens Profile.
 
 ### Why a report isn't closed yet
 
-![Issue detail showing the three steps to closure and the report timeline](public/images/02-why-not-closed-yet.png)
+![Issue pane on a new report with the three steps to closure and the steward actions](public/images/02-why-not-closed-yet.png)
 
-An open report with its timeline and a "Why it isn't closed yet" card. The card lists three steps: a steward acknowledges, a steward claims a fix and says what was done, then the reporter or two other residents confirm. A fix claim isn't resolution, and the screen says who still has to act. The timeline lists every event, and the note field asks what was seen, done or why.
+A new report, opened by a steward. The "Why it isn't closed yet" card lists three steps: a steward acknowledges, a steward claims a fix and says what was done, then the reporter or two other residents confirm. The actions sit right under the card. Won't fix and Mark duplicate are under More, and each asks for confirmation first. A box under the buttons says why the disabled ones are not available yet. The timeline comes last.
 
-### How a report was closed
+### Confirm or reopen a fix
 
-![Resolved issue showing who confirmed the fix, with a rejected fix claim and a reopen in the timeline](public/images/03-how-it-was-closed.png)
+![Issue pane on a claimed fix, seen by the reporter, with Confirm and a separate reopen form](public/images/03-confirm-the-fix.png)
 
-A resolved report with a "How it was closed" card and its full timeline. The card says who confirmed the fix and that the report was reopened once before the fix held. The timeline keeps a rejected fix claim ("a fix claim needs a note: what was done") marked as rejected rather than hiding it.
+The same pane for the reporter, on a fix a steward has claimed. A claim is not a closure: the card says who still has to act, the reporter or two other residents, and never the person who claimed the fix. "Still broken? Reopen" has its own reason box, apart from the note for comments.
 
 ### History
 
-![History screen listing resolved and closed issues with filters](public/images/04-history.png)
+![History page listing resolved and closed issues by month, with filters](public/images/04-history.png)
 
-Every resolved and closed issue, with search and filters for place, status and time. The board shows resolved issues for 14 days and closed ones for 30. After that they live here, and the page says nothing is deleted and any issue can be reopened.
+Every resolved and closed issue, with search and filters for place, status and time, grouped by month with how many were fixed within target. The board shows resolved issues for 14 days and closed ones for 30. After that they live here. Nothing is deleted, and any issue can be reopened. The link at the top opens Proof.
 
 ### Report a fault
 
 ![Report form with category, description and a searchable grouped list of places](public/images/05-report-a-fault.png)
 
-The report form: a category, a line or two of description, and a place. Anyone on the site can file a report in a few fields. Places come from the site's own grouped list, or "Other" with a description.
+The report form: a category, a line or two of description, and a place from the site's grouped, searchable list, or "Other" with a description. Next to the Report button, the form says what is still missing.
+
+### Profile
+
+![Profile page with name, identity backup, invite, my reports and leave](public/images/06-profile.png)
+
+The "you" block at the foot of the sidebar opens Profile: your code and role, your display name, a password-sealed backup of your identity, the site id to invite someone, a count of your reports that opens them on the Board, and "Leave this site" with a confirm step.
 
 ### Members
 
-![Members screen with approvals, member roles and an add-a-location form](public/images/06-members.png)
+![Members page with one person waiting for approval, the member list and the removed list](public/images/07-members.png)
 
-Approve people, manage roles and the list of places. A banner reminds the admin to grant a role only after the person reads their fingerprint aloud. Each member shows a short id and a role (admin, steward or resident). The admin can revoke a member with a reason, but not themselves. The form below adds a location.
+Admins only. "Waiting for approval" lists people who asked to join, with a reminder to grant a role only after the person reads their fingerprint aloud. "Members" lists everyone's role, and the admin can revoke a member (not themselves) with a reason, after a confirm step. "Removed" (collapsed here) says who removed each person, when and why, and offers "Grant again".
 
-### Back up your identity
+### Site and the change log
 
-![Identity backup form with a warning and two password fields](public/images/07-back-up-identity.png)
+![Site page with the change log expanded, listing every place action with who, when and why](public/images/08-site-change-log.png)
 
-Export the identity key on this device, protected by a password. Your identity is a key on this device, and a backup lets you continue as the same person after a reinstall. The warning says anyone with the backup and the password can act as you, and the same identity must never run on two devices at once.
+Admins only. Site holds the places list with an "Add a place" form, and the change log, expanded here. The log lists every place action (added, edited, renamed, retired, restored, removal started, removal undone and removed) with who did it, when and why.
 
-### Anchor
+### Proof of history
 
-![Anchor screen with three steps: compute the checkpoint, run the command, record the anchor](public/images/08-anchor.png)
+![Proof page with the last anchor status and the three anchor steps](public/images/09-proof.png)
 
-Write a fingerprint of everyone's history to the Logos blockchain (LEZ). Three steps: compute the checkpoint, run the generated command, then record the anchor reference it prints. Once anchored, no one, not even the admin, can quietly rewrite past events, and anyone can recompute the fingerprint from their own copy and compare.
+The Proof line in the sidebar opens this page, and History and Site link to it. The status block reports the newest anchor recorded in the site's history: when it was recorded and how many events it covers. It turns amber when the site was never anchored or the last anchor is older than 24 hours, and red when this device cannot rebuild the anchored root. It never says "verified", because the app does not read LEZ. Any member can anchor in three steps: compute the checkpoint, run the printed `spel` command, and record the reference it prints.
 
 ## Features
 
 - **Report** what's wrong and where: a category, one line, and a place picked from the site's grouped, searchable location list (or "Other" with a description).
-- **Staff workflow:** acknowledge, post updates with the next step and an ETA, claim a fix (a note is required), close as won't-fix, or mark a duplicate. Overdue and waiting-for-48 h cards are highlighted.
+- **Staff workflow:** acknowledge, post updates with the next step and an ETA, claim a fix (a note is required), close as won't-fix, or mark a duplicate. Overdue and waiting-for-48 h cards are highlighted. Actions that cannot be undone ask for confirmation first, and a disabled button says why it is disabled.
 - **Two-key closure:** only the reporter, or two residents who aren't the claimant, can confirm a fix. The reporter can always reopen.
-- **Members:** join with the site id; the admin approves each person after hearing their fingerprint read aloud. Staff are always named by the admin; the admin may name a resident too, and residents can change that name or stay pseudonymous. The admin can revoke a role, with a reason.
+- **Members:** join with the site id; the admin approves each person after hearing their fingerprint read aloud. Staff are always named by the admin; the admin may name a resident too, and residents can change that name or stay pseudonymous. The admin can revoke a role, with a reason. Members keeps a Removed list that says who removed each person, when and why, with "Grant again". The removed person's app says who removed them and why, and their past reports and timeline entries are marked "former member".
+- **Navigation by role:** Board, Report and History for everyone. Admins also see Members, with a count of people waiting, and Site. A member who waits for approval sees one banner in place of controls they cannot use yet.
 - **Site setup:** the admin creates a site from a guided form: site name, their own name, editable categories, and a places table that starts empty (or from the Dhun sample). Service rules (acknowledge and fix targets in hours, open reports per person) are plain fields with explanations.
-- **Locations:** the admin adds places and can **edit** a place's name or group (its code never changes; old issues show "renamed from …"). A place in use can be **retired** (blocked while it has open issues), and a retired place offers "Report as Other at this spot". A place nobody ever reported can be **removed**: it shows as pending for 30 days with Undo, then is hidden from every list and listed in the admin's change log. A duplicate code is refused.
-- **Identity backup:** export a password-sealed copy of your identity (Argon2id + XChaCha20-Poly1305) and restore it on a new install. A restored identity waits for its own history before it can publish, so it can't fork its own chain.
-- **Anchor:** compute a checkpoint of everyone's history and anchor it on LEZ with the printed `spel` command. Covered events show who recorded the anchor.
+- **Places (Site page, admins only):** the admin adds places and can **edit** a place's name or group (its code never changes; old issues show "renamed from …"). A place in use can be **retired** (blocked while it has open issues), and a retired place offers "Report as Other at this spot". A place nobody ever reported can be **removed**: it shows as pending for 30 days with Undo, then is hidden from every list. The change log on the Site page lists every place action with who did it, when and why. A duplicate code is refused.
+- **Profile:** the "you" block in the sidebar opens a page with your name, your identity backup, the site id to invite someone, your reports and "Leave this site".
+- **Identity backup:** on the Profile page, export a password-sealed copy of your identity (Argon2id + XChaCha20-Poly1305) and restore it on a new install. A restored identity waits for its own history before it can publish, so it can't fork its own chain.
+- **Proof of history:** compute a checkpoint of everyone's history and anchor it on LEZ with the printed `spel` command. Covered events show who recorded the anchor. The Proof page shows when the last anchor was recorded and what it covers, and warns when there is none, when it is older than 24 hours, or when this device cannot rebuild its root. The app does not read LEZ itself, so it never says an anchor is verified (see [Verifying an anchor yourself](#verifying-an-anchor-yourself)).
 - **Nothing is ever deleted:** rejected actions are kept and shown. "Removed" places are only hidden; their signed events stay in everyone's log. A forked chain is flagged, and every replica settles on the same branch.
 - **One identity, one device:** your key is your identity (there are no accounts). Run it on one device at a time; a restored identity waits for its own history before it can act.
 
@@ -136,10 +144,10 @@ Write a fingerprint of everyone's history to the Logos blockchain (LEZ). Three s
 
 | Component | Path | Status |
 |---|---|---|
-| Rules engine (`pukaar_logic`): events, chains, reducer, sync, checkpoints, persistence, identity backup | `modules/pukaar_core/rust-lib/logic/` | **Done.** 116 tests, clippy `-D warnings` clean, fuzzed in CI |
+| Rules engine (`pukaar_logic`): events, chains, reducer, sync, checkpoints, persistence, identity backup | `modules/pukaar_core/rust-lib/logic/` | **Done.** 121 tests, clippy `-D warnings` clean, fuzzed in CI |
 | Checkpoint registry (`pukaar_registry`), a SPEL program on LEZ | `programs/pukaar_registry/` | **Done.** Deployed and anchored on localnet ([record](programs/pukaar_registry/ANCHOR.md)) |
 | Logos core module (`pukaar_core`), a Rust cdylib plus Delivery glue | `modules/pukaar_core/` | **Done.** Runs in the standalone Logos host and inside Basecamp 0.3.1 |
-| QML UI module (`pukaar_ui`) | `modules/pukaar_ui/` | **Done.** Board, Report, Members, Anchor and Identity tabs |
+| QML UI module (`pukaar_ui`) | `modules/pukaar_ui/` | **Done.** Board, Report, History, Profile and Proof pages, plus Members and Site for admins. Offscreen screenshot harness (`scripts/ui-shots.sh`) |
 | Demo scripts and signed `.lgx` packages for Basecamp 0.3.1 | `scripts/`, [releases](https://github.com/adysingh5711/pukaar/releases) | **Done.** Packages signed with `lgx` (see Security) |
 | LAN relay and offline three-laptop dry run | | To be added in later version |
 
@@ -201,7 +209,7 @@ A one-instruction [SPEL](https://github.com/logos-co/spel) program ([source](pro
 
 ```bash
 cd modules/pukaar_core/rust-lib/logic
-cargo test                                   # 116 tests
+cargo test                                   # 121 tests
 cargo clippy --all-targets -- -D warnings
 cargo +nightly fuzz run decode -- -max_total_time=60   # needs cargo-fuzz
 ```
@@ -249,6 +257,8 @@ spel inspect <RECORD_PDA> --idl idl/pukaar_registry.json --type CheckpointRecord
 
 The `heads_root` and `n_events` it prints must equal the values that your own replica computes for that checkpoint. A mismatch means the anchored history and your history disagree.
 
+The Proof page in the app reports the newest anchor recorded in the site's own history, and whether this device can rebuild its root. It does not read LEZ, so only `spel inspect` confirms what is on chain.
+
 ## Security
 
 **Threat model (summary).**
@@ -273,7 +283,7 @@ The `heads_root` and `n_events` it prints must equal the values that your own re
 | Security audit | To be added in later version |
 | Bug bounty | To be added in later version |
 | Release signing | Packages are signed with `lgx`. Publisher DID: `did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IlpfZkxKcnVWR3UyYnBiR0VNMlhMTElmY2FzdTFycVkycHJZM1Z0cklRR28ifQ`. Verify with `lgx keyring add publisher "<DID>" --dir ./trusted-keys` then `lgx verify <file>.lgx --keyring-dir ./trusted-keys`. The official index ships `trustedSigners: []`, so Basecamp doesn't enforce signatures yet |
-| Key storage at rest | The key file is `0600` in the host's data directory. A password-sealed **backup** is available (Identity tab). Sealing the live key file itself: to be added in later version |
+| Key storage at rest | The key file is `0600` in the host's data directory. A password-sealed **backup** is available (Profile page). Sealing the live key file itself: to be added in later version |
 | Reporting a vulnerability | Open a private [security advisory](https://github.com/adysingh5711/pukaar/security/advisories/new) on this repository |
 
 ## Repository layout
@@ -298,6 +308,8 @@ modules/pukaar_core/
 modules/pukaar_ui/Main.qml  the QML UI (one call funnel, shared components, one colour palette)
 programs/pukaar_registry/  SPEL checkpoint registry (LEZ)
 scripts/                   demo.sh, window.sh, basecamp.sh
+  ui-shots.sh, .qml        offscreen screenshots of every page against fixture data
+THIRD_PARTY_LICENSES       Lucide icon licence
 .github/workflows/ci.yml   tests, clippy, 60 s fuzz smoke run
 ```
 
@@ -308,7 +320,7 @@ scripts/                   demo.sh, window.sh, basecamp.sh
 | Logic | Rust (`ed25519-dalek` 2.1, `postcard` 1.1, `sha2` 0.10, `serde`, `serde_json`, `hex`; `argon2` 0.5 and `chacha20poly1305` 0.10 for the identity backup) |
 | Module packaging | Nix flakes, `logos-module-builder` 0.3.1, portable `.lgx` |
 | Transport | `delivery_module` v0.3.0-rc.2 (Reliable Channels) |
-| UI | Qt 6 QML (Controls Basic) inside Logos Basecamp 0.3.1 |
+| UI | Qt 6 QML (Controls Basic) inside Logos Basecamp 0.3.1, [Lucide](https://lucide.dev) icons |
 | Chain | LEZ, SPEL (`lez-framework`), RISC Zero zkVM, `logos-scaffold` |
 | CI | GitHub Actions: `cargo test`, `clippy -D warnings`, `cargo-fuzz` smoke run |
 
@@ -319,8 +331,9 @@ scripts/                   demo.sh, window.sh, basecamp.sh
 - **v0.2.0:** UI revamp: light and dark themes, a collapsible sidebar, redesigned board, cards and issue pane (with a "Why it isn't closed yet" card), a board history window with a History page, and Hindi user content.
 - **v0.2.1:** fix: calls no longer hang for 20 s when Logos Delivery is unreachable (5 s Delivery timeouts plus a 10 s back-off), and clearer error text when the core does not answer.
 - **v0.2.2:** fix: sync works again (Pukaar turns off Delivery's SDS causal-history wait), moved to the `logos.dev` network, recovery after a Delivery restart, and names an admin gives residents now show on both sides.
-- **L1+:** anchoring from the app's Anchor tab on localnet and a testnet anchor; an "identity active on another device" warning; Heads messages that carry head ids, so anti-entropy also repairs equal-length forks.
-- **L2:** LAN relay for sites without internet, a password-sealed key file, a site-health view (category level only, no per-person ranking), export and verify bundles, evidence photos on Logos Storage (EXIF stripped), UI tests, and a steward guide in Hindi and English.
+- **v0.2.3:** navigation built from the role, a Profile page, an admin Site page with a full place change log, a Proof page with the last-anchor status, issue pane actions above the timeline, confirm steps and reasons for disabled buttons, and revocations that say who removed whom, when and why.
+- **L1+:** anchoring from the app's Proof page on localnet and a testnet anchor; an "identity active on another device" warning; Heads messages that carry head ids, so anti-entropy also repairs equal-length forks.
+- **L2:** LAN relay for sites without internet, a password-sealed key file, a site-health view (category level only, no per-person ranking), export and verify bundles, evidence photos on Logos Storage (EXIF stripped), UI tests beyond the screenshot harness, and a steward guide in Hindi and English.
 - **L3:** an anonymous reporting lane with an RLN rate limit, a phone path, and 2-of-3 admin grants.
 
 Dates and milestones beyond L1: to be added in later version.
