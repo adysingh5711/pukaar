@@ -699,13 +699,14 @@ fn apply(s: &mut State, e: &Event, seals: &BTreeMap<Id, u64>) -> Result<(), Stri
                 "a notice is for an admin who is not a super admin",
             )?;
             require(!reason.trim().is_empty(), "a notice needs a reason")?;
-            require(*deadline >= e.u.ts, "the deadline has already passed")?;
+            // A deadline in the past means "now".
+            let deadline = (*deadline).max(e.u.ts);
             let n = Notice {
                 id: e.id,
                 by: a,
                 ts: e.u.ts,
                 outcome: *outcome,
-                deadline: *deadline,
+                deadline,
                 reason: reason.clone(),
                 sealed: None,
             };

@@ -386,11 +386,6 @@ fn only_a_super_admin_gives_a_notice_and_only_to_a_plain_admin() {
         .admin_notice(&hexk(&s.asha), "remove", DEADLINE, "x", 3)
         .unwrap();
     assert!(rejected(&s.admin, &on_resident).is_some());
-    let past = s
-        .admin
-        .admin_notice(&hexk(&s.steward), "remove", 2, "x", 3)
-        .unwrap();
-    assert!(rejected(&s.admin, &past).is_some());
     let d = hexk(&s.steward);
     assert!(s
         .admin
@@ -674,4 +669,19 @@ fn end_now_is_sealed_by_the_super_admin_who_ended_it() {
     let n = json(&s.admin.site_info_json(21))["notices"][0].clone();
     assert_eq!(n["sealed_by"], hexk(&s.admin));
     assert_eq!(n["sealed_ts"], 20);
+}
+
+#[test]
+fn a_past_notice_deadline_means_now() {
+    let mut s = deputy_site();
+    let e = s
+        .admin
+        .admin_notice(&hexk(&s.steward), "steward", 1, "stepping back", 30)
+        .unwrap();
+    assert_eq!(rejected(&s.admin, &e), None);
+    s.sync();
+    let d = s.steward.me();
+    assert_eq!(s.admin.state().notices[&d].deadline, 30);
+    let after = add_place(&mut s.steward, "L-1", 31);
+    assert!(rejected(&s.steward, &after).is_some());
 }

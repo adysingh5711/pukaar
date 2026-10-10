@@ -2800,17 +2800,17 @@ Item {
                                     property int span: 3             // index into `days`, or 4: the custom date and time
                                     readonly property var days: [0, 1, 7, 30]
                                     readonly property real deadline: end(root.now)
-                                    // ponytail: "Now" is a minute ahead, so the core's later clock still sees a deadline to come.
                                     function end(t) {
-                                        return span < 4 ? Math.floor(t) + Math.max(60, days[span] * 86400)
+                                        return span < 4 ? Math.floor(t) + days[span] * 86400
                                                         : Date.fromLocaleString(Qt.locale(), custom.text.trim(), "yyyy-MM-dd HH:mm").getTime() / 1000
                                     }
                                     visible: memberRow.panel === "change" && root.isSuper
                                     Layout.leftMargin: 16 + 92 + 12
                                     title: "Change admin: " + memberRow.person
                                     reasonName: "Reason for changing " + memberRow.person
-                                    ready: deadline > Date.now() / 1000
+                                    ready: span < 4 || deadline > Date.now() / 1000
                                     effect: !ready ? "Write a date and time to come, as 2026-11-11 14:00."
+                                        : span === 0 ? "They " + (outcome ? "are removed from the site" : "become a steward") + " now. Everyone can see the reason."
                                         : "They keep admin powers until " + root.when(deadline) + ". At that time they automatically "
                                           + (outcome ? "are removed from the site" : "become a steward")
                                           + ". Actions they sign after that time are rejected. Everyone can see the reason."
