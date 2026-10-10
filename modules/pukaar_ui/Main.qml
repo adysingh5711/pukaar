@@ -312,7 +312,7 @@ Item {
     // place() without its code, which the card sets apart; "Other" shows its landmark bare.
     function placeName(i) { return i.location === "other" ? (i.landmark || "") : place(i).substr(i.location.length + 1) }
     function plural(n, word) { return n + " " + word + (n === 1 ? "" : "s") }
-    // The trust status the sidebar, History, Places and Proof show: conflicts are the forks the core found.
+    // The conflicts count Integrity shows (History's strip too, once there are any): conflicts are the forks the core found.
     readonly property string conflicts: info.forks > 0 ? plural(info.forks, "conflict") : "no conflicts"
     // The newest anchor (site_info last_anchor, null = never). The app never reads LEZ: the tx is what
     // its recorder claimed, so the UI says "recorded", never "verified"; only the root is checked here.
@@ -321,9 +321,6 @@ Item {
     // One state at a time, worst first: "mismatch", "never", "stale", or "" (recent and reproducible).
     readonly property string anchorState: !lastAnchor ? "never" : !lastAnchor.reproducible ? "mismatch"
         : now - lastAnchor.ts > anchorStaleHours * 3600 ? "stale" : ""
-    // The sidebar's addition to "Proof · no conflicts": nothing while the anchor is recent and matches.
-    readonly property string anchorNote: ({ never: "not anchored yet", mismatch: "anchor mismatch",
-        stale: lastAnchor ? "anchor " + dur(hoursSince(lastAnchor.ts)) + " old" : "", "": "" })[anchorState]
     // The anchor's own record is always newer than the heads it covers: it is not counted.
     function newerEvents(a) { return Math.max(0, (info.events || 0) - a.events_covered - 1) }
     function anchorSummary(a) {
@@ -671,19 +668,16 @@ Item {
         background: Rectangle { radius: 6; color: root.t.tipBg; border.color: root.t.tipBd }
     }
     // One sidebar entry: a fill, bold text and an accent icon when current (no bar). `count` > 0
-    // adds a pill (people waiting); `subline` a small second line in `sublineInk` (the active ink when current, for
-    // contrast on the fill; on the rail, the icon takes that colour); `compact` is the icon-only rail, where the tooltip carries the label.
+    // adds a pill (people waiting); `compact` is the icon-only rail, where the tooltip carries the label.
     component NavItem: AbstractButton {
         id: nav
         property string glyph
-        property string subline
-        property color sublineInk
         property bool current: false
         property bool compact: false
         property int count: 0
         readonly property string waiting: count > 0 ? ", " + count + " waiting" : ""
         readonly property color ink: current ? root.t.sbActFg : root.t.sbFg
-        readonly property color iconInk: compact && subline ? sublineInk : current ? root.t.sbActIcon : root.t.sbIcon
+        readonly property color iconInk: current ? root.t.sbActIcon : root.t.sbIcon
         Layout.fillWidth: true
         implicitHeight: Math.max(44, contentItem.implicitHeight + topPadding + bottomPadding)
         leftPadding: compact ? 6 : 12; rightPadding: leftPadding; topPadding: 6; bottomPadding: 6
@@ -691,7 +685,7 @@ Item {
         focusPolicy: Qt.StrongFocus
         Accessible.name: text + waiting
         HoverHandler { cursorShape: Qt.PointingHandCursor }
-        SideTip { text: nav.text + nav.waiting + (nav.subline ? ", " + nav.subline : ""); visible: nav.compact && (nav.hovered || nav.visualFocus) }
+        SideTip { text: nav.text + nav.waiting; visible: nav.compact && (nav.hovered || nav.visualFocus) }
         background: Rectangle {
             radius: 8
             color: nav.current ? root.t.sbActBg : nav.hovered ? root.t.sbHover : "transparent"
@@ -713,10 +707,6 @@ Item {
                 visible: !nav.compact
                 x: 32; width: parent.width - 32 - (nav.count > 0 ? 36 : 0); anchors.verticalCenter: parent.verticalCenter
                 Label { width: parent.width; text: nav.text; color: nav.ink; elide: Text.ElideRight; font.weight: nav.current ? Font.DemiBold : Font.Medium }
-                Label {
-                    visible: nav.subline !== ""; width: parent.width; text: nav.subline; color: nav.current ? nav.ink : nav.sublineInk; elide: Text.ElideRight
-                    font.pointSize: root.smallSize; font.weight: Font.Medium
-                }
             }
         }
     }
@@ -809,12 +799,6 @@ Item {
         Accessible.name: "History of " + code
         onClicked: root.showPlace(code)
     }
-    // The trust status as a link to Proof (History and Places; the sidebar has its own trust line).
-    component ProofLink: LinkButton {
-        text: "Proof of history · " + root.conflicts + "  ›"
-        Accessible.name: "Open Proof of history, " + root.conflicts
-        onClicked: root.openPage("proof")
-    }
 
     // One issue card on the board.
     component IssueCard: ItemDelegate {
@@ -898,9 +882,10 @@ Item {
         readonly property color tone: state === "mismatch" ? root.t.sbOff : state === "" ? root.t.sbOk : root.t.sbConn
         readonly property string head: !a || state === "never" ? "Not anchored yet" : state === "mismatch" ? "Anchor mismatch"
             : state === "stale" ? "Anchor " + root.dur(root.hoursSince(a.ts)) + " old" : "Anchored " + root.age(a.ts)
-        readonly property string detail: a && state === "mismatch" ? "the record does not match the last anchor"
+        readonly property string detail: (a && state === "mismatch" ? "the record does not match the last anchor"
             : !a || state === "never" ? root.plural(root.info.events || 0, "event") + " recorded, none anchored"
-            : root.plural(root.info.events || 0, "event") + (root.newerEvents(a) ? ", " + root.newerEvents(a) + " newer not anchored yet" : "")
+            : root.plural(root.info.events || 0, "event") + (root.newerEvents(a) ? ", " + root.newerEvents(a) + " newer not anchored yet" : ""))
+            + (root.info.forks > 0 ? " · " + root.conflicts : "")
         Layout.fillWidth: true; Layout.bottomMargin: 8
         implicitHeight: line.implicitHeight + 16
         radius: 8; color: root.t.well; border.color: root.t.bd
@@ -1933,15 +1918,6 @@ Item {
                         font.pointSize: root.smallSize; font.weight: Font.Medium
                     }
                 }
-                NavItem {   // trust: the record's status; opens Proof
-                    visible: root.inSite
-                    Layout.leftMargin: sidebar.open ? -6 : 0; Layout.rightMargin: Layout.leftMargin; leftPadding: 6   // expanded, the icon lines up with the delivery dot
-                    text: "Proof · " + root.conflicts; glyph: "anchor"
-                    subline: root.anchorNote; sublineInk: root.anchorState === "mismatch" ? root.t.sbDanger : root.t.sbConn
-                    current: root.page === "proof"; compact: !sidebar.open
-                    Accessible.name: "Proof of history, " + root.conflicts + (subline ? ", " + subline : "") + ". Open Proof"
-                    onClicked: root.openPage("proof")
-                }
                 AbstractButton {   // you: name, fingerprint, role; opens Profile
                     id: you
                     visible: root.inSite
@@ -2355,6 +2331,15 @@ Item {
                             text: boardPage.tally[0] + " open · " + boardPage.tally[1] + " recently done · " + boardPage.tally[2] + " older"
                             font.pointSize: root.smallSize; color: root.t.muted
                         }
+                    }
+                    Flash {   // the record no longer matches its anchor: every member sees it, on every Board visit
+                        visible: root.anchorState === "mismatch"
+                        Layout.bottomMargin: 8
+                        err: true
+                        lead: "The site record does not match its last anchor."
+                        text: "Someone may have changed history after it was anchored."
+                        buttonText: "Open Integrity"
+                        onActivated: root.openPage("proof")
                     }
                     Flash {   // an empty board says why, and what to do
                         visible: root.boardCount === 0
@@ -3036,15 +3021,14 @@ Item {
                             onClicked: placesPage.fullLog = !placesPage.fullLog
                         }
                     }
-                    ProofLink { Layout.topMargin: 8 }
                 }
 
-                // Proof (from the trust line, History and Places): the record's status, then the three
+                // Integrity (from History's strip and the Board's mismatch banner): the record's status, then the three
                 // anchor steps for any member: compute, run the printed spel command, record the reference
                 TabPage {
                     enabled: !root.syncing
                     PageHead {
-                        title: "Proof of history"
+                        title: "Integrity"
                         lede: "Anyone can check that the record was not changed after the fact. An anchor writes a fingerprint of everyone's "
                             + "history to the Logos blockchain (LEZ), so no one, not even the admin, can quietly rewrite or delete past events."
                     }

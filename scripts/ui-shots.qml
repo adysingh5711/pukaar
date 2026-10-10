@@ -12,7 +12,7 @@ Window {
     readonly property var widths: [800, 1280, 1400]
     readonly property var states: ["none", "pending", "resident", "steward", "admin"]
     readonly property var pages: ["board", "history", "report", "people", "places", "proof", "profile", "issue", "issue-new"]
-    // The last-anchor states other than the default recent one: Proof's block, the sidebar line on Board, History's strip.
+    // The last-anchor states other than the default recent one: Integrity's block, Board's banner, History's strip.
     readonly property var anchorStates: ["never", "stale", "mismatch"]
     // Revoked roles: a removed device ("removed", as Ravi Das), and the admin's view once r2 was removed ("former").
     // Places with its change log opened and scrolled to (`log`): as the admin, then searched (a third
