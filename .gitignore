@@ -29,6 +29,7 @@ graphify-out/cache/
 graphify-out/manifest.json
 graphify-out/graph.html
 graphify-out/.graphify_*
+graphify-out/cost.json
 
 bug-report/
 
@@ -58,3 +59,5 @@ bug-report/
 
 UX-AUDIT.md
 design/
+
+Grant.md 

@@ -8,6 +8,8 @@
 ![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)
 ![status](https://img.shields.io/badge/status-pilot--ready%20v0.3.0-blue)
 
+<p align="center"><img src="public/images/01-board.png" alt="The Pukaar board with four columns of fault reports, seen by the admin." width="900"></p>
+
 | | |
 |---|---|
 | Demo video | To be added in later version |
@@ -26,6 +28,7 @@
 - [Architecture](#architecture)
 - [On-chain component: `pukaar_registry`](#on-chain-component-pukaar_registry)
 - [Deployments](#deployments)
+- [What it costs](#what-it-costs)
 - [Getting started](#getting-started)
 - [Verifying an anchor yourself](#verifying-an-anchor-yourself)
 - [Security](#security)
@@ -58,18 +61,25 @@ Pukaar takes that power away from the operator:
                      confirm: the reporter, or 2 residents, never the claimant
                                                                      ▼
                                                             CONFIRMED_RESOLVED
-   close_wontfix / mark_duplicate from any open state.  reopen: reporter or 2 residents.
+
+ OPEN, ACKNOWLEDGED or IN_PROGRESS ── close_wontfix (needs a reason) ──▶ CLOSED_WONTFIX
+ any state that is not final ─────────────── mark_duplicate ───────────▶ DUPLICATE
+
+ update (needs a note) also goes from OPEN to IN_PROGRESS.
+ reopen (needs a reason): the reporter, or 2 residents. It goes from AWAITING_CONFIRMATION,
+ CONFIRMED_RESOLVED, CLOSED_WONTFIX or DUPLICATE to OPEN. A retired place refuses it.
 ```
 
-- **Events.** Each action is an ed25519-signed, postcard-encoded envelope (`author`, `seq`, `prev` hash, Lamport clock, body) under the domain `logos:pukaar:1\0`. The decoder is strict: events are at most 4 KiB, text fields at most 500 B, trailing bytes are rejected, and the signature is checked before the body is decoded.
-- **Ordering.** Events apply in `(lamport, author, id)` order, so every replica computes the same board no matter what order messages arrive in. A property test replays 60 random histories in 20 shuffled delivery orders each and checks that the final states are identical.
-- **Transport.** Live events go over `delivery_module` Reliable Channels on the content topic `/pukaar/1/site-<site_hex>/proto`. Catch-up is heads-based anti-entropy with a capped resend, not Store queries, so late joiners, restarts and LAN-only sites work without a store node.
-- **Forks.** If one identity ever signs two different events at the same position (one person on two devices, or a cheat), every replica keeps the **same** branch: at each position the event with the lowest id wins, whatever order the copies arrive in. The losing branch is kept and saved as evidence, never applied, and the board shows a fork warning.
+- **Events.** Each action is an ed25519-signed, postcard-encoded envelope (`v`, `site`, `author`, `seq`, `prev` hash, Lamport clock, `ts` wall clock, body) under the domain `logos:pukaar:1\0`. The decoder is strict: events are at most 4 KiB, trailing bytes are rejected, and the signature is checked before the body is decoded. The sender caps every text field at 500 B. On receipt, the decoder applies that cap only to `Report`, `LocationEdit`, `LocationRetire`, `LocationRemove` and `AdminNotice` bodies.
+- **Ordering.** Events apply in `(lamport, author, id)` order, so every replica computes the same board no matter what order messages arrive in. A property test replays 60 random histories in 20 shuffled delivery orders each and checks that the final states are identical. The test generates issue events only, so it does not cover notice or seal events.
+- **Transport.** Live events go over `delivery_module` Reliable Channels on the content topic `/pukaar/1/site-<site_hex>/proto`. Catch-up is heads-based anti-entropy with a capped resend, not Store queries, so late joiners, restarts and LAN-only sites work without a store node. Every 60 s, each node sends its heads (the newest event of each author). Three peers answer each heads message, and one resend carries at most 200 events.
+- **Forks.** If one identity ever signs two different events at the same position (one person on two devices, or a cheat), every replica keeps the **same** branch: at each position the event with the lowest id wins, whatever order the copies arrive in. The losing branch is kept and saved as evidence, never applied, and the board shows a fork warning. A replica holds at most 4 events per `(author, seq)`, the winner included.
 - **Checkpoints.** A Merkle root (RFC 6962 style) over every author's chain head, signed by a member under `logos:pukaar:cp:1\0` and anchored with one SPEL instruction on LEZ. Anyone can recompute the root from their own replica and compare.
+- v0.3.0 adds role events: `SuperAdminAdd`, `SuperAdminRemove`, `SuperAdminTransfer`, `AdminNotice`, `AdminNoticeCancel`, `AdminNoticeEndNow` and `NoticeSeal`. A notice changes the role of an admin at a deadline, and a seal makes that change final. Steward and admin nodes sign the seal by themselves 10 minutes after the deadline. A seal can also affect events that come before it in the order. So the reducer runs the log again, up to 4 passes, until the seals stop changing.
 
 ## Screenshots
 
-Pukaar's own screens in the order you would meet them, rendered offscreen with sample data by `scripts/ui-shots.sh` (light theme, 1400 px wide). They are not Basecamp window captures: in Basecamp the same view sits inside Basecamp's window.
+Pukaar's own screens in the order you meet them, rendered offscreen with sample data by `scripts/ui-shots.sh` (light theme, 1400 px wide). They are not Basecamp window captures: in Basecamp the same view sits inside Basecamp's window. The script also renders the dark theme and two narrower widths (see [Render the screenshots](#render-the-screenshots)).
 
 ### The board
 
@@ -93,7 +103,7 @@ The same pane for the reporter, on a fix a steward has claimed. A claim is not a
 
 ![History page listing resolved and closed issues by month, with filters](public/images/04-history.png)
 
-A table of every resolved and closed issue, with search and filters for place, status and time, grouped by month with how many were fixed within target. The board shows resolved issues for 14 days and closed ones for 30. After that they live here. Nothing is deleted, and any issue can be reopened. A status strip at the top shows the last anchor and opens Integrity.
+A table of every resolved and closed issue, with search and filters for place, status and time, grouped by month with how many were fixed within target. On a narrow window or beside the issue pane, the last four columns drop out. The board shows resolved issues for 14 days and closed ones for 30. After that they live here. Nothing is deleted, and any issue can be reopened. A status strip at the top shows the last anchor and opens Integrity.
 
 ### Report a fault
 
@@ -127,11 +137,14 @@ The status strip at the top of History opens this page. The sidebar no longer ha
 
 ## Features
 
+<details>
+<summary>All features</summary>
+
 - **Report** what's wrong and where: a category, one line, and a place picked from the site's grouped, searchable location list (or "Other" with a description).
 - **Staff workflow:** acknowledge, post updates with the next step and an ETA, claim a fix (a note is required), close as won't-fix, or mark a duplicate. Overdue and waiting-for-48 h cards are highlighted. Actions that cannot be undone ask for confirmation first, and a disabled button says why it is disabled.
 - **Two-key closure:** only the reporter, or two residents who aren't the claimant, can confirm a fix. The reporter can always reopen.
 - **People:** join with the site id; the admin approves each person after hearing their fingerprint read aloud. Staff are always named by the admin; the admin may name a resident too, and residents can change that name or stay pseudonymous. Every member sees who has which role (residents and stewards read-only) and a Removed list that says who removed each person, when and why. Admins can revoke a role, with a reason everyone in the site can see asked in a confirm step, and can "Grant again". The removed person's app says who removed them and why, and their past reports and timeline entries are marked "former member".
-- **Super admins and admin notices:** the site creator's key is the first super admin. A site has at most two, and a super admin can transfer the role. Only super admins grant or change admins. A super admin can move an admin to steward or remove them after a notice (now, 1, 7 or 30 days, or a custom time). At the deadline every peer treats that person as the new role and rejects their later admin actions. A staff member's app seals the notice by itself 10 minutes after the deadline, which also defeats backdated events.
+- **Super admins and admin notices:** the site creator's key is the first super admin. A site has at most two. A super admin can add a second super admin, remove the other one, or transfer the role. Nobody can revoke a super admin or change their role. Only super admins grant or change admins. A super admin can move an admin to steward or remove them after a notice (now, 1, 7 or 30 days, or a custom time). A super admin can also cancel a notice. A deadline in the past counts as now. The admin keeps admin powers until the deadline. At the deadline every peer treats that person as the new role and rejects their later admin actions. A staff member's app seals the notice by itself 10 minutes after the deadline, which also defeats backdated events.
 - **Navigation:** Board, Report, History, People and Places for every member. The admin also sees a count of people waiting on People. A member who waits for approval sees one banner in place of controls they cannot use yet.
 - **Site setup:** the admin creates a site from a guided form: site name, their own name, editable categories, and a places table that starts empty (or from the Dhun sample). Service rules (acknowledge and fix targets in hours, open reports per person) are plain fields with explanations.
 - **Places:** every member sees the places with their status and open issues, and a change log they can search by place, person, action or reason. Only the admin adds places and can **edit** a place's name or group (its code never changes; old issues show "renamed from …"). A place in use can be **retired** (blocked while it has open issues), and a retired place offers "Report as Other at this spot". A place nobody ever reported can be **removed**: it shows as pending for 30 days with Undo, then is hidden from every list. The change log lists every place action with who did it, when and why. A duplicate code is refused, and the core rejects place changes from anyone but the admin.
@@ -141,11 +154,13 @@ The status strip at the top of History opens this page. The sidebar no longer ha
 - **Nothing is ever deleted:** rejected actions are kept and shown. "Removed" places are only hidden; their signed events stay in everyone's log. A forked chain is flagged, and every replica settles on the same branch.
 - **One identity, one device:** your key is your identity (there are no accounts). Run it on one device at a time; a restored identity waits for its own history before it can act.
 
+</details>
+
 ## Project status
 
 | Component | Path | Status |
 |---|---|---|
-| Rules engine (`pukaar_logic`): events, chains, reducer, sync, checkpoints, persistence, identity backup | `modules/pukaar_core/rust-lib/logic/` | **Done.** 121 tests, clippy `-D warnings` clean, fuzzed in CI |
+| Rules engine (`pukaar_logic`): events, chains, reducer, sync, checkpoints, persistence, identity backup | `modules/pukaar_core/rust-lib/logic/` | **Done.** 144 tests, clippy `-D warnings` clean, fuzzed in CI |
 | Checkpoint registry (`pukaar_registry`), a SPEL program on LEZ | `programs/pukaar_registry/` | **Done.** Deployed and anchored on localnet ([record](programs/pukaar_registry/ANCHOR.md)) |
 | Logos core module (`pukaar_core`), a Rust cdylib plus Delivery glue | `modules/pukaar_core/` | **Done.** Runs in the standalone Logos host and inside Basecamp 0.3.1 |
 | QML UI module (`pukaar_ui`) | `modules/pukaar_ui/` | **Done.** Board, Report, History, People, Places, Profile and Integrity pages. History and Places are tables, with super admin and admin controls on People and Places. Offscreen screenshot harness (`scripts/ui-shots.sh`) |
@@ -154,21 +169,30 @@ The status strip at the top of History opens this page. The sidebar no longer ha
 
 ## Architecture
 
+<p align="center"><img src="public/images/architecture.svg" alt="Pukaar architecture. The UI polls the core every 2 s. The core holds all rules and syncs over Delivery. Only a checkpoint root is anchored on LEZ." width="900"></p>
+
+<details>
+<summary>Text version of the diagram</summary>
+
 ```
-┌──────────────────────── Logos Basecamp 0.3.1 ─────────────────────────┐
-│  pukaar_ui (QML only)  ──logos.callModule──▶  pukaar_core (Rust cdylib)│
-│  polls every 2 s, JSON in/out                 │                        │
-│                                               ├─ pukaar_logic (all rules)
-│                                               │   event · store · sync  │
-│                                               │   reducer · node        │
-│                                               │   checkpoint · persist  │
-│                                               └─ delivery_module        │
-│                                                  Reliable Channels      │
-└────────────────────────────────────────┬──────────────────────────────┘
+┌──────────────────────── Logos Basecamp 0.3.1 ───────────────────────────────┐
+│  pukaar_ui (QML only)  ──callModuleAsync──▶  pukaar_core (Rust cdylib)      │
+│  polls every 2 s, JSON in/out                 │                             │
+│                                               ├─ pukaar_logic (all rules)   │
+│                                               │   event · store · sync      │
+│                                               │   reducer · node · identity │
+│                                               │   checkpoint · persist      │
+│                                               └─ delivery_module            │
+│                                                  Reliable Channels          │
+└────────────────────────────────────────┬────────────────────────────────────┘
                                          │ spel anchor (IDL-generated CLI)
                                          ▼
                            LEZ ── pukaar_registry: CheckpointRecord PDAs
 ```
+
+</details>
+
+The UI calls `logos.callModuleAsync`. When the host has no `logos.callModuleAsync`, the UI falls back to the blocking `logos.callModule`.
 
 All the logic lives in `pukaar_logic`, a plain Rust crate that you can test with `cargo test` and no Nix. The module crate only moves bytes between the `Node`, the disk and Delivery. Structured data crosses the module boundary as JSON strings. A failing call returns a string that starts with `error: `, or with `rejected: ` when the rules made the event inert.
 
@@ -187,6 +211,8 @@ A one-instruction [SPEL](https://github.com/logos-co/spel) program ([source](pro
 | Verification | Off-chain: recompute the root from your replica, verify `sig_r‖sig_s` against `signer_pk`, and check that the signer is a site member |
 | Client | The IDL-generated `spel` CLI is the only chain client. The app prints the exact `spel anchor …` command |
 
+The program has its own docs. [`programs/pukaar_registry/README.md`](programs/pukaar_registry/README.md) is the `logos-scaffold` template guide to build, deploy and write the program. [`programs/pukaar_registry/ANCHOR.md`](programs/pukaar_registry/ANCHOR.md) is the record of the localnet deployment and the first anchor.
+
 ## Deployments
 
 | Network | Program ID | Status |
@@ -196,6 +222,26 @@ A one-instruction [SPEL](https://github.com/logos-co/spel) program ([source](pro
 | Mainnet | To be added in later version | To be added in later version |
 
 > **Localnet is not permanent.** Its chain state is discarded when the local sequencer stops. The hosted LEZ testnet was also reset around 8 Sept 2026, so a testnet anchor is only as permanent as the testnet.
+
+## What it costs
+
+A site pays nothing to run Pukaar today. It needs these items:
+
+- A laptop for each member, with [Logos Basecamp 0.3.1](https://github.com/logos-co/logos-basecamp/releases/tag/0.3.1).
+- One kiosk laptop, if the site wants one.
+- An internet link. A relay for sites with no internet is not built yet.
+
+These items are free today:
+
+- Messages go over `logos.dev`, a Logos Delivery network for development. It needs no account, no domain and no database, and it charges no fee.
+- An anchor puts a short summary of the site history on the LEZ chain. Anchors on localnet, a private test chain, are free. Localnet loses these anchors when it stops.
+
+These items can cost money later. Their price is not known yet:
+
+- On `logos.test`, the network for production sites, each laptop needs an RLN membership, a paid pass to send a set number of messages. The site can pay for all members.
+- An anchor on a public LEZ network pays a small fee in the LEZ token, the coin of that chain.
+
+Sync also uses data. In a site of 50 members, each laptop receives about 116 MB a day. In a site with four times as many members, each laptop receives about 16 times as much. The team keeps the technical cost notes in a separate report.
 
 ## Getting started
 
@@ -210,7 +256,7 @@ A one-instruction [SPEL](https://github.com/logos-co/spel) program ([source](pro
 
 ```bash
 cd modules/pukaar_core/rust-lib/logic
-cargo test                                   # 121 tests
+cargo test                                   # 144 tests
 cargo clippy --all-targets -- -D warnings
 cargo +nightly fuzz run decode -- -max_total_time=60   # needs cargo-fuzz
 ```
@@ -242,12 +288,45 @@ scripts/basecamp.sh default    # your normal Basecamp profile
 scripts/basecamp.sh asha       # a separate profile (install Pukaar once in it)
 ```
 
+`scripts/basecamp.sh` works on macOS only, because it starts the binary inside a `.app` bundle. It uses `/Applications/LogosBasecamp.app`, and `BASECAMP_APP` sets another bundle path. The `default` profile is `~/Library/Application Support/Logos/LogosBasecamp`. Each named profile is a directory in `PUKAAR_BASECAMP_DIR`, and the default is `~/.local/share/pukaar-basecamp`.
+
+### Upgrade from v0.2.4
+
+<details>
+<summary>Upgrade steps</summary>
+
+v0.3.0 adds new event types, and a v0.2.4 app cannot decode them. Each event links to the previous event of its author. Thus a v0.2.4 app also holds back all later events from a member who signs a new event. The existing data of a site stays. Pukaar makes the site creator the first super admin from the existing history, without a new event. The test `a_v0_2_4_log_replays_to_the_same_state` replays a v0.2.4 log (`tests/fixtures/v0_2_4_log.json`) and gets the same state.
+
+1. In each Basecamp profile, install the v0.3.0 core package, then the UI package.
+2. Quit Basecamp fully, then start it again.
+3. Tell every member of the site to do the same steps.
+
+</details>
+
 ### Try it from source (developers)
 
 ```bash
 scripts/demo.sh --clean        # two Pukaar windows, admin and resident, built from source with Nix
 scripts/window.sh <name>       # one more window as a new or existing person; never deletes data
 ```
+
+Each window keeps its data in a directory in `PUKAAR_DEMO_DIR`, and the default is `~/.local/share/pukaar-demo`. `--clean` deletes only the `resident-a` and `steward-b` directories there.
+
+### Render the screenshots
+
+<details>
+<summary>Render the screenshots in detail</summary>
+
+`scripts/ui-shots.sh` renders the Pukaar view offscreen against the fixture data in `scripts/ui-shots.qml`. It needs Nix at `/nix/var/nix/profiles/default/bin/nix`, and Nix gets the Qt 6.9.2 that `logos-module-builder` uses. The script renders the light and dark themes at 800, 1280 and 1400 px. It shows each state (not in a site, pending, resident, steward, admin and super admin), each page and the issue pane. It prints each QML warning. When there is a warning, the script exits with a non-zero status.
+
+```bash
+scripts/ui-shots.sh              # writes to $TMPDIR/pukaar-shots/<git short hash>
+scripts/ui-shots.sh <out dir>
+```
+
+To compare two runs, you need ImageMagick. Use the `magick compare` loop in the header comment of `scripts/ui-shots.sh`.
+
+</details>
 
 ## Verifying an anchor yourself
 
@@ -303,15 +382,21 @@ modules/pukaar_core/
       src/node.rs         one participant: publish/receive + JSON views
       src/persist.rs      atomic on-disk replica, leave/rejoin
       src/identity.rs     password-sealed identity export/import
-      tests/              event, store, checkpoint, sync, lifecycle, convergence, persist, identity, retire, location, setup
+      tests/              event, store, checkpoint, sync, lifecycle, convergence, persist, identity, retire, location, setup, super_admin
+        fixtures/         v0_2_4_log.json: a v0.2.4 log that must replay to the same state
       fuzz/               cargo-fuzz decode target
     src/lib.rs            Logos glue: PukaarCoreModule trait + delivery_module wiring
 modules/pukaar_ui/Main.qml  the QML UI (one call funnel, shared components, one colour palette)
 programs/pukaar_registry/  SPEL checkpoint registry (LEZ)
+  README.md                logos-scaffold template guide: build, deploy, IDL
+  ANCHOR.md                localnet deployment and first anchor record
 scripts/                   demo.sh, window.sh, basecamp.sh
   ui-shots.sh, .qml        offscreen screenshots of every page against fixture data
+public/brand/              Pukaar logos (SVG, PNG)
+public/images/             README screenshots
+LICENSE-MIT, LICENSE-APACHE  the two licences
 THIRD_PARTY_LICENSES       Lucide icon licence
-.github/workflows/ci.yml   tests, clippy, 60 s fuzz smoke run
+.github/workflows/ci.yml   tests, clippy, 60 s fuzz smoke run, version match
 ```
 
 ## Tech stack
@@ -323,9 +408,12 @@ THIRD_PARTY_LICENSES       Lucide icon licence
 | Transport | `delivery_module` v0.3.0-rc.2 (Reliable Channels) |
 | UI | Qt 6 QML (Controls Basic) inside Logos Basecamp 0.3.1, [Lucide](https://lucide.dev) icons |
 | Chain | LEZ, SPEL (`lez-framework`), RISC Zero zkVM, `logos-scaffold` |
-| CI | GitHub Actions: `cargo test`, `clippy -D warnings`, `cargo-fuzz` smoke run |
+| CI | GitHub Actions: `cargo test`, `clippy -D warnings`, `cargo-fuzz` smoke run, `version` job. If the two `metadata.json` versions differ or a `v*` tag does not match them, the `version` job fails |
 
 ## Roadmap
+
+<details>
+<summary>Earlier releases</summary>
 
 - **L1 (done in v0.1.0):** the full report → claim → confirm loop between instances over Logos Delivery, running inside Basecamp, with signed portable `.lgx` packages.
 - **v0.1.1:** guided site setup, edit and remove locations (30-day pending removal), a change log, service rules as form fields, deterministic fork resolution.
@@ -334,6 +422,8 @@ THIRD_PARTY_LICENSES       Lucide icon licence
 - **v0.2.2:** fix: sync works again (Pukaar turns off Delivery's SDS causal-history wait), moved to the `logos.dev` network, recovery after a Delivery restart, and names an admin gives residents now show on both sides.
 - **v0.2.3:** navigation built from the role, a Profile page, an admin Site page with a full place change log, a Proof page with the last-anchor status, issue pane actions above the timeline, confirm steps and reasons for disabled buttons, and revocations that say who removed whom, when and why.
 - **v0.2.4:** every member sees People (roles, pseudonyms and who was removed, when and why) and Places (status, open issues and a searchable change log); admin controls stay admin only. Packages now carry their real version (they all said 0.1.0 before), and CI fails when a release tag and the package version disagree.
+
+</details>
 - **v0.3.0:** History and Places (with its change log) are tables, and reasons are asked in confirm steps. Integrity left the sidebar: a status strip on History opens it, and the Board shows a red banner only on an anchor mismatch. Super admins (at most two, with transfer) are the only ones who grant or change admins, and admin notice periods move an admin to steward or remove them after a notice, sealed by a staff member's app 10 minutes after the deadline. Breaking: v0.3.0 adds new event types, so every member must update. v0.2.4 apps cannot read the new events.
 - **L1+:** anchoring from the app's Integrity page on localnet and a testnet anchor; an "identity active on another device" warning; Heads messages that carry head ids, so anti-entropy also repairs equal-length forks.
 - **L2:** LAN relay for sites without internet, a password-sealed key file, a site-health view (category level only, no per-person ranking), export and verify bundles, evidence photos on Logos Storage (EXIF stripped), UI tests beyond the screenshot harness, and a steward guide in Hindi and English.
@@ -343,9 +433,35 @@ Dates and milestones beyond L1: to be added in later version.
 
 ## Contributing
 
-Issues and pull requests are welcome. Before opening a PR, run `cargo test`, `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` in `modules/pukaar_core/rust-lib/logic`. Changes to the wire format must keep `Body` append-only.
+Issues and pull requests are welcome. Before opening a PR, run `cargo test`, `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` in `modules/pukaar_core/rust-lib/logic`. CI runs the tests and clippy, but CI does not run `cargo fmt --check`. Changes to the wire format must keep `Body` append-only.
 
 Contribution guidelines and code of conduct: to be added in later version.
+
+### Make a release
+
+<details>
+<summary>Release steps</summary>
+
+The release packages are the portable `.lgx` builds. The plain `.#lgx` output is a `-dev` build, and release Basecamp rejects it. The signing key is outside the repo, in `~/.config/pukaar-keys`.
+
+1. Set the same `version` in `modules/pukaar_core/metadata.json` and `modules/pukaar_ui/metadata.json`, then commit.
+2. Build the portable package in each module, then copy both packages to `dist/`.
+3. Sign each package with `lgx`.
+4. Make sure that each signature is valid with `lgx verify`. This step needs the `trusted-keys` keyring from Security → Release signing.
+5. Tag the commit as `v<version>`, then push the tag. If the tag and the two versions differ, the CI `version` job fails.
+6. On GitHub, make a release from the tag. Attach both `.lgx` files and a `SHA256SUMS` file.
+
+```bash
+(cd modules/pukaar_core && nix build --accept-flake-config .#lgx-portable --out-link result-lgx-portable)
+(cd modules/pukaar_ui && nix build --accept-flake-config .#lgx-portable --out-link result-lgx-portable)
+mkdir -p dist && cp modules/*/result-lgx-portable/*.lgx dist/ && chmod u+w dist/*.lgx
+nix build 'github:logos-co/logos-package#lgx' --out-link ./lgx
+for f in dist/*.lgx; do ./lgx/bin/lgx sign "$f" --key publisher --keys-dir ~/.config/pukaar-keys; done
+for f in dist/*.lgx; do ./lgx/bin/lgx verify "$f" --keyring-dir ./trusted-keys; done
+git tag v<version> && git push origin v<version>
+```
+
+</details>
 
 ## License
 
