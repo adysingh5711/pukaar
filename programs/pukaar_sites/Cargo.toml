@@ -3,7 +3,7 @@
 [workspace]
 resolver = "3"
 members = ["rules", "guest"]
-exclude = ["runner"]
+exclude = ["runner", "fastbuild"]
 
 # Pins from logos-lez-rln. The guest toolchain is rustc 1.88, so hold these back in Cargo.lock:
 #   ruint = 1.17.0 (1.18+ needs 1.90), enum-ordinalize and enum-ordinalize-derive = 4.3.2 (4.4 needs 1.89),

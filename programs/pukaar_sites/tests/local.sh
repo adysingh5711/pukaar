@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Scenario and negative tests for pukaar_sites on the LOCAL sequencer (127.0.0.1:3040, scripts/lez-local.sh).
 # Deploys a new copy of the program, then drives every instruction and reads the state back after each call.
-#   tests/local.sh [--rebuild]   --rebuild runs the slow Docker guest build; the default reuses ./pukaar_sites.bin
+#   tests/local.sh [--rebuild|--fast]   --rebuild runs the slow Docker guest build; --fast the native dev build
+#   (pukaar_sites.fast.bin, dev chain only); the default reuses ./pukaar_sites.bin
 #   LEE_WALLET_HOME_DIR  default: the local wallet home (the testnet home is refused)
 #   PAYER                default: the funded local test account (without the Public/ prefix)
 #   GAS_LIMIT            wallet gas_limit during the scenario (default 500000), restored on exit
@@ -17,21 +18,23 @@ PAYER="${PAYER:-CbgR6tj5kWx5oziiFptM7jMvrQeYY3Mzaao6ciuhSr2r}"
 cd "$HERE"
 
 wallet check-health
+ELF=pukaar_sites.bin
 if [ "${1:-}" = "--rebuild" ]; then ./build.sh; fi
-[ -f pukaar_sites.bin ] || { echo "no pukaar_sites.bin: run with --rebuild" >&2; exit 1; }
-[ -z "$(find guest/src guest/Cargo.toml rules/src rules/Cargo.toml -newer pukaar_sites.bin -print -quit)" ] ||
-  echo "WARNING: the sources are newer than pukaar_sites.bin, run with --rebuild"
+if [ "${1:-}" = "--fast" ]; then ./build.sh --fast; ELF=pukaar_sites.fast.bin; fi
+[ -f "$ELF" ] || { echo "no $ELF: run with --rebuild or --fast" >&2; exit 1; }
+[ -z "$(find guest/src guest/Cargo.toml rules/src rules/Cargo.toml -newer "$ELF" -print -quit)" ] ||
+  echo "WARNING: the sources are newer than $ELF, run with --rebuild or --fast"
 ( cd runner && cargo build -q )
 RUNNER="$HERE/runner/target/debug/runner"
 
 # ---- deploy a new copy (one segment per 96 KiB of ELF, plus the header account) ----
-SEGS=$(( ( $(wc -c < pukaar_sites.bin) + 98303 ) / 98304 ))
+SEGS=$(( ( $(wc -c < "$ELF") + 98303 ) / 98304 ))
 new_account() { wallet account new public --label "$1" | sed -n 's/.*account_id Public\/\([A-Za-z0-9]*\) .*/\1/p'; }
 TAG=$(date +%m%d-%H%M%S)   # wallet labels are unique, so each run gets a new copy
 HEADER=$(new_account "pukaar-sites-hdr-$TAG")
 SEG_IDS=()
 for i in $(seq 1 "$SEGS"); do SEG_IDS+=("Public/$(new_account "pukaar-sites-seg$i-$TAG")"); done
-deploy() { wallet program-loader deploy --elf pukaar_sites.bin --header "Public/$HEADER" --segments "$@" --payer "Public/$PAYER" 2>&1; }
+deploy() { wallet program-loader deploy --elf "$ELF" --header "Public/$HEADER" --segments "$@" --payer "Public/$PAYER" 2>&1; }
 OUT=$(deploy "${SEG_IDS[@]}" || true)
 N=$(echo "$OUT" | sed -n 's/.*splits into \([0-9]*\) segment.*/\1/p')   # the wallet says how many segments it needs
 [ -z "$N" ] || OUT=$(deploy "${SEG_IDS[@]:0:$N}")
