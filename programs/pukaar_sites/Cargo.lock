@@ -1474,6 +1474,7 @@ dependencies = [
 name = "pukaar_sites_guest"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "clock_core",
  "lee_core",
  "pukaar_sites_rules",

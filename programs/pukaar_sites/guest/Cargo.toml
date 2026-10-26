@@ -11,3 +11,6 @@ path = "src/main.rs"
 pukaar_sites_rules = { path = "../rules" }
 lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.3.1", default-features = false }
 clock_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.3.1" }
+
+[dev-dependencies]
+borsh = "1"

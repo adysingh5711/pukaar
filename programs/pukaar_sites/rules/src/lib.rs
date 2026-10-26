@@ -8,8 +8,10 @@ use sha2::{Digest, Sha256};
 
 mod records;
 mod roles;
+mod wire;
 pub use records::*;
 pub use roles::*;
+pub use wire::*;
 
 /// Borsh size of `CheckpointRecord`: 32 + 32 + 8 + 32 + 32 + 32.
 pub const RECORD_LEN: usize = 168;
@@ -29,9 +31,21 @@ pub struct CheckpointRecord {
 /// The program instruction. New variants are appended, never reordered.
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
-    Anchor(CheckpointRecord),
+    /// The signer must be an active member of the checkpoint's site.
+    Anchor(AnchorIx),
     /// Test-only gas probe (P0). Remove before the real program ships.
     Probe(Probe),
+    CreateSite(CreateSiteIx),
+    SetDetails(SetPointerIx),
+    SetPlaces(SetPointerIx),
+    SetKeyring(SetPointerIx),
+    ApproveBatch(ApproveBatchIx),
+    SetRoleBatch(SetRoleBatchIx),
+    RevokeBatch(RevokeBatchIx),
+    SetProfileBatch(SetProfileBatchIx),
+    SuperAdminAdd(SuperAdminIx),
+    SuperAdminRemove(SuperAdminIx),
+    SuperAdminTransfer(SuperAdminIx),
 }
 
 /// What the plan hands to `apply` for one account. New variants are appended, never reordered.
@@ -44,6 +58,38 @@ pub enum Effect {
     BalanceAtLeast(u128),
     /// Write one 64-byte test member record.
     Member([u8; 64]),
+    // Site and Member effects (P1), see `wire.rs`. Append only.
+    Signer { site_id: [u8; 32], actor: Actor, now_ms: u64 },
+    AnchorSigner { record: CheckpointRecord, signer: AccountId, now_ms: u64 },
+    SiteGuard { site_id: [u8; 32], actor: Actor, not_super: Vec<AccountId> },
+    CreateSite { args: CreateSite, now_ms: u64 },
+    CreateMember { args: CreateSite, now_ms: u64 },
+    SetPointer { kind: Pointer, site_id: [u8; 32], actor: Actor, cid: String, sha256: [u8; 32], now_ms: u64 },
+    Approve { site_id: [u8; 32], actor: Actor, item: ApproveItem, is_new: bool, now_ms: u64 },
+    ApproveSite {
+        site_id: [u8; 32],
+        actor: Actor,
+        roster_len: u32,
+        new_members: u32,
+        keyring_cid: String,
+        keyring_sha256: [u8; 32],
+        now_ms: u64,
+    },
+    SetRole { actor: Actor, role: Role, now_ms: u64 },
+    Revoke { actor: Actor, reason_sha256: [u8; 32], now_ms: u64 },
+    RevokeSite {
+        site_id: [u8; 32],
+        actor: Actor,
+        targets: Vec<AccountId>,
+        keyring_cid: String,
+        keyring_sha256: [u8; 32],
+        now_ms: u64,
+    },
+    SetProfile { actor: Actor, cid: String, sha256: [u8; 32], version: u64, now_ms: u64 },
+    SuperAdd { site_id: [u8; 32], actor: Actor, target: AccountId, now_ms: u64 },
+    SuperRemove { site_id: [u8; 32], actor: Actor, target: AccountId, now_ms: u64 },
+    SuperTransfer { site_id: [u8; 32], actor: Actor, target: AccountId, now_ms: u64 },
+    Promote { actor: Actor, now_ms: u64 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,6 +129,9 @@ pub enum RuleError {
     KeyBinding,
     StaleNonce,
     JoinExpired,
+    // wire.rs. Append only.
+    RecordExists,
+    NoRecord,
 }
 
 impl core::fmt::Display for RuleError {
@@ -122,6 +171,8 @@ impl core::fmt::Display for RuleError {
             Self::KeyBinding => "user_account is not the account id of user_schnorr_pk",
             Self::StaleNonce => "the join request nonce does not grow",
             Self::JoinExpired => "the join request is past valid_until_ms",
+            Self::RecordExists => "the record is already written",
+            Self::NoRecord => "the shard holds no record",
         })
     }
 }
@@ -349,6 +400,7 @@ pub fn apply_effect(effect: &Effect, pre: &[u8]) -> Result<Option<Vec<u8>>, Rule
         Effect::BalanceAtLeast(min) => check_balance(pre, *min).map(|()| None),
         Effect::Member(rec) if pre.is_empty() => Ok(Some(rec.to_vec())),
         Effect::Member(_) => Err(RuleError::MemberExists),
+        other => apply_site_effect(other, pre),
     }
 }
 

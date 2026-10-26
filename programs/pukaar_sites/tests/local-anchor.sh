@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Rebuild the guest, deploy it to the LOCAL sequencer, anchor twice, read the record back.
+# Rebuild the guest, deploy it to the LOCAL sequencer, create a site, anchor twice as its first member, read the records back.
 # Re-run after a sequencer wipe. Local dev chain only: never point this at the testnet wallet home.
 #   LEE_WALLET_HOME_DIR  default: the local wallet home
 #   PAYER                default: the funded local test account (without the Public/ prefix)
@@ -20,9 +20,10 @@ RUNNER="$HERE/runner/target/debug/runner"
 # one segment account per 96 KiB of ELF, plus the header account
 SEGS=$(( ( $(wc -c < pukaar_sites.bin) + 98303 ) / 98304 ))
 new_account() { wallet account new public --label "$1" | sed -n 's/.*account_id Public\/\([A-Za-z0-9]*\) .*/\1/p'; }
-HEADER=$(new_account "pukaar-sites-hdr")
+TAG=$(date +%m%d-%H%M%S)   # wallet labels are unique, so each run gets a new copy
+HEADER=$(new_account "pukaar-sites-hdr-$TAG")
 SEG_IDS=()
-for i in $(seq 1 "$SEGS"); do SEG_IDS+=("Public/$(new_account "pukaar-sites-seg$i")"); done
+for i in $(seq 1 "$SEGS"); do SEG_IDS+=("Public/$(new_account "pukaar-sites-seg$i-$TAG")"); done
 
 # no --immutable: the header stays updatable for bug fixes
 # The file holds a kernel ELF too, so SEGS can be one too high. The wallet says how many segments it needs.
@@ -33,7 +34,11 @@ N=$(echo "$OUT" | sed -n 's/.*splits into \([0-9]*\) segment.*/\1/p')
 echo "$OUT" | grep "Program deployed"
 export PUKAAR_PROGRAM_ID="$HEADER" PUKAAR_PAYER="$PAYER"
 
-SITE=$(openssl rand -hex 32)
+echo "--- create_site"
+OUT=$("$RUNNER" create-site "$(openssl rand -hex 32)")
+echo "$OUT"
+SITE=$(echo "$OUT" | sed -n 's/^site_id: //p')
+"$RUNNER" get-site "$SITE"
 ROOT=$(openssl rand -hex 32)   # fresh root each run, so a re-run on a live chain does not collide
 
 echo "--- anchor #1"
