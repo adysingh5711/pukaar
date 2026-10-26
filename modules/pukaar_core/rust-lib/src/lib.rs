@@ -845,6 +845,8 @@ impl PukaarCoreModule for Pukaar {
             if v["role"].is_null() && q.mine.is_some() {
                 v["pending"] = "requested".into();
             }
+            // The one LEZ account of the user (base58): it pays the fee of every write, so the user funds it.
+            v["account"] = pukaar_logic::chain::b58(&n.account).into();
             Some(v)
         })
         .ok()
