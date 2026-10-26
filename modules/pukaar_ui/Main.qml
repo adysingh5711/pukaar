@@ -10,14 +10,17 @@ import QtQuick.Shapes
 Item {
     id: root
     property var me: ({})
-    readonly property var noInfo: ({ categories: [], locations: [], removed_locations: [], members: [], pending: [] })
+    readonly property var noInfo: ({ categories: [], locations: [], retired_locations: [], members: [], pending: [] })
+    readonly property var noChain: ({ key: "", writes: [], waiting: 0, refresh_waiting: 0 })
     property var info: noInfo
     // The lists of site_info live in properties of their own, written only when their content
     // changed: info itself changes on every received event (it carries an event count), and a
     // rebuilt model would wipe typed text in the People rows and reset the Report combos.
     property var categories: []
-    property var locations: []
-    property var placeLog: []            // the admin's change log (site_info place_log), newest first
+    property var locations: []           // the active places
+    property var retiredLocations: []    // the hidden places (site_info retired_locations), shown with state "retired"
+    property var chain: noChain          // chain_status: the state of every queued write
+    property var dismissed: ({})         // ids of writes whose banner was closed (kept until the app closes)
     property var members: []
     property var pending: []
     property var revoked: []             // members whose role the admin removed (site_info revoked), newest first
@@ -34,9 +37,10 @@ Item {
     readonly property bool staff: me.role === "Steward" || me.role === "Admin"
     readonly property bool approved: !!me.role      // a pending key has no role yet; the core rejects its reports
     // Our role was revoked, and we have not asked to join again (a new profile puts us back in pending).
-    readonly property bool removed: inSite && !approved && !!me.revoked && !pending.some(function (p) { return p.key === me.key })
+    readonly property bool removed: inSite && !approved && !!me.revoked && me.pending !== "requested" && !pending.some(function (p) { return p.key === me.key })
     readonly property bool unapproved: !approved && !removed      // no role, and it is ours to ask for: read the fingerprint at the kiosk
-    readonly property bool awaitingApproval: inSite && unapproved && !!info.name   // joined, genesis here, not yet granted a role
+    // Joined and not yet granted a role: our request is out (my_identity.pending), or the site data is here.
+    readonly property bool awaitingApproval: inSite && unapproved && (me.pending === "requested" || !!info.name)
     readonly property bool isAdmin: me.role === "Admin"
     readonly property bool isSuper: !!me.super_admin     // changes admins; at most two per site
     readonly property int superCount: (info.super_admins || []).length
@@ -194,9 +198,12 @@ Item {
     function keep(name, value) { if (JSON.stringify(value) !== JSON.stringify(root[name])) root[name] = value }
     function setInfo(i) {
         info = i
-        keep("categories", i.categories); keep("locations", i.locations); keep("placeLog", i.place_log || [])
+        keep("categories", i.categories); keep("locations", i.locations || [])
+        keep("retiredLocations", (i.retired_locations || []).map(function (l) {
+            return Object.assign({}, l, { state: "retired", open_issues: 0, ever_used: true })
+        }))
         keep("members", i.members); keep("pending", i.pending); keep("revoked", i.revoked || [])
-        keep("groupNames", groupsOf(i.locations))
+        keep("groupNames", groupsOf(allPlaces))
     }
     // Opening a card moves the cursor to the note, so a steward can type straight away.
     function openIssue(id) {
@@ -232,7 +239,7 @@ Item {
     // Drop this device's copy of the site (the key stays); back to the first-run screen.
     function leave() {
         run("leave_site", [], function () {
-            closeIssue(); page = "board"; checkpoint = null; issues = []; setInfo(noInfo); seen = ({})
+            closeIssue(); page = "board"; checkpoint = null; issues = []; setInfo(noInfo); chain = noChain; seen = ({})
         })
     }
     // Poll steps in order; the site-bound ones only once my_identity says we are in a site.
@@ -250,6 +257,7 @@ Item {
         var steps = [
             ["my_identity", [], function (m) { me = (m && typeof m === "object") ? m : {} }],
             ["site_info", [], function (i) { if (i && i.site) setInfo(i) }],
+            ["chain_status", [], function (s) { if (s && Array.isArray(s.writes)) chain = s }],
             ["list_issues", [], function (l) { if (Array.isArray(l)) issues = l }]
         ]
         // only refresh the pane that is still open (a reply landing after Close must not reopen it)
@@ -288,49 +296,50 @@ Item {
     function who(key, name) { return name ? name : "pseudonym " + String(key).substr(0, 6) }
     function formerTag(former) { return former ? " (former member)" : "" }   // after a revoked author's name and code
     function when(ts, format) { return new Date(ts * 1000).toLocaleString(Qt.locale(), format || "d MMM HH:mm") }
-    // A member's admin notice (site_info notices): the running one while they are an admin, else the
-    // one that ended it, or their last demotion.
-    function noticeOf(m) {
-        var n = (info.notices || []).filter(function (x) { return x.subject === m.key })[0], d = m.demotions || []
-        return m.role === "Admin" ? n || null : n || d[d.length - 1] || null
+    // ---- chain writes (chain_status): every queued write, in the order it was queued. A write moves
+    // waiting (held for Send changes), preparing, queued, sent, confirming, then included, or rejected
+    // with a reason. A rejected write is gone: the row shows the old state again. ----
+    readonly property var liveStates: ["waiting", "preparing", "queued", "sent", "confirming"]
+    readonly property var stateText: ({ waiting: "waiting to be sent", preparing: "preparing", queued: "queued", sent: "sending",
+                                        confirming: "confirming", included: "on the chain", rejected: "rejected" })
+    readonly property var kindText: ({ create_site: "Site", approve: "Approval", set_role: "Role change", revoke: "Revoke",
+        set_profile: "Profile update", profile: "Profile", set_details: "Site details", set_places: "Places change",
+        super_admin_add: "Super admin change", super_admin_remove: "Super admin change", super_admin_transfer: "Super admin change" })
+    // The held kinds that Send changes sends: approvals, role changes, revokes and profile refreshes.
+    readonly property var batchKinds: ["approve", "set_role", "revoke", "set_profile"]
+    readonly property var writes: chain.writes || []
+    readonly property int waitingCount: (chain.waiting || 0) + (chain.refresh_waiting || 0)
+    // A batch is on its way: some of its writes have left the waiting state and are not done.
+    readonly property bool batchBusy: writes.some(function (w) { return batchKinds.indexOf(w.kind) >= 0 && liveStates.indexOf(w.state) >= 0 && w.state !== "waiting" })
+    // The newest write about this member (base58 account), or null.
+    function writeFor(account) {
+        var l = writes.filter(function (w) { return !!account && (w.accounts || []).indexOf(account) >= 0 })
+        return l.length ? l[l.length - 1] : null
     }
-    // The People row's line about it.
-    function noticeLine(m) {
-        var n = noticeOf(m)
-        if (!n) return ""
-        var by = who(n.by, n.by_name), why = "“" + n.reason + "”"
-        if (m.role === "Admin")
-            return "Admin · " + (n.outcome === "remove" ? "is removed" : "becomes steward") + " on " + when(n.deadline) + " (notice by " + by + ": " + why + ")"
-        return m.role + " · was admin until " + when(n.deadline) + ", changed by " + by + ": " + why
-               + (n.sealed_by ? " Sealed by " + who(n.sealed_by, n.sealed_by_name) + (n.sealed_ts ? " at " + when(n.sealed_ts) : "") + "." : "")
-    }
-    // The member's own refused role actions (site_info rejected), e.g. an admin's after their notice ended.
-    function rejectedLine(m) {
-        var l = (info.rejected || []).filter(function (r) { return r.author === m.key }), n = noticeOf(m)
-        if (!l.length) return ""
-        return plural(l.length, "action") + " by " + who(m.key, m.name) + (n && m.role !== "Admin" ? " after " + when(n.deadline) : "")
-               + (l.length === 1 ? " was" : " were") + " rejected: " + l[0].reason
-    }
-    // The change log's action chip per kind: its label and colour group (blue in motion, green restored, grey ended).
-    readonly property var placeActions: ({ added: ["Added", "closed"], edited: ["Edited", "progress"], renamed: ["Renamed", "progress"],
-        retired: ["Retired", "closed"], restored: ["Restored", "resolved"], removal_started: ["Removal started", "progress"],
-        removal_undone: ["Removal undone", "progress"], removed: ["Removed", "closed"] })
-    // A change-log row's reason/detail, from site_info place_log.
-    function placeDetail(c) {
-        var reason = (c.reason || "").replace(/[.\s]+$/, "")
-        if (c.kind === "renamed") return "from “" + c.from + "” to “" + c.to + "”"
-        if (c.kind === "removed") return (reason ? reason + " " : "") + "(started by " + who(c.by, c.by_name) + " on " + when(c.since, "d MMM") + ")"
-        var pending = c.kind === "removal_started" && locations.some(function (l) { return l.code === c.code && l.state === "pending_removal" && l.removes_at === c.ends_at })
-        return pending ? (reason ? reason + ". " : "") + "Hidden on " + when(c.ends_at, "d MMM") + " unless undone" : reason
-    }
-    // One change-log row in plain words: what the search matches and a screen reader says.
-    function placeChange(c) {
-        return [c.code, c.label, placeActions[c.kind][0], "by", who(c.by, c.by_name), when(c.ts), placeDetail(c)].join(" ")
-    }
+    function isLive(w) { return !!w && liveStates.indexOf(w.state) >= 0 }
+    function writeWhy(w) { return w.reason ? ": " + w.reason : "" }
+    // The key of our account in the wallet: only a failure is news ("ok" and "not imported yet" are not).
+    readonly property string keyProblem: ["", "ok", "not imported yet"].indexOf(chain.key || "") >= 0 ? "" : chain.key
+    // The banners at the top: a rejected write, and a write that has no row of its own (the site, places,
+    // super admins) while it is on its way. The site stays on screen once it is on the chain, until closed.
+    readonly property var writeBanners: writes.filter(function (w) {
+        if (dismissed[w.id]) return false
+        return w.state === "rejected" || (w.kind === "create_site" ? true
+            : (w.accounts || []).length === 0 && w.kind !== "profile" && isLive(w))
+    }).slice(-3)
+    function dismiss(id) { var d = Object.assign({}, dismissed); d[id] = true; dismissed = d }
+    // The sidebar's status lines, from site_info: the chain block, and the files that Storage still owes.
+    readonly property string chainText: !info.chain ? "connecting" : info.chain.ok ? "block " + info.chain.block
+        : info.chain.error ? "offline: " + info.chain.error : "connecting"
+    readonly property bool chainOk: !!info.chain && !!info.chain.ok
+    readonly property string storageText: !info.storage ? "connecting" : info.storage.error ? "problem: " + info.storage.error
+        : info.storage.pending > 0 ? "waiting for storage (" + plural(info.storage.pending, "file") + ")" : "ready"
+    readonly property bool storageOk: !!info.storage && !info.storage.error && !(info.storage.pending > 0)
     function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") }
     function place(i) {
-        var p = i.location === "other" ? "Other" : (i.location + " " + (i.location_label || ""))
-        if (i.location_retired) p += " (retired)"
+        var l = placeByCode(i.location)
+        var p = i.location === "other" ? "Other" : (i.location + " " + (i.location_label || (l ? l.label : "")))
+        if (i.location_retired || (l && l.state === "retired")) p += " (retired)"
         return i.landmark ? p + " (" + i.landmark + ")" : p
     }
     function placeCode(i) { return i.location === "other" ? "Other" : i.location }
@@ -354,12 +363,8 @@ Item {
             + plural(a.events_covered, "event") + "."
             + (newer ? " " + plural(newer, "newer event") + (newer === 1 ? " isn't" : " aren't") + " anchored yet." : "")
     }
-    // A place that takes no reports, in words: "retired" or "removes in 12 days" ("" = active).
-    function placeState(l) {
-        if (l.state === "pending_removal")
-            return "removes in " + plural(Math.max(0, Math.ceil((l.removes_at - Date.now() / 1000) / 86400)), "day")
-        return l.state === "retired" ? "retired" : ""
-    }
+    // A place that takes no reports, in words: "retired" ("" = active).
+    function placeState(l) { return l.state === "retired" ? "retired" : "" }
     function dueHours(p) { return Math.round((p.due_ts - Date.now() / 1000) / 3600) }
     function isOverdue(i) {
         var p = i.progress
@@ -520,10 +525,12 @@ Item {
     // THE place filter, shared by the Report picker and the Members list: keeps the places that
     // match `query` (code, name or group), `group` ("" = any) and the retired switch, ordered so
     // every group is one run of rows (views print one header per run).
+    readonly property var allPlaces: locations.concat(retiredLocations)   // active first, then the hidden ones
+    function placeByCode(code) { return allPlaces.filter(function (x) { return x.code === code })[0] }
     function placesView(query, group, withRetired) {
         var q = query.trim().toLowerCase()
-        var shown = locations.filter(function (l) {
-            return (withRetired || l.state === "active") && (group === "" || l.group === group)
+        var shown = (withRetired ? allPlaces : locations).filter(function (l) {
+            return (group === "" || l.group === group)
                 && (q === "" || (l.code + " " + l.label + " " + l.group).toLowerCase().indexOf(q) >= 0)
         })
         var out = []
@@ -531,7 +538,7 @@ Item {
         return out
     }
     function placeLabel(code) {
-        var l = locations.filter(function (x) { return x.code === code })[0]
+        var l = placeByCode(code)
         return l ? l.code + "  " + l.label : code
     }
     function openIssuesText(n) { return plural(n, "open issue") }
@@ -811,11 +818,6 @@ Item {
             Rectangle { anchors { fill: parent; margins: -3 } radius: 4; color: "transparent"; border.width: link.visualFocus ? 2 : 0; border.color: root.t.focus }
         }
     }
-    // A place's "Changes" link; the caller says what a click does.
-    component ChangesLink: LinkButton {
-        property string code
-        text: "Changes"; Accessible.name: "Changes to " + code
-    }
     // A place code that opens that place in History. A button of its own, so a click on it never
     // reaches the card it sits in.
     component PlaceLink: LinkButton {
@@ -929,8 +931,7 @@ Item {
     // A table's columns: each one's width (the `fill` ones also share what is left) and the `low` priority
     // ones that drop out when `compact`. History's drop out on a narrow page or beside the issue pane.
     readonly property var histTable: ({ w: [62, 170, 220, 150, 80, 170, 90, 60], fill: [1, 2, 5], low: [4, 5, 6, 7], compact: compactRows || paneOpen })
-    readonly property var placeTable: ({ w: [56, 0, 110, 130, 84, 76, 296], fill: [1], low: [2, 4, 5], compact: compactRows })
-    readonly property var logTable: ({ w: [64, 190, 140, 100, 200], fill: [1, 4], low: [3], compact: compactRows })
+    readonly property var placeTable: ({ w: [56, 0, 110, 130, 84, 296], fill: [1], low: [2, 4], compact: compactRows })
     // One table cell: a text, then whatever it holds (flag lines, chips). The header row uses it too.
     component HistCell: Column {
         required property int col
@@ -952,7 +953,6 @@ Item {
         }
     }
     component PlaceCell: HistCell { cols: root.placeTable }
-    component LogCell: HistCell { cols: root.logTable }
     // A table's column titles: a tinted strip over its rows, inset like them.
     component TableHead: Rectangle {
         default property alias cells: heads.data
@@ -1438,6 +1438,55 @@ Item {
         }
     }
 
+    // What the chain is doing with the change to one member: a chip while it waits or is on its way, and
+    // the reason when the chain rejected it (the row then shows its old state again).
+    component WriteMark: ColumnLayout {
+        id: mark
+        property string account
+        property bool queued: false          // site_info.pending: an approval for this person is queued
+        readonly property var w: root.writeFor(account)
+        readonly property bool live: root.isLive(w)
+        readonly property bool rejected: !!w && w.state === "rejected"
+        Layout.fillWidth: true
+        spacing: 4
+        visible: live || queued || rejected
+        Flow {
+            Layout.fillWidth: true
+            visible: mark.live || mark.queued
+            StatusChip {
+                label: mark.live ? root.kindText[mark.w.kind] + " " + root.stateText[mark.w.state] : "Approval waiting to be sent"
+                stage: root.t.progress; icon: "await"
+            }
+        }
+        FlagLine {
+            visible: mark.rejected; Layout.fillWidth: true
+            modelData: mark.rejected ? "Rejected" + root.writeWhy(mark.w) + ". The row is back to how it was." : ""
+        }
+    }
+
+    // The LEZ account of the user, to copy and fund: it pays the fee of every change that goes to the chain.
+    component AccountBox: ColumnLayout {
+        Layout.fillWidth: true
+        spacing: 4
+        visible: !!root.me.account
+        FormRow {
+            label: "Your network account"
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                FramedField {
+                    Layout.fillWidth: true; readOnly: true; text: root.me.account || ""
+                    font.family: "monospace"; Accessible.name: "Your network account"
+                }
+                FramedButton { text: "Copy"; iconName: "copy"; Accessible.name: "Copy your network account"; onClicked: root.copyText(root.me.account) }
+            }
+        }
+        Help {
+            text: "This account pays the small network fee for each change that you send to the chain. "
+                + "It needs funds before your first change. Add funds to it from your wallet. Without funds, the chain rejects the change."
+        }
+    }
+
     // Home's "how it works" strip: four numbered cards, two per row when the content is under 700 px.
     component HowItWorks: GridLayout {
         columns: root.width - root.sidebarWidth < 700 ? 2 : 4
@@ -1518,25 +1567,6 @@ Item {
         }
     }
 
-    // A row of the change log's table, from one site_info place_log entry.
-    component LogRow: Rectangle {
-        id: log
-        required property var modelData
-        readonly property var action: root.placeActions[modelData.kind]
-        Layout.fillWidth: true; implicitHeight: cells.implicitHeight + 20; color: "transparent"
-        Accessible.role: Accessible.StaticText; Accessible.name: root.placeChange(modelData)
-        Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: root.t.bd }
-        RowLayout {
-            id: cells
-            x: 16; y: 10; width: parent.width - 32; spacing: 12
-            LogCell { col: 0; muted: true; text: root.when(log.modelData.ts, "d MMM") }
-            LogCell { col: 1; format: Text.RichText; text: root.mono(log.modelData.code) + " " + root.esc(log.modelData.label || "") }
-            LogCell { col: 2; StatusChip { label: log.action[0]; stage: root.t[log.action[1]] } }
-            LogCell { col: 3; muted: true; text: root.who(log.modelData.by, log.modelData.by_name) }
-            LogCell { col: 4; text: root.placeDetail(log.modelData) }
-        }
-    }
-
     // The one multi-line text box: visible frame, scrolls, optional placeholder. Read-only boxes
     // are selectable and get a Copy button (more buttons can be put inside, beside it). With
     // `enterAccepts`, Return emits accepted() and Shift+Return starts a new line.
@@ -1553,6 +1583,7 @@ Item {
         property int boxHeight: 70
         default property alias extra: actions.data
         signal accepted()
+        signal edited()                   // the text changed, by typing or by the caller
         function enter(e) { if (fta.enterAccepts && !(e.modifiers & Qt.ShiftModifier)) fta.accepted(); else e.accepted = false }
         Layout.fillWidth: true
         spacing: 4
@@ -1572,7 +1603,7 @@ Item {
                 padding: 8
                 background: null
                 Accessible.name: fta.name
-                onTextChanged: if (fta.maxLength > 0 && length > fta.maxLength) remove(fta.maxLength, length)
+                onTextChanged: { if (fta.maxLength > 0 && length > fta.maxLength) remove(fta.maxLength, length); fta.edited() }
                 Keys.onReturnPressed: function (e) { fta.enter(e) }
                 Keys.onEnterPressed: function (e) { fta.enter(e) }
             }
@@ -1673,6 +1704,7 @@ Item {
         property string okText
         property string kind: "danger"
         property string reasonName           // what a screen reader says for the reason field
+        property string reasonHint: "Everyone on the site can read this."
         property bool withReason: true
         property bool ready: true            // the `extra` choices are complete
         property alias reason: reasonField.text
@@ -1691,7 +1723,7 @@ Item {
             FramedField {
                 id: reasonField
                 Layout.fillWidth: true; maximumLength: 500
-                placeholderText: "Everyone on the site can read this."
+                placeholderText: rp.reasonHint
                 Accessible.name: rp.reasonName
                 onAccepted: ok.submit()
             }
@@ -1839,14 +1871,15 @@ Item {
                     model: ["All groups"].concat(root.groupNames)
                 }
             }
-            FramedCheck { id: showRetired; objectName: "showRetired"; text: "Show retired places"; Layout.alignment: Qt.AlignBottom }
+            FramedCheck { id: showRetired; objectName: "showRetired"; checked: pb.bare; text: "Show retired places"; Layout.alignment: Qt.AlignBottom }
         }
         Rectangle { visible: pb.bare; Layout.fillWidth: true; implicitHeight: 1; color: root.t.bd }
         Label {
             Layout.leftMargin: pb.pad; Layout.topMargin: pb.bare ? 2 : 0; Layout.bottomMargin: pb.bare ? 2 : 0
             font.pointSize: root.smallSize
             color: root.t.muted
-            text: pb.places.length === 0 ? "No places match. Clear the search or pick another group."
+            text: pb.total === 0 ? "No places yet. They show here when the site data arrives."
+                : pb.places.length === 0 ? "No places match. Clear the search or pick another group."
                                          : pb.places.length + " of " + pb.total + " places"
         }
         Frame {
@@ -1873,12 +1906,8 @@ Item {
         }
         Flash {
             visible: pb.retiredPlace !== null && showRetired.checked
-            readonly property bool removing: !!pb.retiredPlace && pb.retiredPlace.state === "pending_removal"
             text: !pb.retiredPlace ? "" : pb.retiredPlace.code + " " + pb.retiredPlace.label
-                + (removing ? " is being removed (" + root.placeState(pb.retiredPlace) + ")" : " is retired")
-                + (pb.retiredPlace.retired_reason || pb.retiredPlace.removal_reason ? " (reason: " + (pb.retiredPlace.retired_reason || pb.retiredPlace.removal_reason) + ")" : "")
-                + ". If the problem is real, report it as Other and describe the place, or ask the admin to "
-                + (removing ? "undo the removal." : "restore it.")
+                + " is retired. If the problem is real, report it as Other and describe the place, or ask the admin to restore it."
             buttonText: "Report as Other at this spot"
             onActivated: pb.reportOther()
         }
@@ -1971,21 +2000,32 @@ Item {
             ColumnLayout {
                 Layout.fillWidth: true; Layout.topMargin: -4
                 spacing: 12
-                GridLayout {   // delivery: a dot and the status, the reason in red when it failed
-                    Layout.fillWidth: true
-                    columns: sidebar.open ? 3 : 1; columnSpacing: 8; rowSpacing: 4
-                    Rectangle {
-                        Layout.alignment: Qt.AlignHCenter | Qt.AlignTop; Layout.topMargin: sidebar.open ? 3 : 0
-                        implicitWidth: 10; implicitHeight: 10; radius: 5
-                        color: root.failed(root.me.delivery) ? root.t.sbOff : sidebar.deliveryText === "online" ? root.t.sbOk : root.t.sbConn
-                    }
-                    Label { Layout.alignment: sidebar.open ? Qt.AlignTop : Qt.AlignHCenter; text: "delivery:"; color: root.t.sbMuted; font.pointSize: root.smallSize }
-                    Label {
-                        Layout.fillWidth: true; Layout.alignment: Qt.AlignTop
-                        text: sidebar.deliveryText; wrapMode: Text.Wrap
-                        horizontalAlignment: sidebar.open ? Text.AlignLeft : Text.AlignHCenter
-                        color: root.failed(root.me.delivery) ? root.t.sbDanger : sidebar.on
-                        font.pointSize: root.smallSize; font.weight: Font.Medium
+                Repeater {   // delivery, chain and storage: a dot and the status, the reason in red when it failed
+                    model: [
+                        { label: "delivery:", text: sidebar.deliveryText, tone: root.failed(root.me.delivery) ? "off" : sidebar.deliveryText === "online" ? "ok" : "conn" },
+                        { label: "chain:", text: root.chainText, tone: root.chainOk ? "ok" : root.info.chain && root.info.chain.error ? "off" : "conn", site: true },
+                        { label: "storage:", text: root.storageText, tone: root.storageOk ? "ok" : root.info.storage && root.info.storage.error ? "off" : "conn", site: true }
+                    ].filter(function (e) { return !e.site || root.inSite })
+                    delegate: GridLayout {
+                        id: status
+                        required property var modelData
+                        readonly property color tone: modelData.tone === "off" ? root.t.sbOff : modelData.tone === "ok" ? root.t.sbOk : root.t.sbConn
+                        Layout.fillWidth: true
+                        columns: sidebar.open ? 3 : 1; columnSpacing: 8; rowSpacing: 4
+                        Accessible.name: modelData.label + " " + modelData.text
+                        Rectangle {
+                            Layout.alignment: Qt.AlignHCenter | Qt.AlignTop; Layout.topMargin: sidebar.open ? 3 : 0
+                            implicitWidth: 10; implicitHeight: 10; radius: 5
+                            color: status.tone
+                        }
+                        Label { Layout.alignment: sidebar.open ? Qt.AlignTop : Qt.AlignHCenter; text: status.modelData.label; color: root.t.sbMuted; font.pointSize: root.smallSize }
+                        Label {
+                            Layout.fillWidth: true; Layout.alignment: Qt.AlignTop
+                            text: status.modelData.text; wrapMode: Text.Wrap
+                            horizontalAlignment: sidebar.open ? Text.AlignLeft : Text.AlignHCenter
+                            color: status.modelData.tone === "off" ? root.t.sbDanger : sidebar.on
+                            font.pointSize: root.smallSize; font.weight: Font.Medium
+                        }
                     }
                 }
                 AbstractButton {   // you: name, fingerprint, role; opens Profile
@@ -2100,15 +2140,47 @@ Item {
             err: true; bold: true; icon: "shield"
             text: "Integrity warning: " + root.info.forks + " conflicting history pair(s) found. Someone signed two versions of their log, so devices may show different boards."
         }
-        Flash {   // joined, but the genesis hasn't arrived: wrong id, or nobody online yet
+        Flash {   // joined, but the site data has not come yet: the chain or Storage is slow, or the id is wrong
             visible: root.inSite && !root.info.name
-            text: "Waiting for site data… If this lasts, check the site id, or wait for a member to come online."
+            text: "Waiting for site data. It comes from the chain and from storage, and that can take a minute. If this lasts, check the site id."
             buttonText: "Leave this site"
             onActivated: root.leave()
         }
-        Flash {   // joined and waiting for a role: what to do, and what comes after
+        Flash {   // joined and waiting for a role: the request is out; what to do, and what comes after
             visible: root.awaitingApproval
-            text: "Waiting for the admin to approve you. Your fingerprint: " + (root.me.fingerprint || "") + ". Read it aloud at the kiosk. After approval you can report faults, confirm fixes and comment."
+            icon: "res"
+            lead: "Request sent."
+            text: (root.me.pending === "requested" ? "Your request is with the admin. " : "")
+                  + "Waiting for the admin to approve you. Your fingerprint: " + (root.me.fingerprint || "")
+                  + ". Read it aloud at the kiosk. After approval you can report faults, confirm fixes and comment."
+        }
+        Flash {   // the wallet cannot use our key: nothing can be sent to the chain
+            visible: root.inSite && root.keyProblem !== ""
+            Accessible.role: Accessible.AlertMessage
+            err: true
+            lead: "The wallet cannot use your key."
+            text: "Nothing is sent to the chain until this is fixed. Details: " + root.keyProblem
+        }
+        Repeater {   // the writes on their way to the chain, and the ones that the chain rejected
+            model: root.writeBanners
+            delegate: Flash {
+                id: banner
+                required property var modelData
+                readonly property bool site: modelData.kind === "create_site"
+                readonly property bool rejected: modelData.state === "rejected"
+                err: rejected
+                Accessible.role: rejected ? Accessible.AlertMessage : Accessible.StaticText
+                icon: !rejected && modelData.state === "included" ? "res" : rejected ? "warn" : "update"
+                lead: site ? (rejected ? "The site was not created." : modelData.state === "included" ? "The site is on the chain."
+                                : "Creating on the chain.")
+                           : root.kindText[modelData.kind] + (rejected ? " was rejected." : " is on its way to the chain.")
+                text: (rejected ? "Reason: " + (modelData.reason || "none given") + "."
+                                  + (site ? " Check that your network account has funds, then start again." : " Nothing changed.")
+                                : "Status: " + root.stateText[modelData.state] + ".")
+                buttonText: site && rejected ? "Start again" : ""
+                buttonIcon: site && rejected ? "" : "x"; buttonName: site && rejected ? "Start again" : "Close this message"
+                onActivated: site && rejected ? root.leave() : root.dismiss(modelData.id)
+            }
         }
         Flash {   // our role was revoked: by whom, when, why, and what is left
             visible: root.removed
@@ -2143,11 +2215,12 @@ Item {
                     buttonText: "Join"; buttonKind: "primary"
                     onSubmitted: root.run("site_join", [joinField.text])
                 }
-                Help { text: "Ask a steward, or read it from the kiosk screen." }
+                Help { text: "Ask a steward, or read it from the kiosk screen. Joining only sends a request to the admin. It costs no fee." }
             }
             CollapsibleSection {
                 title: "Create a site"; aside: "(site admin only)"
-                Help { text: "Nothing is published until you press Create site. Places can be added later too, on the Places page." }
+                Help { text: "Nothing is sent until you press Create site. Then the site goes to the chain, and that can take a minute or two. Places can be added later too, on the Places page." }
+                AccountBox {}
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 16
@@ -2402,14 +2475,6 @@ Item {
                             font.pointSize: root.smallSize; color: root.t.muted
                         }
                     }
-                    Flash {   // we are an admin on notice: when and how our role changes, and why
-                        readonly property var n: root.me.notice
-                        visible: !!n && !n.sealed && n.deadline > root.now
-                        Layout.bottomMargin: 8
-                        tone: "warn"; icon: "warn"
-                        lead: n ? (n.outcome === "remove" ? "You are removed from the site on " : "You become a steward on ") + root.when(n.deadline) + "." : ""
-                        text: n ? "Reason: “" + n.reason + "” You keep admin powers until then." : ""
-                    }
                     Flash {   // the record no longer matches its anchor: every member sees it, on every Board visit
                         visible: root.anchorState === "mismatch"
                         Layout.bottomMargin: 8
@@ -2642,11 +2707,34 @@ Item {
                     maxWidth: 1040
                     enabled: !root.syncing
                     PageHead { title: "People"; lede: root.isAdmin ? "Approve people and manage their roles." : "Who is in this site." }
+                    Rectangle {   // the admin's held changes: approvals, role changes and revokes go out together
+                        id: batchBar
+                        visible: root.isAdmin && (root.waitingCount > 0 || root.batchBusy)
+                        Layout.fillWidth: true
+                        implicitHeight: batchRow.implicitHeight + 24
+                        radius: 8; color: root.t.accentBg; border.color: root.t.accentBd
+                        RowLayout {
+                            id: batchRow
+                            anchors { fill: parent; margins: 12 }
+                            spacing: 12
+                            Label {
+                                Layout.fillWidth: true; wrapMode: Text.Wrap
+                                text: root.batchBusy ? "A batch is on its way to the chain. This takes a minute or two."
+                                    : root.plural(root.waitingCount, "change") + (root.waitingCount === 1 ? " waits" : " wait") + " to be sent. Each shows as pending until you send it."
+                            }
+                            ActionButton {
+                                kind: "primary"
+                                text: root.batchBusy ? "Sending…" : "Send " + root.plural(root.waitingCount, "change")
+                                allowed: root.waitingCount > 0 && !root.batchBusy
+                                onClicked: root.run("send_batch", [])
+                            }
+                        }
+                    }
                     CollapsibleSection {
                         visible: root.isAdmin
                         title: "Waiting for approval"; aside: "· " + root.pending.length
                         open: true; pad: 0
-                        Flash { Layout.margins: 16; Layout.bottomMargin: 12; icon: "mega"; text: "Grant a role only after the person reads this fingerprint aloud." }
+                        Flash { Layout.margins: 16; Layout.bottomMargin: 12; icon: "mega"; text: "Grant a role only after the person reads this fingerprint aloud. Granting only queues the change. It goes to the chain when you press Send changes." }
                         Blank {   // empty: say so and say when someone appears
                             visible: root.pending.length === 0
                             Layout.topMargin: 12
@@ -2667,6 +2755,7 @@ Item {
                                         font.weight: pendingRow.modelData.name ? Font.DemiBold : Font.Normal
                                     }
                                 }
+                                WriteMark { account: pendingRow.modelData.account || ""; queued: !!pendingRow.modelData.queued }
                             }
                         }
                     }
@@ -2692,10 +2781,9 @@ Item {
                                 readonly property bool sup: !!modelData.super_admin
                                 readonly property bool elevated: admin || modelData.role === "Steward"
                                 readonly property string person: root.who(modelData.key, modelData.name)
-                                readonly property var running: admin ? root.noticeOf(modelData) : null   // their notice, still running
-                                readonly property bool canChange: root.isSuper && admin && !sup && !running
-                                property string panel                // "" or the open step: "revoke", "change" or "transfer"
-                                onPanelChanged: { revokeStep.reset(); changeStep.reset() }
+                                readonly property bool canAddSuper: root.isSuper && admin && !sup
+                                property string panel                // "" or the open step: "revoke" or "transfer"
+                                onPanelChanged: revokeStep.reset()
                                 Layout.fillWidth: true
                                 spacing: 0
                                 Rectangle { visible: memberRow.index > 0; Layout.fillWidth: true; implicitHeight: 1; color: root.t.bd }
@@ -2724,8 +2812,7 @@ Item {
                                             StatusChip { visible: root.compactRows; label: memberRow.modelData.role; stage: memberRow.elevated ? root.t.progress : root.t.closed }
                                         }
                                         Label { visible: memberRow.own; text: "you"; color: root.t.muted; font.pointSize: root.smallSize }
-                                        Help { visible: text !== ""; Layout.topMargin: 4; text: root.noticeLine(memberRow.modelData) }
-                                        FlagLine { id: rejected; visible: rejected.modelData !== ""; Layout.fillWidth: true; Layout.topMargin: 4; modelData: root.rejectedLine(memberRow.modelData) }
+                                        WriteMark { Layout.topMargin: 4; account: memberRow.modelData.account || "" }
                                     }
                                     RowLayout {   // only the controls this viewer may use; nothing at all for residents and stewards
                                         visible: root.isAdmin
@@ -2734,36 +2821,19 @@ Item {
                                         Help {
                                             visible: memberRow.admin && !root.isSuper
                                             Layout.fillWidth: false; Layout.maximumWidth: 240
-                                            text: "Only a super admin can change admins."
+                                            text: "Only a super admin can revoke an admin."
                                         }
                                         ConfirmButton {
                                             visible: root.isSuper && !memberRow.admin && !!memberRow.modelData.name
                                             text: "Grant admin"; name: text + ": " + memberRow.person; confirmText: "Confirm grant"
-                                            effect: "They become an admin now."
+                                            effect: "They become an admin when you send the batch."
                                             onConfirmed: root.run("grant_role", [memberRow.modelData.key, "admin", memberRow.modelData.name])
                                         }
-                                        ActionButton {
-                                            visible: memberRow.canChange
-                                            text: "Change admin"; Accessible.name: text + ": " + memberRow.person
-                                            onClicked: memberRow.panel = "change"
-                                        }
                                         ConfirmButton {
-                                            visible: memberRow.canChange && root.superCount < 2 && !!memberRow.modelData.name
+                                            visible: memberRow.canAddSuper && root.superCount < 2 && !!memberRow.modelData.name
                                             text: "Add super admin"; name: text + ": " + memberRow.person; confirmText: "Confirm"
-                                            effect: "They can change admins too, from now on."
+                                            effect: "They become the second super admin once the chain accepts it."
                                             onConfirmed: root.run("add_super_admin", [memberRow.modelData.key])
-                                        }
-                                        ConfirmButton {
-                                            visible: root.isSuper && !!memberRow.running
-                                            text: "End notice now"; kind: "danger"; name: text + ": " + memberRow.person; confirmText: "Confirm end"
-                                            effect: memberRow.running && memberRow.running.outcome === "remove" ? "They are removed from the site now." : "They become a steward now."
-                                            onConfirmed: root.run("end_notice_now", [memberRow.modelData.key])
-                                        }
-                                        ConfirmButton {
-                                            visible: root.isSuper && !!memberRow.running
-                                            text: "Cancel notice"; name: text + ": " + memberRow.person; confirmText: "Confirm cancel"
-                                            effect: "They stay an admin."
-                                            onConfirmed: root.run("cancel_notice", [memberRow.modelData.key])
                                         }
                                         ActionButton {
                                             visible: root.isSuper && memberRow.sup && memberRow.own
@@ -2773,11 +2843,11 @@ Item {
                                         ConfirmButton {
                                             visible: root.isSuper && memberRow.sup && !memberRow.own
                                             text: "Remove super admin"; kind: "danger"; name: text + ": " + memberRow.person; confirmText: "Confirm remove"
-                                            effect: "They become a regular admin. Immediate, no notice."
+                                            effect: "They become a regular admin once the chain accepts it."
                                             onConfirmed: root.run("remove_super_admin", [memberRow.modelData.key])
                                         }
                                         ActionButton {
-                                            visible: !memberRow.admin
+                                            visible: !memberRow.admin || (root.isSuper && !memberRow.sup)
                                             text: "Revoke"; kind: "danger"; Accessible.name: "Revoke " + memberRow.person
                                             onClicked: memberRow.panel = "revoke"
                                         }
@@ -2789,58 +2859,18 @@ Item {
                                     Layout.leftMargin: 16 + 92 + 12
                                     title: "Revoke " + memberRow.person + "?"
                                     reasonName: "Reason for revoking " + memberRow.person
-                                    effect: "They lose the " + memberRow.modelData.role + " role now. Everyone on the site can see the reason."
+                                    effect: "They lose the " + memberRow.modelData.role + " role when you send the batch. Everyone on the site can see the reason."
                                     okText: "Confirm revoke"
                                     onConfirmed: root.run("revoke_role", [memberRow.modelData.key, reason], function () { memberRow.panel = "" })
                                     onCancelled: memberRow.panel = ""
                                 }
-                                ReasonPanel {   // a notice: they stay an admin until the deadline, then the outcome applies by itself
-                                    id: changeStep
-                                    property int outcome: 0          // 0 steward, 1 remove
-                                    property int span: 3             // index into `days`, or 4: the custom date and time
-                                    readonly property var days: [0, 1, 7, 30]
-                                    readonly property real deadline: end(root.now)
-                                    function end(t) {
-                                        return span < 4 ? Math.floor(t) + days[span] * 86400
-                                                        : Date.fromLocaleString(Qt.locale(), custom.text.trim(), "yyyy-MM-dd HH:mm").getTime() / 1000
-                                    }
-                                    visible: memberRow.panel === "change" && root.isSuper
-                                    Layout.leftMargin: 16 + 92 + 12
-                                    title: "Change admin: " + memberRow.person
-                                    reasonName: "Reason for changing " + memberRow.person
-                                    ready: span < 4 || deadline > Date.now() / 1000
-                                    effect: !ready ? "Write a date and time to come, as 2026-11-11 14:00."
-                                        : span === 0 ? "They " + (outcome ? "are removed from the site" : "become a steward") + " now. Everyone can see the reason."
-                                        : "They keep admin powers until " + root.when(deadline) + ". At that time they automatically "
-                                          + (outcome ? "are removed from the site" : "become a steward")
-                                          + ". Actions they sign after that time are rejected. Everyone can see the reason."
-                                    okText: "Start notice"
-                                    onConfirmed: root.run("admin_notice", [memberRow.modelData.key, outcome ? "remove" : "steward", Math.floor(end(Date.now() / 1000)), reason],
-                                                          function () { memberRow.panel = "" })
-                                    onCancelled: memberRow.panel = ""
-                                    FormRow {
-                                        label: "What happens at the end"; compact: true
-                                        Segmented { name: "What happens at the end"; options: ["Move to steward", "Remove from site"]; current: changeStep.outcome; onPicked: function (i) { changeStep.outcome = i } }
-                                    }
-                                    FormRow {
-                                        label: "Notice"; compact: true
-                                        Segmented { name: "Notice"; options: ["Now", "1 day", "7 days", "30 days", "Custom"]; current: changeStep.span; onPicked: function (i) { changeStep.span = i } }
-                                        FramedField {
-                                            id: custom
-                                            visible: changeStep.span === 4
-                                            Layout.preferredWidth: 220
-                                            placeholderText: "yyyy-MM-dd HH:mm"
-                                            Accessible.name: "Notice ends at, as year-month-day hours:minutes"
-                                        }
-                                    }
-                                }
-                                ReasonPanel {   // hand our place to a named member, at once
+                                ReasonPanel {   // hand our place to a named member
                                     visible: memberRow.panel === "transfer" && root.isSuper
                                     Layout.leftMargin: 16 + 92 + 12
                                     title: "Transfer super admin"
                                     withReason: false
                                     ready: transferTo.currentIndex >= 0
-                                    effect: "They become a super admin now. You become a regular admin. The change is immediate and everyone can see it."
+                                    effect: "They become a super admin and you become a regular admin, once the chain accepts it. Everyone can see it."
                                     okText: "Transfer"
                                     onConfirmed: root.run("transfer_super_admin", [transferTo.currentValue], function () { memberRow.panel = "" })
                                     onCancelled: memberRow.panel = ""
@@ -2890,45 +2920,30 @@ Item {
                     }
                 }
 
-                // Places (everyone in the site): the places and their change log, searchable. The admin
-                // also adds, edits, retires and removes places here.
+                // Places (everyone in the site): the active and the retired places. The admin also adds,
+                // edits, retires, removes and restores places here. Each change goes to the chain first.
                 TabPage {
                     id: placesPage
                     objectName: "placesPage"
                     maxWidth: 1040
                     enabled: !root.syncing
                     property bool adding: false    // "Add a place" was pressed: its form shows above the list
-                    property bool fullLog: false    // the change log past its newest 20; forgotten once the page is left
-                    onVisibleChanged: if (!visible) fullLog = false
-                    readonly property int retiredCount: root.locations.filter(function (l) { return l.state === "retired" }).length
-                    // The change log's search: any word of a row (code, name, person, action, reason), over the whole log.
-                    readonly property string query: logSearch.text.trim().toLowerCase()
-                    readonly property var logMatches: query === "" ? root.placeLog
-                        : root.placeLog.filter(function (c) { return root.placeChange(c).toLowerCase().indexOf(query) >= 0 })
-                    // A place's "Changes" link: its code in the search, then the log in view.
-                    function showChanges(code) {
-                        logSearch.text = code
-                        changeLog.open = true
-                        logSearch.forceActiveFocus()
-                        Qt.callLater(function () {
-                            var f = placesPage.contentItem
-                            f.contentY = Math.max(0, Math.min(changeLog.mapToItem(f.contentItem, 0, 0).y - 16, f.contentHeight - f.height))
-                        })
-                    }
-                    PageHead { title: "Places"; lede: root.isAdmin ? "Add, edit, retire and remove places, and see what changed." : "The places in this site, and what changed." }
+                    readonly property int retiredCount: root.retiredLocations.length
+                    PageHead { title: "Places"; lede: root.isAdmin ? "Add, edit, retire, remove and restore places." : "The places in this site." }
                     CollapsibleSection {
                         title: "Places"
-                        aside: "· " + root.locations.length + " places" + (placesPage.retiredCount > 0 ? ", " + placesPage.retiredCount + " retired" : "")
+                        aside: "· " + root.plural(root.locations.length, "place") + (placesPage.retiredCount > 0 ? ", " + placesPage.retiredCount + " retired" : "")
                         open: true; pad: 0
                         RowLayout {
                             Layout.fillWidth: true; Layout.margins: 16; Layout.bottomMargin: 8
                             spacing: 12
                             Help {
                                 text: root.isAdmin
-                                    ? "Nothing is deleted. A retired place takes no new reports; one with open issues can't be retired. "
-                                      + "A place nobody ever reported can be removed: it is hidden after 30 days (undo until then), and its signed events stay in everyone's log. "
-                                      + "Edit changes a place's name and group; its code never changes."
-                                    : "Nothing is deleted. A retired place takes no new reports. A place marked \"hidden on\" a date will leave the lists then; its history stays. A code opens that place in History."
+                                    ? "Nothing is deleted. A retired place takes no new reports, and one with open issues can't be retired. "
+                                      + "A place that nobody ever reported can also be removed. Retire and remove both hide the place from the lists. "
+                                      + "Restore brings a hidden place back. Edit changes a place's name and group. Its code never changes. "
+                                      + "Each change goes to the chain first, so it shows in the list after a minute or two."
+                                    : "Nothing is deleted. A retired place takes no new reports. A code opens that place in History."
                             }
                             FramedButton {
                                 visible: root.isAdmin
@@ -2941,7 +2956,7 @@ Item {
                             visible: placesPage.adding && root.isAdmin
                             Layout.fillWidth: true; Layout.margins: 16; Layout.topMargin: 0
                             spacing: 12
-                            Help { text: "For a place found on the site walk. It joins the list straight away." }
+                            Help { text: "For a place found on the site walk. It joins the list after the chain accepts it." }
                             RowLayout {
                                 Layout.fillWidth: true
                                 spacing: 16
@@ -2999,8 +3014,7 @@ Item {
                                     PlaceCell { col: 2; muted: true; bold: true; text: "Group" }
                                     PlaceCell { col: 3; muted: true; bold: true; text: "Status" }
                                     PlaceCell { col: 4; muted: true; bold: true; align: Text.AlignRight; text: "Open issues" }
-                                    PlaceCell { col: 5; muted: true; bold: true; text: "Log" }
-                                    PlaceCell { col: 6; visible: root.isAdmin; muted: true; bold: true; text: "Actions" }
+                                    PlaceCell { col: 5; visible: root.isAdmin; muted: true; bold: true; text: "Actions" }
                                 }
                             }
                             rowDelegate: Component {
@@ -3009,7 +3023,6 @@ Item {
                                     objectName: "placeRow-" + modelData.code
                                     required property var modelData
                                     readonly property string st: modelData.state
-                                    readonly property bool pending: st === "pending_removal"
                                     // The core refuses a retire while issues are open; disabling is only a courtesy.
                                     readonly property bool blocked: st === "active" && modelData.open_issues > 0
                                     // What the row's inline panel is doing: "" (nothing), "edit", or the core method a confirm step
@@ -3018,8 +3031,7 @@ Item {
                                     readonly property var ask: ({
                                         retire_location: { title: "Retire", ok: "Confirm retire", kind: "danger", effect: " takes no new reports. Its history stays, and you can restore it later." },
                                         restore_location: { title: "Restore", ok: "Confirm restore", kind: "primary", effect: " takes reports again." },
-                                        remove_location: { title: "Remove", ok: "Confirm remove", kind: "danger", effect: " is hidden after 30 days. You can undo until then." },
-                                        undo_remove_location: { title: "Undo the removal of", ok: "Confirm undo", kind: "primary", effect: " stays in the lists." } })[panel]
+                                        remove_location: { title: "Remove", ok: "Confirm remove", kind: "danger", effect: " is hidden from the lists, like a retired place. You can restore it later." } })[panel]
                                     onPanelChanged: confirmStep.reset()
                                     width: ListView.view.width
                                     height: stack.implicitHeight + 1
@@ -3035,66 +3047,44 @@ Item {
                                             PlaceCell { col: 0; PlaceLink { code: locRow.modelData.code } }
                                             PlaceCell {
                                                 col: 1; text: locRow.modelData.label; ink: locRow.st === "active" ? root.t.fg : root.t.muted
-                                                Label {
-                                                    visible: !!locRow.modelData.renamed_from
-                                                    width: parent.width; wrapMode: Text.Wrap; textFormat: Text.PlainText
-                                                    font.pointSize: root.smallSize; color: root.t.muted
-                                                    text: "was “" + locRow.modelData.renamed_from + "”"
-                                                }
                                             }
                                             PlaceCell { col: 2; muted: true; text: locRow.modelData.group }
                                             PlaceCell {
                                                 col: 3
                                                 StatusChip {
-                                                    visible: !locRow.pending
                                                     label: locRow.st === "retired" ? "Retired" : "Active"
                                                     stage: locRow.st === "retired" ? root.t.closed : root.t.resolved
                                                 }
-                                                Label {
-                                                    visible: text !== ""
-                                                    width: parent.width; wrapMode: Text.Wrap; textFormat: Text.PlainText
-                                                    color: locRow.pending ? root.t.danger : root.t.muted
-                                                    font.pointSize: root.smallSize; font.weight: locRow.pending ? Font.DemiBold : Font.Normal
-                                                    text: locRow.pending ? "hidden on " + root.when(locRow.modelData.removes_at, "d MMM") + ": " + locRow.modelData.removal_reason
-                                                        : locRow.st === "retired" ? locRow.modelData.retired_reason : ""
-                                                }
-                                                Flow {   // the Open issues and Log columns, once they have dropped out
-                                                    visible: root.placeTable.compact
-                                                    width: parent.width; spacing: 8
-                                                    Label {
-                                                        visible: locRow.modelData.open_issues > 0
-                                                        font.pointSize: root.smallSize; color: root.t.muted; text: root.openIssuesText(locRow.modelData.open_issues)
-                                                    }
-                                                    ChangesLink { code: locRow.modelData.code; onClicked: placesPage.showChanges(code) }
+                                                Label {   // the Open issues column, once it has dropped out
+                                                    visible: root.placeTable.compact && locRow.modelData.open_issues > 0
+                                                    font.pointSize: root.smallSize; color: root.t.muted; text: root.openIssuesText(locRow.modelData.open_issues)
                                                 }
                                             }
                                             PlaceCell {
                                                 col: 4; align: Text.AlignRight; text: locRow.modelData.open_issues
                                                 ink: locRow.modelData.open_issues > 0 ? root.t.fg : root.t.muted
                                             }
-                                            PlaceCell { col: 5; ChangesLink { code: locRow.modelData.code; onClicked: placesPage.showChanges(code) } }
                                             PlaceCell {   // three fixed slots, so every row's buttons line up
-                                                col: 6; visible: root.isAdmin
+                                                col: 5; visible: root.isAdmin
                                                 RowLayout {
                                                     width: parent.width; spacing: 6
                                                     ActionButton {   // slot 1: Retire / Restore
-                                                        shown: !locRow.pending
                                                         Layout.preferredWidth: 80
                                                         text: locRow.st === "retired" ? "Restore" : "Retire"
                                                         allowed: !locRow.blocked
                                                         Accessible.name: text + " " + locRow.modelData.code
                                                         onClicked: locRow.panel = locRow.st === "retired" ? "restore_location" : "retire_location"
                                                     }
-                                                    ActionButton {   // slot 2: Remove / Undo removal; only for a place no report ever named, the core decides
-                                                        shown: locRow.pending || !locRow.modelData.ever_used
+                                                    ActionButton {   // slot 2: Remove; only for a place no report ever named
+                                                        shown: locRow.st === "active" && !locRow.modelData.ever_used
                                                         Layout.preferredWidth: 124
-                                                        kind: locRow.pending ? "default" : "danger"
-                                                        text: locRow.pending ? "Undo removal" : "Remove"
+                                                        kind: "danger"
+                                                        text: "Remove"
                                                         Accessible.name: text + " " + locRow.modelData.code
-                                                        onClicked: locRow.panel = locRow.pending ? "undo_remove_location" : "remove_location"
+                                                        onClicked: locRow.panel = "remove_location"
                                                     }
-                                                    ActionButton {   // slot 3: Edit
-                                                        shown: !locRow.pending
+                                                    ActionButton {   // slot 3: Edit (a retired place is restored first)
+                                                        shown: locRow.st === "active"
                                                         Layout.preferredWidth: 76
                                                         text: locRow.panel === "edit" ? "Cancel" : "Edit"
                                                         Accessible.name: (locRow.panel === "edit" ? "Cancel editing " : "Edit ") + locRow.modelData.code
@@ -3114,6 +3104,7 @@ Item {
                                             Layout.leftMargin: 16 + root.placeTable.w[0] + 12
                                             title: locRow.ask ? locRow.ask.title + " " + locRow.modelData.code + ", " + locRow.modelData.label + "?" : ""
                                             reasonName: "Reason for changing " + locRow.modelData.code
+                                            reasonHint: "Needed to confirm. The chain does not keep this text."
                                             effect: locRow.ask ? locRow.modelData.label + locRow.ask.effect : ""
                                             okText: locRow.ask ? locRow.ask.ok : ""; kind: locRow.ask ? locRow.ask.kind : "default"
                                             onConfirmed: root.run(locRow.panel, [locRow.modelData.code, reason], function () { locRow.panel = "" })
@@ -3145,60 +3136,6 @@ Item {
                                     }
                                 }
                             }
-                        }
-                    }
-                    CollapsibleSection {
-                        id: changeLog
-                        objectName: "changeLog"
-                        title: "Change log"
-                        aside: "· " + (placesPage.query ? placesPage.logMatches.length + " of " : "") + root.placeLog.length
-                        pad: 0
-                        Help {
-                            Layout.margins: 16; Layout.bottomMargin: 8
-                            text: "Removed places are hidden from every list, retired ones included. Removed means hidden: the signed events stay in everyone's log."
-                        }
-                        Help {
-                            visible: root.placeLog.length === 0
-                            Layout.margins: 16; Layout.topMargin: 0
-                            text: "No changes yet."
-                        }
-                        FormRow {
-                            visible: root.placeLog.length > 0
-                            Layout.margins: 16; Layout.topMargin: 4; Layout.bottomMargin: 12
-                            label: "Search"; compact: true
-                            FramedField {
-                                id: logSearch
-                                objectName: "logSearch"
-                                Layout.fillWidth: true
-                                placeholderText: "place, person, action (retired, removed, renamed…) or reason"
-                                Accessible.name: "Search the change log"
-                            }
-                        }
-                        Blank {
-                            visible: placesPage.query !== "" && placesPage.logMatches.length === 0
-                            Layout.topMargin: 8
-                            icon: "search"; title: "No changes match “" + logSearch.text.trim() + "”."
-                            text: "Search by place code or name, a person, an action or a reason."
-                            FramedButton { text: "Clear"; Accessible.name: "Clear the change log search"; onClicked: logSearch.text = "" }
-                        }
-                        TableHead {
-                            visible: placesPage.logMatches.length > 0
-                            LogCell { col: 0; muted: true; bold: true; text: "When" }
-                            LogCell { col: 1; muted: true; bold: true; text: "Place" }
-                            LogCell { col: 2; muted: true; bold: true; text: "Action" }
-                            LogCell { col: 3; muted: true; bold: true; text: "By" }
-                            LogCell { col: 4; muted: true; bold: true; text: "Reason / detail" }
-                        }
-                        Repeater {
-                            model: placesPage.fullLog || placesPage.query ? placesPage.logMatches : root.placeLog.slice(0, 20)
-                            delegate: LogRow {}
-                        }
-                        MoreToggle {
-                            visible: !placesPage.query && root.placeLog.length > 20
-                            Layout.fillWidth: true; Layout.margins: 16
-                            expanded: placesPage.fullLog
-                            text: expanded ? "Show the newest 20" : "+" + root.plural(root.placeLog.length - 20, "older change")
-                            onClicked: placesPage.fullLog = !placesPage.fullLog
                         }
                     }
                 }
@@ -3270,6 +3207,9 @@ Item {
                 TabPage {
                     id: profilePage
                     readonly property string myName: root.me.name || ""   // a string: changes only when the name does, not on every refresh
+                    readonly property string myBio: root.me.bio || ""
+                    readonly property string myExperience: root.me.experience || ""
+                    property bool saved: false           // the last save went through: say where it is shown
                     readonly property var myReports: root.issues.filter(function (i) { return i.reporter === root.me.key })
                     readonly property int mineOpen: myReports.filter(function (i) { return !root.isTerminal(i.status) }).length
                     PageHead { title: "You"; lede: root.esc(root.me.name || "pseudonym") + " · " + root.roleName }
@@ -3286,23 +3226,52 @@ Item {
                         label: "Your code"; sub: root.unapproved ? "(read it aloud at the kiosk)" : ""
                         Fingerprint { text: root.me.fingerprint || ""; big: root.unapproved }
                     }
-                    Heading { text: "Name" }
-                    Note { visible: root.staff; text: root.me.name || ""; font.weight: Font.DemiBold }
-                    Help { visible: root.staff; text: "Staff names are set by the admin when granting the role." }
-                    LabelledField {
-                        id: nameField
-                        visible: !root.staff
+                    Heading { text: "About you" }
+                    Help { text: "Members of this site read these. Leave them empty to stay a pseudonym." }
+                    FormRow {
                         label: "Display name"
-                        text: profilePage.myName
-                        placeholder: "e.g. Asha (or leave empty to stay pseudonymous)"
-                        buttonText: "Set name"
-                        onSubmitted: root.run("set_profile", [nameField.text])
+                        FramedField {
+                            id: nameField
+                            Layout.fillWidth: true; maximumLength: 64
+                            text: profilePage.myName; Accessible.name: "Display name"
+                            placeholderText: "e.g. Asha"
+                            onTextEdited: profilePage.saved = false
+                        }
                     }
-                    Help {
-                        visible: !root.staff
-                        text: "The admin may have named you when approving you; this replaces it. Set it empty to stay a pseudonym; the admin who granted your role can still link it. Staff are always named."
+                    FormRow {
+                        label: "Bio"; sub: "(optional)"
+                        FramedTextArea {
+                            id: bioField
+                            boxHeight: 70; maxLength: 500
+                            wrap: TextEdit.WrapAtWordBoundaryOrAnywhere
+                            text: profilePage.myBio; name: "Bio"
+                            placeholder: "e.g. I live near the water tank and help with the pump."
+                            onEdited: profilePage.saved = false
+                        }
                     }
-                    Help { visible: root.removed; text: "Setting your name asks to join again: you then wait for the admin's approval." }
+                    FormRow {
+                        label: "Experience"; sub: "(optional)"
+                        FramedTextArea {
+                            id: experienceField
+                            boxHeight: 70; maxLength: 500
+                            wrap: TextEdit.WrapAtWordBoundaryOrAnywhere
+                            text: profilePage.myExperience; name: "Experience"
+                            placeholder: "e.g. Ten years as a plumber."
+                            onEdited: profilePage.saved = false
+                        }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 12
+                        ActionButton {
+                            text: "Save profile"; kind: "primary"
+                            onClicked: root.run("set_profile", [nameField.text, bioField.text, experienceField.text],
+                                                function () { profilePage.saved = true })
+                        }
+                        Help { visible: profilePage.saved; text: "Members see this now. The chain record updates at the next admin batch." }
+                    }
+                    Help { visible: root.removed; text: "Saving your profile does not give back your role. Ask the admin to approve you again." }
+                    AccountBox { Layout.topMargin: 12 }
                     Heading { text: "Back up this identity" }
                     Help { text: "Your identity is a key on this device. A backup lets you continue as the same person after a reinstall." }
                     Flash {
@@ -3439,7 +3408,7 @@ Item {
                                 Accessible.name: "Filter by place"
                                 textRole: "label"; valueRole: "code"
                                 model: [{ code: "", label: "All places" }]
-                                    .concat(root.locations.map(function (l) { return { code: l.code, label: l.code + " " + l.label } }))
+                                    .concat(root.allPlaces.map(function (l) { return { code: l.code, label: l.code + " " + l.label } }))
                                     .concat([{ code: "other", label: "Other (not on the list)" }])
                                 displayText: hist.place === "" ? "All places" : hist.place === "other" ? "Other" : root.placeLabel(hist.place)
                                 onActivated: function (index) { root.historyPlace = valueAt(index) }
@@ -3659,11 +3628,6 @@ Item {
                         Layout.fillWidth: true; Layout.topMargin: 4; wrapMode: Text.Wrap
                         text: !detail.issue.location ? "" : root.placeName(detail.issue) || root.placeCode(detail.issue)
                         font.pointSize: root.baseSize * 17 / 14; font.weight: Font.DemiBold
-                    }
-                    Label {
-                        visible: !!detail.issue.location_renamed_from
-                        Layout.fillWidth: true; wrapMode: Text.Wrap
-                        text: "Place renamed from " + detail.issue.location_renamed_from; font.pointSize: root.smallSize; color: root.t.muted
                     }
                     Flash {   // an old issue: why it is not on the board, and that nothing is lost
                         visible: detail.finished && !root.onBoard(detail.issue)
