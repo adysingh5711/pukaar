@@ -5,7 +5,7 @@
 //!   PUKAAR_PAYER         funded public account that pays the fee (base58)
 //!   PUKAAR_SIGNER        who signs: a base58 id or `tN` (default: the payer). The wallet must hold its key.
 //!
-//! The spike leaves signer_pk, sig_r and sig_s of an anchor at zero: clients verify them off-chain.
+//! The spike sets signer_pk of an anchor to the pukaar key of the signer's Member and leaves sig_r and sig_s at zero: clients verify them off-chain.
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use clock_core::{CLOCK_01_PROGRAM_ACCOUNT_ID, clock_account_id};
@@ -41,7 +41,7 @@ Reads and tools:
   build-join-request <tN|seed_hex> <site> [nonce=<n>] [valid=<ms>]   prints the 290-byte request as hex
   member-key <tN>             prints the LEZ private key (hex) and account id, for `wallet account import public`
   clock                       chain time in ms
-  probe <flags> [now=<ms>] [min=<balance>] [members=<n>] [salt=<hex32>] [bad=clock|balance|merkle|sig]   test-only gas probe
+  probe <flags> [now=<ms>] [min=<balance>] [members=<n>] [salt=<hex32>] [bad=clock|balance|merkle|sig]   test-only gas probe, needs a guest built with `--features probe` (the default build refuses it)
   block-txs <from_block> <to_block>   serialized size of every tx in those blocks
 Every instruction prints the tx hash, its block, and `fee=<lepta>` (payer balance before minus after).
 A failed instruction still lands and pays: read the state back with get-site and get-member.";
@@ -410,11 +410,13 @@ async fn run(cx: &Cx, cmd: &str, args: &[String]) -> Result<()> {
                 }
                 return Ok(());
             }
+            // signer_pk must be the pukaar key of the signer's Member. A stranger has none: the program refuses it.
+            let signer_pk = cx.member(&h, &cx.signer).await?.map_or([0; 32], |m| m.pukaar_key);
             let record = CheckpointRecord {
                 site_id: h,
                 heads_root,
                 n_events: rest.get(1).map_or(Ok(0), |n| n.parse())?,
-                signer_pk: [0; 32],
+                signer_pk,
                 sig_r: [0; 32],
                 sig_s: [0; 32],
             };

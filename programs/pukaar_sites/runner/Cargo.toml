@@ -16,7 +16,7 @@ name = "runner"
 path = "src/main.rs"
 
 [dependencies]
-pukaar_sites_rules = { path = "../rules" }
+pukaar_sites_rules = { path = "../rules", features = ["probe"] }
 wallet = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.3.1" }
 lee = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.3.1" }
 clock_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.3.1" }

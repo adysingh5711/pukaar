@@ -10,15 +10,16 @@
 //!   approve_batch, set_role_batch, revoke_batch, set_profile_batch
 //!                 the four above + one Member per target (the signer's own once) (4 + N)
 //!   super_admin_add, super_admin_transfer: the four above + the target Member    (5)
-//! Probe (test only) takes, in this order: the CLOCK_01 clock shard if flagged, one native balance shard
+//! Probe (feature `probe` only, never in a release build) takes, in this order: the CLOCK_01 clock shard if flagged, one native balance shard
 //! if flagged, then `n_members` member PDAs. The fee payer co-signs outside the account list.
 
 use clock_core::{CLOCK_01_PROGRAM_ACCOUNT_ID, clock_account_id};
 use lee_core::{
     account::AccountId,
-    native_token::NATIVE_TOKEN_PROGRAM_ID,
     program::{AccountMeta, PdaSeed, Plan, PlanInput, run_program},
 };
+#[cfg(feature = "probe")]
+use lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID;
 use pukaar_sites_rules::*;
 
 #[cfg(test)]
@@ -101,12 +102,19 @@ fn nonempty<T>(items: &[T]) {
 }
 
 fn plan(input: &PlanInput, instruction: Instruction) -> Plan {
+    // A chained call from another program acts with the signer's authority, so a role instruction refuses it.
+    // `caller_account_id` is `None` for a direct call of a user (LEZ v0.3.1).
+    assert!(input.caller_account_id.is_none(), "plan: a call from another program is refused");
+    #[cfg(feature = "probe")]
     if let Instruction::Probe(p) = instruction {
         return probe(input, p);
     }
     let mut c = Ctx::new(input);
     match instruction {
+        #[cfg(feature = "probe")]
         Instruction::Probe(_) => unreachable!("handled above"),
+        #[cfg(not(feature = "probe"))]
+        Instruction::Reserved(_) => panic!("plan: instruction 1 is reserved: the probe is not in this build"),
         Instruction::Anchor(AnchorIx { record, now_ms }) => {
             check_anchor(&record).unwrap_or_else(|e| panic!("anchor: {e}"));
             let signer = c.signer().into_value();
@@ -222,6 +230,7 @@ fn super_admin(c: &mut Ctx, ix: &SuperAdminIx, with_target: bool) -> (Actor, Acc
     (actor, site, target)
 }
 
+#[cfg(feature = "probe")]
 fn probe(input: &PlanInput, p: Probe) -> Plan {
     let mut plan = Plan::new(input);
     check_probe(&p).unwrap_or_else(|e| panic!("probe: {e}"));

@@ -142,7 +142,12 @@ pub fn check_anchor_signer(m: &Member, rec: &CheckpointRecord, signer: &AccountI
     if m.site_id != rec.site_id || m.user != *signer {
         return Err(RuleError::WrongRecord);
     }
-    active_rank(m, now_ms).map(|_| ())
+    active_rank(m, now_ms)?;
+    // A junk record is at least attributable. The write-once slot race stays (plan, P1 risks).
+    if rec.signer_pk != m.pukaar_key {
+        return Err(RuleError::SignerKey);
+    }
+    Ok(())
 }
 
 // ---- create_site ----
@@ -249,9 +254,7 @@ pub fn apply_approve(
         return Err(RuleError::AlreadyMember);
     }
     check_cid(&item.profile_cid)?;
-    if item.profile_version <= pre.map_or(0, |m| m.profile_version) {
-        return Err(RuleError::StaleProfile);
-    }
+    check_version(pre.map_or(0, |m| m.profile_version), item.profile_version)?;
     Ok(Member {
         version: RECORD_VERSION,
         site_id: *site_id,
@@ -413,6 +416,21 @@ pub fn apply_super_admin_promote(target: &Member, actor: &Actor, now_ms: u64) ->
 
 // ---- pointers: profile (per member), details, places, keyring (per site) ----
 
+/// A new profile version may be at most this far above the stored one. A member may edit many times between
+/// admin batches, and an admin cannot lock a member out with `u64::MAX`.
+pub const MAX_VERSION_STEP: u64 = 1024;
+
+/// `stored < version <= stored + MAX_VERSION_STEP`.
+fn check_version(stored: u64, version: u64) -> Result<(), RuleError> {
+    if version <= stored {
+        return Err(RuleError::StaleProfile);
+    }
+    if version - stored > MAX_VERSION_STEP {
+        return Err(RuleError::VersionJump);
+    }
+    Ok(())
+}
+
 /// Apply of one target `Member` in `set_profile_batch`: an admin signs, the version must grow.
 pub fn apply_set_profile(
     target: &Member,
@@ -424,9 +442,7 @@ pub fn apply_set_profile(
 ) -> Result<Member, RuleError> {
     allow(actor, Action::SetProfile, Some(active_rank(target, now_ms)?))?;
     check_cid(cid)?;
-    if version <= target.profile_version {
-        return Err(RuleError::StaleProfile);
-    }
+    check_version(target.profile_version, version)?;
     let mut m = target.clone();
     m.profile_cid = cid.into();
     m.profile_sha256 = sha256;

@@ -307,6 +307,11 @@ pub fn check_join_request(
     if body.nonce <= member.map_or(0, |m| m.last_req_nonce) {
         return Err(RuleError::StaleNonce);
     }
+    // The nonce is the client clock in ms (design: nonce = created_ms). Bound it by the chain clock so a forged
+    // `u64::MAX` cannot end every later request. A forged nonce can still lock the member for CLOCK_TOLERANCE_MS.
+    if body.nonce > now_ms.saturating_add(crate::CLOCK_TOLERANCE_MS) {
+        return Err(RuleError::NonceTooHigh);
+    }
     if now_ms > body.valid_until_ms {
         return Err(RuleError::JoinExpired);
     }

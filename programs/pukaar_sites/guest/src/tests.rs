@@ -465,17 +465,21 @@ fn a_stale_or_future_clock_claim_fails() {
 
 #[test]
 fn anchor_needs_an_active_member() {
-    let rec = CheckpointRecord { site_id: site_id(), heads_root: h(8), n_events: 3, signer_pk: h(0), sig_r: h(0), sig_s: h(0) };
-    let cp = derive(checkpoint_seed(&rec.site_id, &rec.heads_root));
-    let ix = Instruction::Anchor(AnchorIx { record: rec.clone(), now_ms: NOW });
-    let accts = |n| vec![signer_meta(n), prog(member_acct(n)), prog(cp), clock_meta()];
     let mut c = Chain::full();
+    let (pk1, pk2) = (c.member(R1).pukaar_key, c.member(R2).pukaar_key);
+    let rec = |signer_pk| CheckpointRecord { site_id: site_id(), heads_root: h(8), n_events: 3, signer_pk, sig_r: h(0), sig_s: h(0) };
+    let cp = derive(checkpoint_seed(&site_id(), &h(8)));
+    let ix = |pk| Instruction::Anchor(AnchorIx { record: rec(pk), now_ms: NOW });
+    let accts = |n| vec![signer_meta(n), prog(member_acct(n)), prog(cp), clock_meta()];
+    let (ix_r1, ix_r2, junk) = (ix(pk1), ix(pk2), ix(h(0)));
     // the member shard does not exist for a stranger
-    fails(&mut c, accts(OUT), ix.clone(), "no record");
-    c.send(accts(R1), ix.clone()).unwrap();
-    assert_eq!(CheckpointRecord::decode(&c.shards[&(cp, PROGRAM)]), Some(rec));
+    fails(&mut c, accts(OUT), ix_r1.clone(), "no record");
+    // a record that carries a key other than the key of the signer
+    fails(&mut c, accts(R1), junk, "signer_pk");
+    c.send(accts(R1), ix_r1).unwrap();
+    assert_eq!(CheckpointRecord::decode(&c.shards[&(cp, PROGRAM)]), Some(rec(pk1)));
     // the same (site, root) twice
-    fails(&mut c, accts(R2), ix.clone(), "already anchored");
+    fails(&mut c, accts(R2), ix_r2, "already anchored");
     // a removed member
     let revoke = Instruction::RevokeBatch(RevokeBatchIx {
         auth: auth(Rank::Admin),
@@ -489,9 +493,58 @@ fn anchor_needs_an_active_member() {
     fails(&mut c, vec![signer_meta(R2), prog(member_acct(R2)), prog(cp2), clock_meta()], other, "not active");
 }
 
+#[cfg(feature = "probe")]
 #[test]
 fn the_probe_still_plans() {
     let p = sample_probe(PROBE_CLOCK, NOW, 0, 0, h(1));
     let mut c = Chain::new();
     c.send(vec![clock_meta()], Instruction::Probe(p)).unwrap();
+}
+
+// ---- security review ----
+
+/// F3: a signer's authority reaches every chained call of the same transaction, so a role instruction
+/// refuses a call that another program makes.
+#[test]
+fn a_call_from_another_program_is_refused() {
+    let ix = Instruction::SetDetails(SetPointerIx { auth: Auth { site_id: site_id(), now_ms: NOW, claimed: Rank::Admin }, cid: "c".into(), sha256: h(1) });
+    let input = PlanInput {
+        self_account_id: PROGRAM,
+        caller_account_id: Some(AccountId::new([0x55; 32])),
+        accounts: role_accounts(D, &[]),
+        instruction_data: borsh::to_vec(&ix).unwrap(),
+    };
+    let r = catch_unwind(AssertUnwindSafe(|| drop(plan(&input, ix.clone()))));
+    assert!(r.is_err(), "plan accepted a chained call");
+    // the same call from a user directly plans
+    let direct = PlanInput { caller_account_id: None, ..input };
+    drop(plan(&direct, ix));
+}
+
+/// F4: the default build has no probe. Index 1 stays reserved and the plan refuses it, with no signer needed to try.
+#[cfg(not(feature = "probe"))]
+#[test]
+fn the_probe_is_not_callable_by_anyone() {
+    let p = Probe {
+        flags: PROBE_MEMBERS,
+        now_ms: 0,
+        min_balance: 0,
+        leaf_data: vec![],
+        index: 0,
+        n_leaves: 0,
+        proof: vec![],
+        root: h(0),
+        pk: [0; 32],
+        sig: [0; 64],
+        msg: vec![],
+        salt: h(3),
+        n_members: 3,
+    };
+    let ix = Instruction::Reserved(p);
+    assert_eq!(borsh::to_vec(&ix).unwrap()[0], 1, "the slot keeps index 1");
+    let accounts: Vec<AccountMeta> = (0..3).map(|i| prog(AccountId::new([i; 32]))).collect();
+    let input = PlanInput { self_account_id: PROGRAM, caller_account_id: None, accounts, instruction_data: borsh::to_vec(&ix).unwrap() };
+    let err = catch_unwind(AssertUnwindSafe(|| drop(plan(&input, ix)))).expect_err("an unsigned call planned 3 writes");
+    let msg = err.downcast_ref::<&str>().map(|s| s.to_string()).or(err.downcast_ref::<String>().cloned()).unwrap_or_default();
+    assert!(msg.contains("reserved"), "{msg}");
 }

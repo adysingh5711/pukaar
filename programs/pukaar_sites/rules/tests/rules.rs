@@ -191,7 +191,7 @@ impl W {
             site_id: self.site.site_id,
             heads_root: h(30),
             n_events: 1,
-            signer_pk: h(31),
+            signer_pk: self.get(n)?.pukaar_key,
             sig_r: h(32),
             sig_s: h(33),
         };

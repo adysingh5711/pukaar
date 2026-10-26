@@ -33,8 +33,12 @@ pub struct CheckpointRecord {
 pub enum Instruction {
     /// The signer must be an active member of the checkpoint's site.
     Anchor(AnchorIx),
-    /// Test-only gas probe (P0). Remove before the real program ships.
+    /// Test-only gas probe (P0), built only with the `probe` feature.
+    #[cfg(feature = "probe")]
     Probe(Probe),
+    /// Index 1 stays taken so the other indices never move. The default build refuses it.
+    #[cfg(not(feature = "probe"))]
+    Reserved(Probe),
     CreateSite(CreateSiteIx),
     SetDetails(SetPointerIx),
     SetPlaces(SetPointerIx),
@@ -132,6 +136,10 @@ pub enum RuleError {
     // wire.rs. Append only.
     RecordExists,
     NoRecord,
+    // review fixes. Append only.
+    VersionJump,
+    NonceTooHigh,
+    SignerKey,
 }
 
 impl core::fmt::Display for RuleError {
@@ -173,6 +181,9 @@ impl core::fmt::Display for RuleError {
             Self::JoinExpired => "the join request is past valid_until_ms",
             Self::RecordExists => "the record is already written",
             Self::NoRecord => "the shard holds no record",
+            Self::VersionJump => "the profile version jumps more than MAX_VERSION_STEP",
+            Self::NonceTooHigh => "the join request nonce is more than the clock tolerance ahead of now",
+            Self::SignerKey => "signer_pk is not the pukaar key of the member",
         })
     }
 }
@@ -277,6 +288,7 @@ pub fn merkle_fold(leaf: [u8; 32], mut idx: u64, mut n: u64, proof: &[[u8; 32]])
     items.next().is_none().then_some(node)
 }
 
+#[cfg(feature = "probe")]
 pub fn check_ed25519(pk: &[u8; 32], sig: &[u8; 64], msg: &[u8]) -> Result<(), RuleError> {
     let vk = ed25519_dalek::VerifyingKey::from_bytes(pk).map_err(|_| RuleError::BadSignature)?;
     vk.verify_strict(msg, &ed25519_dalek::Signature::from_bytes(sig)).map_err(|_| RuleError::BadSignature)
@@ -313,6 +325,7 @@ pub struct Probe {
 }
 
 /// Plan-side steps that need no chain state: Merkle and ed25519.
+#[cfg(feature = "probe")]
 pub fn check_probe(p: &Probe) -> Result<(), RuleError> {
     if p.flags & PROBE_MERKLE != 0 {
         let top = merkle_fold(merkle_leaf(&p.leaf_data), p.index, p.n_leaves, &p.proof);
@@ -327,6 +340,7 @@ pub fn check_probe(p: &Probe) -> Result<(), RuleError> {
 }
 
 /// All levels of the app's `checkpoint.rs::merkle_root` tree, leaves first. For tests and the probe runner.
+#[cfg(feature = "probe")]
 pub fn merkle_levels(leaves: Vec<[u8; 32]>) -> Vec<Vec<[u8; 32]>> {
     let mut levels = vec![leaves];
     while levels.last().is_some_and(|l| l.len() > 1) {
@@ -337,6 +351,7 @@ pub fn merkle_levels(leaves: Vec<[u8; 32]>) -> Vec<Vec<[u8; 32]>> {
 }
 
 /// The proof `merkle_fold` expects for leaf `idx`.
+#[cfg(feature = "probe")]
 pub fn merkle_proof(levels: &[Vec<[u8; 32]>], mut idx: usize) -> Vec<[u8; 32]> {
     let mut proof = vec![];
     for level in &levels[..levels.len() - 1] {
@@ -351,7 +366,9 @@ pub fn merkle_proof(levels: &[Vec<[u8; 32]>], mut idx: usize) -> Vec<[u8; 32]> {
 }
 
 /// RFC 8032 section 7.1, test 2: one-byte message 0x72.
+#[cfg(feature = "probe")]
 pub const ED_PK: &str = "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c";
+#[cfg(feature = "probe")]
 pub const ED_SIG: &str = "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00";
 
 pub fn unhex<const N: usize>(s: &str) -> [u8; N] {
@@ -360,6 +377,7 @@ pub fn unhex<const N: usize>(s: &str) -> [u8; N] {
 }
 
 /// A probe whose steps all pass: a depth-10 proof for leaf 5 of 1024, and one valid signature.
+#[cfg(feature = "probe")]
 pub fn sample_probe(flags: u8, now_ms: u64, min_balance: u128, n_members: u16, salt: [u8; 32]) -> Probe {
     let n = 1024u64;
     let levels = merkle_levels((0..n).map(|i| merkle_leaf(&i.to_be_bytes())).collect());
@@ -477,6 +495,7 @@ mod tests {
         assert_eq!(check_balance(&[1, 2, 3], 0), Err(RuleError::BadBalance));
     }
 
+    #[cfg(feature = "probe")]
     #[test]
     fn merkle_fold_matches_checkpoint_scheme() {
         for n in [1usize, 2, 3, 7, 1000, 1024] {
@@ -497,6 +516,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "probe")]
     #[test]
     fn ed25519_strict() {
         let (pk, sig) = (unhex::<32>(ED_PK), unhex::<64>(ED_SIG));
@@ -504,6 +524,7 @@ mod tests {
         assert_eq!(check_ed25519(&pk, &sig, &[0x73]), Err(RuleError::BadSignature));
     }
 
+    #[cfg(feature = "probe")]
     #[test]
     fn probe_runs_each_step() {
         let mut p = sample_probe(PROBE_MERKLE | PROBE_ED25519, 0, 0, 0, [9; 32]);
@@ -518,6 +539,7 @@ mod tests {
         assert_eq!(check_probe(&p), Ok(()));
     }
 
+    #[cfg(feature = "probe")]
     #[test]
     fn member_written_once() {
         let rec = member_record(&[9; 32], 3);
