@@ -6094,10 +6094,13 @@ dependencies = [
  "anyhow",
  "borsh",
  "clock_core",
+ "ed25519-dalek",
  "hex",
+ "hkdf 0.12.4",
  "lee",
  "lee_core",
  "pukaar_sites_rules",
+ "sha2 0.10.9",
  "tokio",
  "wallet",
 ]
