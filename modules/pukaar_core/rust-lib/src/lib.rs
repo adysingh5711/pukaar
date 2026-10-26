@@ -5,11 +5,13 @@
 //! rust-lib/Cargo.toml); this file only moves bytes between that crate, the
 //! disk and Delivery.
 
-use pukaar_logic::event::{Body, Event, Key, SigningKey};
+use pukaar_logic::event::{Body, Event, SigningKey};
 use pukaar_logic::identity;
 use pukaar_logic::node::{action_body, parse_id, Node};
+use pukaar_logic::lezkey::{derive_lez_secret, lez_account_id};
 use pukaar_logic::persist;
 use pukaar_logic::reducer::Rank;
+use pukaar_logic::rpc::{refresh, Chain, HttpRpc};
 use pukaar_logic::store::Accept;
 use pukaar_logic::sync::{
     heads_msg, lost_node, send_queue, should_answer, to_resend, to_resend_own, SendError, Wire,
@@ -361,10 +363,43 @@ fn open_channel(site_hex: &str, me_hex: &str) -> Result<(), String> {
     )
 }
 
-/// The sorted keys of the approved members, from the chain roster. They elect who answers Heads.
-fn chain_roster() -> Vec<Key> {
-    // 2.3: read the approved members from chain::Roster. Empty until then: every node answers.
-    Vec::new()
+/// The `pukaar_sites` program on the LEZ testnet (base58 account id) and its JSON-RPC node.
+/// `PUKAAR_PROGRAM_ID` and `PUKAAR_LEZ_RPC` override them.
+const PROGRAM_ID: &str = "Gs1EWbwJKSBGRBiR7xasYtkrfCyUGJ52Vx4ASsDLooVK";
+const LEZ_RPC: &str = "https://testnet.lez.logos.co";
+
+fn env_or(name: &str, default: &str) -> String {
+    std::env::var(name).unwrap_or_else(|_| default.to_string())
+}
+
+/// Back the roles of `node` with chain reads. The reads run on a thread (see `chain_tick`).
+fn wire_chain(node: &mut Node) {
+    let program = bs58::decode(env_or("PUKAAR_PROGRAM_ID", PROGRAM_ID))
+        .into_vec()
+        .ok()
+        .and_then(|v| v.try_into().ok());
+    let Some(program) = program else {
+        eprintln!("pukaar: PUKAAR_PROGRAM_ID is not a base58 account id: no chain reads");
+        return;
+    };
+    let me = lez_account_id(&derive_lez_secret(&node.key.to_bytes()));
+    node.attach_chain(Chain::shared(program, node.store.site, me));
+}
+
+/// Start a chain read when one is due (at most one per 10 s). It never runs inside the call that
+/// the UI waits on: the thread fills the cache and the calls read the cached copy.
+fn chain_tick() {
+    let chain = SHARED
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|sh| sh.node.as_ref())
+        .and_then(|n| n.chain.clone());
+    let Some(chain) = chain else { return };
+    if !chain.lock().unwrap().start() {
+        return;
+    }
+    std::thread::spawn(move || refresh(&chain, &HttpRpc::new(&env_or("PUKAAR_LEZ_RPC", LEZ_RPC))));
 }
 
 /// Called from the Delivery event thread for every channel message; only our site's count
@@ -400,7 +435,7 @@ fn on_wire(channel: &str, bytes: &[u8]) {
             // Everyone re-sends their OWN missing events; only the kiosk (admin) and 3 elected
             // peers re-send everyone's, so a newcomer gets 3-4 copies instead of 30.
             *last_answer = Some(Instant::now());
-            let members = chain_roster();
+            let members = node.approved_keys();
             let me = node.me();
             let kiosk = node.role_now(&me).is_some_and(|r| r >= Rank::Admin);
             let batch = if kiosk || should_answer(&me, &members, bytes, now() / 60) {
@@ -458,6 +493,7 @@ fn send_queued(site: &str) -> Result<(), String> {
 /// One Delivery step: bring the node up, open our site's channel, then send. The UI polls
 /// my_identity every 2 s, so this runs often.
 fn flush() {
+    chain_tick();
     let (link, ids) = {
         let mut g = SHARED.lock().unwrap();
         let Some(sh) = g.as_mut() else {
@@ -542,10 +578,11 @@ fn start_site(make: impl FnOnce(SigningKey, &Path) -> Result<Node, String>) -> S
             Ok(k) => k,
             Err(e) => return err(e),
         };
-        let node = match make(key, &sh.dir) {
+        let mut node = match make(key, &sh.dir) {
             Ok(n) => n,
             Err(e) => return err(e),
         };
+        wire_chain(&mut node);
         if let Err(e) = persist::save(&node, &sh.dir) {
             return err(e);
         }
@@ -633,7 +670,9 @@ impl PukaarCoreModule for Pukaar {
         let r = (|| {
             let mut g = SHARED.lock().unwrap();
             let sh = g.as_mut().ok_or("module not ready")?;
-            sh.node = Some(identity::import_into(&sh.dir, &blob, &password, now())?);
+            let mut node = identity::import_into(&sh.dir, &blob, &password, now())?;
+            wire_chain(&mut node);
+            sh.node = Some(node);
             Ok::<_, String>("ok".to_string())
         })();
         flush(); // opens the channel; our heads go out and peers re-send our history
@@ -772,10 +811,13 @@ impl PukaarCoreModule for Pukaar {
 
     fn on_context_ready(&mut self, ctx: &RustModuleContext) {
         let dir = PathBuf::from(&ctx.instance_persistence_path);
-        let node = persist::load(&dir).unwrap_or_else(|e| {
+        let mut node = persist::load(&dir).unwrap_or_else(|e| {
             eprintln!("pukaar: could not load replica: {e}");
             None
         });
+        if let Some(n) = node.as_mut() {
+            wire_chain(n);
+        }
         // No Delivery calls here (see Link): flush() brings the node up on the first poll.
         *SHARED.lock().unwrap() = Some(Shared {
             dir,

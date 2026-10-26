@@ -7,6 +7,7 @@ use crate::event::{
     VERSION,
 };
 use crate::reducer::{issue_of, reduce, Config, Issue, RoleFn, State, Status};
+use crate::rpc::{rank_name, SharedChain};
 use crate::store::{Accept, Store};
 use ed25519_dalek::SigningKey;
 use pukaar_sites_rules::Rank;
@@ -52,9 +53,11 @@ pub struct Node {
     /// `Some` while a restored identity waits for its own history.
     pub restore: Option<Restore>,
     /// The newest chain block we know. Each event we sign names it as `chain_block`.
-    pub chain_block: u64, // 2.3: set from the chain
-    /// The chain role of an author at a block. No roles until the chain is wired.
-    pub roles: RoleFn, // 2.3: backed by chain::Roster
+    pub chain_block: u64,
+    /// The chain role of an author at a block. Nobody has a role until `attach_chain`.
+    pub roles: RoleFn,
+    /// The cached chain reads that back `roles`.
+    pub chain: Option<SharedChain>,
     pub config: Config,         // 2.3: from details.json
     pub locations: Vec<Location>, // 2.3: from places.json
     pub names: BTreeMap<Key, String>, // 2.3: from the profiles
@@ -69,6 +72,7 @@ impl Node {
             restore: None,
             chain_block: 0,
             roles: Box::new(|_, _| None),
+            chain: None,
             config: Config::default(),
             locations: Vec::new(),
             names: BTreeMap::new(),
@@ -81,6 +85,19 @@ impl Node {
             restore: Some(Restore::new(now)),
             ..Node::join(key, site)
         }
+    }
+
+    /// Back `roles` with the cached chain reads. Our events name the newest block it has read.
+    pub fn attach_chain(&mut self, c: SharedChain) {
+        let for_roles = c.clone();
+        self.roles = Box::new(move |k, block| for_roles.lock().unwrap().role_at(k, block));
+        self.chain = Some(c);
+    }
+
+    /// The sorted keys of the approved members. They elect who answers Heads.
+    #[must_use]
+    pub fn approved_keys(&self) -> Vec<Key> {
+        self.chain.as_ref().map_or_else(Vec::new, |c| c.lock().unwrap().approved_keys().into_iter().collect())
     }
 
     #[must_use]
@@ -96,6 +113,9 @@ impl Node {
         }
         let me = self.me();
         let (seq, prev) = self.store.next_seq(&me);
+        if let Some(c) = &self.chain {
+            self.chain_block = self.chain_block.max(c.lock().unwrap().block);
+        }
         let u = Unsigned {
             v: VERSION,
             site: self.store.site,
@@ -188,10 +208,12 @@ impl Node {
         json!({
             "key": hex::encode(me),
             "fingerprint": fingerprint(&me),
-            "role": role.map(|r| format!("{r:?}")),
+            "role": role.map(rank_name),
             "super_admin": role == Some(Rank::SuperAdmin),
             "name": self.names.get(&me),
-            "revoked": null, // 2.3: from the Member record
+            "revoked": self.chain.as_ref().and_then(|c| c.lock().unwrap().revocation_of(&me, &self.names)),
+            // 2.3b: "requested" once a join request of ours is known
+            "pending": "none",
             "site": hex::encode(self.store.site),
             "syncing_own_history": self.restore.is_some(),
         })
@@ -215,13 +237,24 @@ impl Node {
             .filter(|e| s.rejected.contains_key(&e.id) && issue_of(&e.u.body).is_none())
             .collect();
         rejected.sort_by_key(|e| std::cmp::Reverse(e.u.ts));
+        let (people, chain) = match &self.chain {
+            Some(c) => {
+                let c = c.lock().unwrap();
+                (c.people_json(&self.names), c.status_json())
+            }
+            None => (
+                json!({ "members": [], "super_admins": [], "revoked": [] }),
+                json!({ "block": 0, "ok": false, "error": null }),
+            ),
+        };
         json!({
             "site": hex::encode(self.store.site),
             "name": s.config.name,
             "categories": s.config.categories,
             "locations": s.locations.iter().map(place).collect::<Vec<_>>(),
-            // 2.3: the member lists come from the chain roster
-            "members": [], "super_admins": [], "pending": [], "revoked": [],
+            "members": people["members"], "super_admins": people["super_admins"], "revoked": people["revoked"],
+            "pending": [], // 2.3b: the join requests that Delivery brought
+            "chain": chain,
             "rejected": rejected.into_iter().map(|e| json!({
                 "id": hex::encode(e.id), "kind": kind_name(&e.u.body), "author": hex::encode(e.u.author),
                 "author_name": self.names.get(&e.u.author), "ts": e.u.ts, "reason": s.rejected[&e.id],

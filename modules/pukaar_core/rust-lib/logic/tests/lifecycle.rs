@@ -395,7 +395,8 @@ fn site_info_lists_the_map_and_identity_has_the_chain_role() {
     assert_eq!(me["super_admin"], false);
     assert_eq!(me["fingerprint"].as_str().unwrap().len(), 6);
     let boss = json(&s.admin.identity_json());
-    assert_eq!((&boss["role"], &boss["super_admin"]), (&"SuperAdmin".into(), &true.into()));
+    // Main.qml: a super admin is an "Admin" with the flag, as before 2.3
+    assert_eq!((&boss["role"], &boss["super_admin"]), (&"Admin".into(), &true.into()));
     assert_eq!(boss["site"], hex::encode(util::SITE));
 }
 

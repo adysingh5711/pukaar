@@ -27,7 +27,12 @@ postcard = { version = "1.1", features = ["alloc"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+# Blocking JSON-RPC reads (rustls, no default features). The module turns it on with `http`.
+ureq = { version = "3.5", default-features = false, features = ["rustls"], optional = true }
 
 # Signature checks dominate the convergence test; optimise deps even in debug.
 [profile.dev.package."*"]
 opt-level = 3
+
+[features]
+http = ["dep:ureq"]

@@ -11,5 +11,6 @@ pub mod node;
 pub mod persist;
 pub mod profile;
 pub mod reducer;
+pub mod rpc;
 pub mod store;
 pub mod sync;

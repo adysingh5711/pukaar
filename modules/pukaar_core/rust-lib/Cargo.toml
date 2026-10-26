@@ -15,8 +15,9 @@ exclude = ["logic"]
 crate-type = ["staticlib"]
 
 [dependencies]
+bs58 = "0.5"
 hex = "0.4"
-pukaar_logic = { path = "logic" }
+pukaar_logic = { path = "logic", features = ["http"] }
 serde_json = "1"
 # Staged by the builder from the same revision as its code generator (Step 7).
 logos-rust-sdk = { path = "../logos-rust-sdk-src" }
