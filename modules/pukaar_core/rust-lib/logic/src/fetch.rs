@@ -89,11 +89,14 @@ impl Details {
 pub struct Places {
     pub schema: String,
     pub places: Vec<Location>,
+    /// Hidden places: no new report names them, an admin can restore them.
+    #[serde(default)]
+    pub retired: Vec<Location>,
 }
 
 impl Places {
     pub fn new(places: Vec<Location>) -> Places {
-        Places { schema: PLACES_SCHEMA.into(), places }
+        Places { schema: PLACES_SCHEMA.into(), places, retired: Vec::new() }
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -156,6 +159,21 @@ impl Fetched {
                 true
             }
         }
+    }
+
+    /// The newest announce that we kept for this Pukaar key.
+    pub fn announce_of(&self, author: &Key) -> Option<Announce> {
+        self.announces.get(author).cloned()
+    }
+
+    /// Every kept announce: the admin batch refreshes the pointers of the members that are behind.
+    pub fn announces(&self) -> Vec<Announce> {
+        self.announces.values().cloned().collect()
+    }
+
+    /// Our site keys by epoch (empty when we are not in the keyring).
+    pub fn site_keys(&self) -> BTreeMap<u64, Key> {
+        self.site_keys.clone()
     }
 
     /// `site_info.storage`.
@@ -323,6 +341,12 @@ fn cycle(store: &dyn Store, chain: &SharedChain, fx: &SharedFetched, me: &Signin
         let genuine = e.site_id == site_hex && e.pukaar_key == hex::encode(a.author) && e.version == a.version && profile::verify(&e).is_ok();
         if let Some(user) = account(&e.user).filter(|_| genuine) {
             grew |= chain.lock().unwrap().hint(user, Some(&a.author));
+        }
+        // A joiner that waits for approval: show the name if our key can open the profile.
+        if genuine {
+            if let Ok(body) = profile::open(&e, me, &site_keys) {
+                names.insert(a.author, clean(&body.display_name));
+            }
         }
     }
 

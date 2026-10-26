@@ -31,6 +31,8 @@ pub enum WriteKind {
     SetProfile,
     SuperAdmin,
     Anchor,
+    /// `set_details`, `set_places` or `set_keyring`.
+    SetSite,
 }
 
 /// A wire message is an event (at most `MAX_EVENT_BYTES`) plus a few bytes of framing.

@@ -232,6 +232,18 @@ pub fn rotate(site_id: &Key, keys: &mut BTreeMap<u64, Key>, members: &[(Key, Key
     Ok(Keyring { schema: KEYRING_SCHEMA.into(), site_id: hex::encode(site_id), epoch, members: wraps, old })
 }
 
+/// At approval: seal the newest site key (`newest`, the key of `k.epoch`) to each new member, given as
+/// (LEZ account, Pukaar key). The epoch does not change. A member that is in the ring already gets a new
+/// Seat for its new key.
+pub fn add_seats(k: &mut Keyring, newest: &Key, members: &[(Key, Key)]) -> Result<(), String> {
+    for (user, m) in members {
+        let vk = VerifyingKey::from_bytes(m).map_err(|_| "bad member key")?;
+        k.members.retain(|s| s.user != hex::encode(user));
+        k.members.push(Seat { user: hex::encode(user), to: hex::encode(m), ct: hex::encode(seal(&x25519_public(&vk), newest)) });
+    }
+    Ok(())
+}
+
 pub fn keyring_to_bytes(k: &Keyring) -> Vec<u8> {
     serde_json::to_vec(k).expect("json")
 }

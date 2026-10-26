@@ -5,21 +5,25 @@
 //! rust-lib/Cargo.toml); this file only moves bytes between that crate, the
 //! disk and Delivery.
 
+mod lez;
 mod storage;
 
-use pukaar_logic::event::{Body, Event, SigningKey};
+use pukaar_logic::event::{Body, Event, Key, SigningKey};
 use pukaar_logic::fetch::{sync_once, Fetched};
 use pukaar_logic::identity;
 use pukaar_logic::node::{action_body, parse_id, Node};
 use pukaar_logic::lezkey::{derive_lez_secret, lez_account_id};
 use pukaar_logic::persist;
+use pukaar_logic::ops::{self, Place, SuperKind};
+use pukaar_logic::queue::{self, Queue, SharedQueue};
 use pukaar_logic::reducer::Rank;
 use pukaar_logic::rpc::{Chain, HttpRpc};
 use pukaar_logic::store::Accept;
 use pukaar_logic::sync::{
     heads_msg, lost_node, send_queue, should_answer, to_resend, to_resend_own, SendError, Wire,
-    DELIVERY_CFG,
+    WriteKind, DELIVERY_CFG,
 };
+use pukaar_logic::writes;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
@@ -28,7 +32,11 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub trait PukaarCoreModule: Send + 'static {
+    /// Uploads the files and queues `create_site`: `{"ok":true,"queued":id,"site":hex}` at once, or
+    /// `error: …`. The site shows on the chain after a block (`chain_status`).
     fn site_create(&mut self, genesis_json: String) -> String;
+    /// Signs a join request with both keys and sends it to the site: `{"ok":true,"queued":id,"site":hex}`.
+    /// `my_identity.pending` is "requested" until an admin approves.
     fn site_join(&mut self, site_hex: String) -> String;
     /// Drop this device's copy of the site (no event is published); the key stays, so
     /// rejoining is the same person. `ok` or `error: …`.
@@ -41,8 +49,11 @@ pub trait PukaarCoreModule: Send + 'static {
     fn import_identity(&mut self, blob: String, password: String) -> String;
     /// Stop waiting for a restored identity's history (allowed 10 min after the restore).
     fn skip_history_sync(&mut self) -> String;
+    /// Seals and uploads the profile and announces it to the site: members see it at once. The chain
+    /// pointer follows at the next admin `send_batch`. `{"ok":true,"queued":id}`.
     fn set_profile(&mut self, display_name: String) -> String;
-    /// `name` is required for steward/admin and optional for residents. Only a super admin
+    /// Held until an admin calls `send_batch`. `name` is required for steward/admin and optional for
+    /// residents. Only a super admin
     /// grants "admin" or changes an admin's role; nobody changes a super admin's.
     fn grant_role(&mut self, subject_hex: String, role: String, name: String) -> String;
     /// Admin only (the rules reject anyone else's); `reason` is required. Revoking an admin is
@@ -104,6 +115,12 @@ pub trait PukaarCoreModule: Send + 'static {
     fn site_info(&mut self) -> String;
     fn checkpoint_now(&mut self) -> String;
     fn record_anchor(&mut self, heads_json: String, lez_ref: String) -> String;
+    /// The state of each queued chain write: `key` (the wallet key import), `writes` (id, kind, state,
+    /// short tx hash, reason, items) and `waiting` (writes held for `send_batch`).
+    fn chain_status(&mut self) -> String;
+    /// Admin only: send the held approvals, role changes and revokes, and the profile refreshes of the
+    /// members, in batches of 10. `{"ok":true,"queued":[ids]}`.
+    fn send_batch(&mut self) -> String;
     fn on_context_ready(&mut self, _ctx: &RustModuleContext) {}
 }
 
@@ -113,6 +130,8 @@ include!(concat!(
     "/generated/provider_gen.rs"
 ));
 
+/// A peer's `ChainPending` is shown this long.
+const PEER_PENDING_FOR: Duration = Duration::from_secs(30 * 60);
 const HEADS_EVERY: Duration = Duration::from_secs(60);
 const ANSWER_EVERY: Duration = Duration::from_secs(10);
 /// Received events reach the disk at most this often (see `Shared::save_due`).
@@ -167,6 +186,10 @@ struct Shared {
     /// Events arrived (on_wire) since the last save.
     dirty: bool,
     last_save: Instant,
+    /// The chain writes that we queue (persisted in `writes.json`). Lock order: SHARED, then the queue.
+    queue: SharedQueue,
+    /// `Wire::ChainPending` from peers: (transaction hash, kind, when). Shown, never trusted.
+    peers: Vec<(Key, WriteKind, Instant)>,
 }
 
 impl Shared {
@@ -200,9 +223,32 @@ fn err(e: impl std::fmt::Display) -> String {
     format!("error: {e}")
 }
 
-/// The answer of every method whose event left the log in format 2.
-fn moved() -> String {
-    r#"{"ok":false,"error":"moved to the chain in 2.3"}"#.into()
+fn now_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+/// The answer of a method that queued a write: it never waits for the chain.
+fn queued_reply(ids: &[u64]) -> String {
+    match ids {
+        [id] => serde_json::json!({ "ok": true, "queued": id }),
+        _ => serde_json::json!({ "ok": true, "queued": ids }),
+    }
+    .to_string()
+}
+
+/// The reply of a method that queued one entry, or its refusal.
+fn id_reply(r: Result<u64, String>) -> String {
+    r.map(|id| queued_reply(&[id])).unwrap_or_else(err)
+}
+
+/// A place edit of an admin.
+fn place(req: Place) -> String {
+    id_reply(queued(|node, q, _| ops::place_edit(node, q, req, now_ms())))
+}
+
+/// The notice methods stay off until the time rules (O7).
+fn later() -> String {
+    err("available after a later phase")
 }
 
 const NO_SITE: &str = "no site yet: create or join one";
@@ -376,12 +422,13 @@ fn env_or(name: &str, default: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| default.to_string())
 }
 
+fn program_id() -> Option<[u8; 32]> {
+    bs58::decode(env_or("PUKAAR_PROGRAM_ID", PROGRAM_ID)).into_vec().ok().and_then(|v| v.try_into().ok())
+}
+
 /// Back the roles of `node` with chain reads. The reads run on a thread (see `chain_tick`).
 fn wire_chain(node: &mut Node) {
-    let program = bs58::decode(env_or("PUKAAR_PROGRAM_ID", PROGRAM_ID))
-        .into_vec()
-        .ok()
-        .and_then(|v| v.try_into().ok());
+    let program = program_id();
     let Some(program) = program else {
         eprintln!("pukaar: PUKAAR_PROGRAM_ID is not a base58 account id: no chain reads");
         return;
@@ -393,6 +440,13 @@ fn wire_chain(node: &mut Node) {
 
 /// The Storage client of this module, made on the first sync. Its temp files live in `dir`.
 static STORE: OnceLock<storage::LogosStore> = OnceLock::new();
+
+fn store(tmp: PathBuf) -> &'static storage::LogosStore {
+    STORE.get_or_init(|| storage::LogosStore::new(tmp))
+}
+
+/// The wallet of this module: `lez_core` through the raw SDK.
+static WRITER: OnceLock<lez::LezWriter> = OnceLock::new();
 
 /// Start a chain read and a Storage fetch when one is due (at most one per 10 s). It never runs
 /// inside the call that the UI waits on: the thread fills the caches and the calls read the cached
@@ -409,8 +463,50 @@ fn chain_tick() {
         return;
     }
     std::thread::spawn(move || {
-        let store = STORE.get_or_init(|| storage::LogosStore::new(tmp));
-        sync_once(&HttpRpc::new(&env_or("PUKAAR_LEZ_RPC", LEZ_RPC)), store, &chain, &fetched, &key);
+        sync_once(&HttpRpc::new(&env_or("PUKAAR_LEZ_RPC", LEZ_RPC)), store(tmp), &chain, &fetched, &key);
+    });
+}
+
+/// Run one step of the write queue when one is due (one start per 5 s, one entry per step). Like
+/// `chain_tick`, it runs on a thread: a send, a poll and an upload can take seconds and a module
+/// call never waits for them. Nothing is signed or sent unless an entry was queued by a method that
+/// the user called.
+fn write_tick() {
+    let parts = {
+        let g = SHARED.lock().unwrap();
+        let sh = g.as_ref();
+        let node = sh.and_then(|sh| sh.node.as_ref());
+        node.and_then(|n| Some((n.chain.clone()?, n.fetched.clone()?, n.key.clone(), sh?.dir.join("storage-tmp"), sh?.queue.clone())))
+    };
+    let (Some((chain, fetched, key, tmp, queue)), Some(program)) = (parts, program_id()) else { return };
+    {
+        let mut q = queue.lock().unwrap();
+        if !q.wants_tick() || !q.start() {
+            return;
+        }
+    }
+    std::thread::spawn(move || {
+        let broadcast = |m: Wire| {
+            if let Some(sh) = SHARED.lock().unwrap().as_mut() {
+                sh.outbox.push(m.encode());
+            }
+        };
+        let rpc = HttpRpc::new(&env_or("PUKAAR_LEZ_RPC", LEZ_RPC));
+        let env = queue::Env {
+            writer: WRITER.get_or_init(lez::LezWriter::new),
+            rpc: &rpc,
+            store: store(tmp),
+            chain: &chain,
+            fetched: &fetched,
+            key: &key,
+            program,
+            now_ms: now_ms(),
+            broadcast: &broadcast,
+        };
+        // A panic must not freeze the queue for good.
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| queue::tick(&queue, &env))).is_err() {
+            queue.lock().map(|mut q| q.unbusy()).ok();
+        }
     });
 }
 
@@ -423,6 +519,8 @@ fn on_wire(channel: &str, bytes: &[u8]) {
         outbox,
         last_answer,
         dirty,
+        queue,
+        peers,
         ..
     }) = g.as_mut()
     else {
@@ -457,16 +555,24 @@ fn on_wire(channel: &str, bytes: &[u8]) {
             };
             outbox.extend(batch.into_iter().map(|b| Wire::Event(b).encode()));
         }
-        // The account of a join request is read from the chain. 2.3b-2 queues it for the admin batch.
+        // The account of a join request is read from the chain, and the request is kept: the admin sees
+        // it in `site_info.pending` and approves it with `grant_role`.
         Some(Wire::JoinReq(req)) => {
             node.on_join_req(&req);
+            queue.lock().unwrap().keep_request(&node.store.site, &req, now_ms());
         }
         // The fetchers read the file of an announce and show the newer name.
         Some(Wire::ProfileAnnounce(a)) => {
             node.on_announce(a);
         }
-        // 2.3b-2: show a ChainPending chip
-        Some(Wire::ChainPending { .. }) => {}
+        // Only recorded: `site_info.chain.pending_peers` shows it for a while.
+        Some(Wire::ChainPending { tx, kind }) => {
+            peers.retain(|(t, _, at)| *t != tx && at.elapsed() < PEER_PENDING_FOR);
+            peers.push((tx, kind, Instant::now()));
+            if peers.len() > 32 {
+                peers.remove(0);
+            }
+        }
         None => {} // junk on the topic
     }
 }
@@ -514,6 +620,7 @@ fn send_queued(site: &str) -> Result<(), String> {
 /// my_identity every 2 s, so this runs often.
 fn flush() {
     chain_tick();
+    write_tick();
     let (link, ids) = {
         let mut g = SHARED.lock().unwrap();
         let Some(sh) = g.as_mut() else {
@@ -552,6 +659,15 @@ fn read<T>(f: impl FnOnce(&Node) -> T) -> Result<T, String> {
     Ok(f(node))
 }
 
+fn read_with_queue<T>(f: impl FnOnce(&Node, &Queue) -> T) -> Result<T, String> {
+    let mut g = SHARED.lock().unwrap();
+    let sh = g.as_mut().ok_or("module not ready")?;
+    let node = sh.node.as_mut().ok_or(NO_SITE)?;
+    node.apply_fetched();
+    let q = sh.queue.lock().unwrap();
+    Ok(f(node, &q))
+}
+
 /// Change our node, then save it. `f` may queue wire messages on the outbox.
 fn write<T>(
     f: impl FnOnce(&mut Node, &mut Vec<Vec<u8>>) -> Result<T, String>,
@@ -585,8 +701,6 @@ fn publish(body: Body) -> String {
 }
 
 /// Create or join: install a fresh Node for this instance.
-// 2.3: site_create and site_join call this again, with the site id from the chain.
-#[allow(dead_code)]
 fn start_site(make: impl FnOnce(SigningKey, &Path) -> Result<Node, String>) -> String {
     let site = {
         let mut g = SHARED.lock().unwrap();
@@ -623,6 +737,17 @@ fn start_site(make: impl FnOnce(SigningKey, &Path) -> Result<Node, String>) -> S
     site
 }
 
+/// Run `f` on the node and the write queue. A method that queues a write goes through here: it adds
+/// an entry and returns, it never waits for the chain, Storage or the wallet.
+fn queued<T>(f: impl FnOnce(&Node, &mut Queue, &mut Vec<Vec<u8>>) -> Result<T, String>) -> Result<T, String> {
+    let mut g = SHARED.lock().unwrap();
+    let sh = g.as_mut().ok_or("module not ready")?;
+    let node = sh.node.as_mut().ok_or(NO_SITE)?;
+    node.apply_fetched();
+    let mut q = sh.queue.lock().unwrap();
+    f(node, &mut q, &mut sh.outbox)
+}
+
 #[derive(Default)]
 struct Pukaar;
 
@@ -637,12 +762,46 @@ impl logos_rust_sdk::AboutToUnload for Pukaar {
 }
 
 impl PukaarCoreModule for Pukaar {
-    fn site_create(&mut self, _genesis_json: String) -> String {
-        moved()
+    fn site_create(&mut self, genesis_json: String) -> String {
+        let g = match writes::genesis(&genesis_json) {
+            Ok(g) => g,
+            Err(e) => return err(e),
+        };
+        let dir = match SHARED.lock().unwrap().as_ref() {
+            Some(sh) => sh.dir.clone(),
+            None => return err("module not ready"),
+        };
+        let made = persist::load_or_create_key(&dir).map_err(|e| e.to_string()).and_then(|key| ops::new_site(&key, &g));
+        let ns = match made {
+            Ok(ns) => ns,
+            Err(e) => return err(e),
+        };
+        let site_id = ns.site_id;
+        let started = start_site(|key, _| Ok(Node::join(key, site_id)));
+        if started.starts_with("error:") {
+            return started;
+        }
+        // The files go to Storage and the site to the chain in the background (the worker), then the
+        // first profile of the admin.
+        let r = queued(|node, q, _| Ok(ops::create_site(node, q, ns, &g.admin_name, now_ms())));
+        flush();
+        r.map(|id| serde_json::json!({ "ok": true, "queued": id, "site": hex::encode(site_id) }).to_string()).unwrap_or_else(err)
     }
 
-    fn site_join(&mut self, _site_hex: String) -> String {
-        moved()
+    fn site_join(&mut self, site_hex: String) -> String {
+        let Some(site) = parse_id(site_hex.trim()) else { return err("bad site id") };
+        let started = start_site(|key, dir| Ok(persist::join_site(dir, key, site, now())));
+        if started.starts_with("error:") {
+            return started;
+        }
+        // Signed with both keys, sent, and kept: `my_identity.pending` is "requested".
+        let r = queued(|node, q, outbox| {
+            let (req, id) = ops::join(node, q, now_ms());
+            outbox.push(Wire::JoinReq(req).encode());
+            Ok(id)
+        });
+        flush();
+        r.map(|id| serde_json::json!({ "ok": true, "queued": id, "site": hex::encode(site) }).to_string()).unwrap_or_else(err)
     }
 
     fn leave_site(&mut self) -> String {
@@ -651,6 +810,12 @@ impl PukaarCoreModule for Pukaar {
             let sh = g.as_mut().ok_or("module not ready")?;
             let site = sh.node.as_ref().ok_or(NO_SITE)?.store.site;
             persist::leave(&sh.dir, &site).map_err(|e| e.to_string())?;
+            {
+                // Writes of this site cannot run without its node: drop them, and the requests.
+                let mut q = sh.queue.lock().unwrap();
+                q.drop_site(&site);
+                q.save();
+            }
             sh.node = None;
             sh.outbox.clear();
             sh.last_heads = None;
@@ -674,10 +839,17 @@ impl PukaarCoreModule for Pukaar {
 
     fn my_identity(&mut self) -> String {
         flush();
-        let mut v = read(|n| n.identity_json())
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_else(|| serde_json::json!({ "site": null }));
+        let mut v = read_with_queue(|n, q| {
+            let mut v: serde_json::Value = serde_json::from_str(&n.identity_json()).ok()?;
+            // A join request of ours is out, and no admin has approved it yet.
+            if v["role"].is_null() && q.mine.is_some() {
+                v["pending"] = "requested".into();
+            }
+            Some(v)
+        })
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| serde_json::json!({ "site": null }));
         v["delivery"] = delivery_status().into();
         v.to_string()
     }
@@ -707,70 +879,79 @@ impl PukaarCoreModule for Pukaar {
             .unwrap_or_else(err)
     }
 
-    fn set_profile(&mut self, _display_name: String) -> String {
-        moved()
+    fn set_profile(&mut self, display_name: String) -> String {
+        // Members read the new profile as soon as it is in Storage and announced. The chain pointer
+        // follows at the next admin batch.
+        let r = queued(|node, q, _| ops::set_profile(node, q, &display_name, now_ms()));
+        flush();
+        id_reply(r)
     }
 
-    fn grant_role(&mut self, _subject_hex: String, _role: String, _name: String) -> String {
-        moved()
+    fn grant_role(&mut self, subject_hex: String, role: String, name: String) -> String {
+        id_reply(queued(|node, q, _| ops::grant(node, q, &subject_hex, &role, &name, now_ms())))
     }
 
-    fn revoke_role(&mut self, _subject_hex: String, _reason: String) -> String {
-        moved()
+    fn revoke_role(&mut self, subject_hex: String, reason: String) -> String {
+        id_reply(queued(|node, q, _| ops::revoke(node, q, &subject_hex, &reason, now_ms())))
     }
 
-    fn add_super_admin(&mut self, _subject_hex: String) -> String {
-        moved()
+    fn add_super_admin(&mut self, subject_hex: String) -> String {
+        id_reply(queued(|node, q, _| ops::super_admin(node, q, &subject_hex, SuperKind::Add, now_ms())))
     }
 
-    fn remove_super_admin(&mut self, _subject_hex: String) -> String {
-        moved()
+    fn remove_super_admin(&mut self, subject_hex: String) -> String {
+        id_reply(queued(|node, q, _| ops::super_admin(node, q, &subject_hex, SuperKind::Remove, now_ms())))
     }
 
-    fn transfer_super_admin(&mut self, _to_hex: String) -> String {
-        moved()
+    fn transfer_super_admin(&mut self, to_hex: String) -> String {
+        id_reply(queued(|node, q, _| ops::super_admin(node, q, &to_hex, SuperKind::Transfer, now_ms())))
     }
 
-    fn admin_notice(
-        &mut self,
-        _subject_hex: String,
-        _outcome: String,
-        _deadline: i64,
-        _reason: String,
-    ) -> String {
-        moved()
+    fn admin_notice(&mut self, _subject_hex: String, _outcome: String, _deadline: i64, _reason: String) -> String {
+        later()
     }
 
     fn cancel_notice(&mut self, _subject_hex: String) -> String {
-        moved()
+        later()
     }
 
     fn end_notice_now(&mut self, _subject_hex: String) -> String {
-        moved()
+        later()
     }
 
-    fn add_location(&mut self, _code: String, _label: String, _group: String) -> String {
-        moved()
+    fn add_location(&mut self, code: String, label: String, group: String) -> String {
+        place(Place::Add { code: &code, label: &label, group: &group })
     }
 
-    fn retire_location(&mut self, _code: String, _reason: String) -> String {
-        moved()
+    fn retire_location(&mut self, code: String, reason: String) -> String {
+        place(Place::Retire { code: &code, reason: &reason })
     }
 
-    fn restore_location(&mut self, _code: String, _reason: String) -> String {
-        moved()
+    fn restore_location(&mut self, code: String, reason: String) -> String {
+        place(Place::Restore { code: &code, reason: &reason })
     }
 
-    fn edit_location(&mut self, _code: String, _label: String, _group: String) -> String {
-        moved()
+    fn edit_location(&mut self, code: String, label: String, group: String) -> String {
+        place(Place::Edit { code: &code, label: &label, group: &group })
     }
 
-    fn remove_location(&mut self, _code: String, _reason: String) -> String {
-        moved()
+    fn remove_location(&mut self, code: String, reason: String) -> String {
+        place(Place::Remove { code: &code, reason: &reason })
     }
 
-    fn undo_remove_location(&mut self, _code: String, _reason: String) -> String {
-        moved()
+    fn undo_remove_location(&mut self, code: String, reason: String) -> String {
+        place(Place::Restore { code: &code, reason: &reason })
+    }
+
+    fn chain_status(&mut self) -> String {
+        flush();
+        queued(|node, q, _| Ok(ops::status(node, q).to_string())).unwrap_or_else(err)
+    }
+
+    fn send_batch(&mut self) -> String {
+        let r = queued(|node, q, _| ops::send_batch(node, q, now_ms()));
+        flush();
+        r.map(|ids| queued_reply(&ids)).unwrap_or_else(err)
     }
 
     fn report(
@@ -820,7 +1001,18 @@ impl PukaarCoreModule for Pukaar {
     }
 
     fn site_info(&mut self) -> String {
-        read(|n| n.site_info_json()).unwrap_or_else(err)
+        let r = (|| {
+            let mut g = SHARED.lock().unwrap();
+            let sh = g.as_mut().ok_or("module not ready")?;
+            let node = sh.node.as_mut().ok_or(NO_SITE)?;
+            node.apply_fetched();
+            let mut v: serde_json::Value = serde_json::from_str(&node.site_info_json()).map_err(|e| e.to_string())?;
+            v["pending"] = ops::pending_rows(node, &sh.queue.lock().unwrap(), now_ms()).into();
+            let peers = sh.peers.iter().filter(|(_, _, at)| at.elapsed() < PEER_PENDING_FOR);
+            v["chain"]["pending_peers"] = peers.map(|(t, k, _)| serde_json::json!({ "tx": hex::encode(&t[..5]), "kind": format!("{k:?}") })).collect::<Vec<_>>().into();
+            Ok::<_, String>(v.to_string())
+        })();
+        r.unwrap_or_else(err)
     }
 
     fn checkpoint_now(&mut self) -> String {
@@ -833,6 +1025,7 @@ impl PukaarCoreModule for Pukaar {
 
     fn on_context_ready(&mut self, ctx: &RustModuleContext) {
         let dir = PathBuf::from(&ctx.instance_persistence_path);
+        let dir_for_queue = dir.clone();
         let mut node = persist::load(&dir).unwrap_or_else(|e| {
             eprintln!("pukaar: could not load replica: {e}");
             None
@@ -853,6 +1046,8 @@ impl PukaarCoreModule for Pukaar {
             retry_at: None,
             dirty: false,
             last_save: Instant::now(),
+            queue: Queue::shared(&dir_for_queue),
+            peers: vec![],
         });
     }
 }

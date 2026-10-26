@@ -94,6 +94,14 @@ pub fn read_roster(
     Ok((roster, block))
 }
 
+/// The chain time in ms. The clock account `CLOCK_01` keeps the block id and the timestamp (8 bytes
+/// little endian each) in the shard of the clock program. Every write claims this time.
+pub fn clock_ms(rpc: &dyn Rpc) -> Result<u64, String> {
+    let data = get_account(rpc, &crate::writes::clock_program(), &crate::writes::CLOCK_ACCOUNT)?;
+    let t = data.get(8..16).ok_or("the clock account holds no time")?;
+    Ok(u64::from_le_bytes(t.try_into().expect("8 bytes")))
+}
+
 fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
@@ -203,6 +211,11 @@ impl Chain {
     /// `role_at` for the author of an event: the `Member` record at `account` must hold `who`.
     pub fn role_of_author(&self, who: &Key, account: Option<&AccountId>, _block: u64) -> Option<Rank> {
         self.roster.role_for(who, account, now_ms())
+    }
+
+    /// The Pukaar keys of the active admins and super admins: they can read a first profile.
+    pub fn admin_keys(&self) -> Vec<Key> {
+        self.roster.admins(now_ms()).into_iter().map(|m| m.pukaar_key).collect()
     }
 
     /// Active members and super admins by Pukaar key: they elect the Heads answerers.
