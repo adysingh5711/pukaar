@@ -6,6 +6,11 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use sha2::{Digest, Sha256};
 
+mod records;
+mod roles;
+pub use records::*;
+pub use roles::*;
+
 /// Borsh size of `CheckpointRecord`: 32 + 32 + 8 + 32 + 32 + 32.
 pub const RECORD_LEN: usize = 168;
 
@@ -41,7 +46,7 @@ pub enum Effect {
     Member([u8; 64]),
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuleError {
     EmptyRoot,
     AlreadyAnchored,
@@ -53,6 +58,31 @@ pub enum RuleError {
     BadMerkle,
     BadSignature,
     MemberExists,
+    // Site and Member rules (P1). Append only.
+    WrongSiteId,
+    BadCid,
+    GatesNotInP1,
+    ExpiryNotInP1,
+    WrongRecord,
+    NotActive,
+    ClaimMismatch,
+    Forbidden,
+    AlreadyMember,
+    StaleRoster,
+    RosterFull,
+    EmptyReason,
+    EmptyBatch,
+    SuperAdminTarget,
+    AlreadySuperAdmin,
+    NotSuperAdmin,
+    SuperAdminsFull,
+    SelfTarget,
+    StaleProfile,
+    BadJoinRequest,
+    JoinWrongSite,
+    KeyBinding,
+    StaleNonce,
+    JoinExpired,
 }
 
 impl core::fmt::Display for RuleError {
@@ -68,6 +98,30 @@ impl core::fmt::Display for RuleError {
             Self::BadMerkle => "merkle proof does not fold to the root",
             Self::BadSignature => "ed25519 signature is not valid",
             Self::MemberExists => "member account is already written",
+            Self::WrongSiteId => "site_id is not sha256(domain || creator || salt)",
+            Self::BadCid => "a CID is 1 to 128 ASCII letters and digits",
+            Self::GatesNotInP1 => "gates stay off in P1",
+            Self::ExpiryNotInP1 => "access_duration_ms stays 0 in P1",
+            Self::WrongRecord => "the member record is not the one of this site and account",
+            Self::NotActive => "the member is not active",
+            Self::ClaimMismatch => "the claimed role is not the stored one",
+            Self::Forbidden => "the role of the signer does not allow this",
+            Self::AlreadyMember => "the account is already an active member",
+            Self::StaleRoster => "roster_len changed since the client read it",
+            Self::RosterFull => "roster_len overflows",
+            Self::EmptyReason => "a revoke needs a reason",
+            Self::EmptyBatch => "the batch has no item",
+            Self::SuperAdminTarget => "a super admin cannot be revoked or have the role changed",
+            Self::AlreadySuperAdmin => "already a super admin",
+            Self::NotSuperAdmin => "not a super admin",
+            Self::SuperAdminsFull => "there are already two super admins",
+            Self::SelfTarget => "a super admin never removes or transfers to self",
+            Self::StaleProfile => "the profile version does not grow",
+            Self::BadJoinRequest => "the join request is not a pukaar/joinreq/v1 body",
+            Self::JoinWrongSite => "the join request is for another site",
+            Self::KeyBinding => "user_account is not the account id of user_schnorr_pk",
+            Self::StaleNonce => "the join request nonce does not grow",
+            Self::JoinExpired => "the join request is past valid_until_ms",
         })
     }
 }
