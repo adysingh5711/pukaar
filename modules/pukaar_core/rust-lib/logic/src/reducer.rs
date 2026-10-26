@@ -8,8 +8,10 @@ pub use pukaar_sites_rules::Rank;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The chain role of `who` at `chain_block` (`u64::MAX` means the newest block). `None` means not an
-/// approved member then. The chain roster of `chain.rs` backs it in step 2.3.
-pub type RoleFn = Box<dyn Fn(&Key, u64) -> Option<Rank> + Send>;
+/// approved member then. The second argument is the LEZ account that an event names: when it is
+/// `Some`, the `Member` record there must hold the Pukaar key `who`. The chain roster of `chain.rs`
+/// backs it.
+pub type RoleFn = Box<dyn Fn(&Key, Option<&Key>, u64) -> Option<Rank> + Send>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 pub enum Status {
@@ -117,7 +119,7 @@ impl State {
 #[must_use]
 pub fn reduce<'a>(
     ordered: impl IntoIterator<Item = &'a Event>,
-    roles: &dyn Fn(&Key, u64) -> Option<Rank>,
+    roles: &dyn Fn(&Key, Option<&Key>, u64) -> Option<Rank>,
     config: &Config,
     locations: &[Location],
 ) -> State {
@@ -127,7 +129,7 @@ pub fn reduce<'a>(
         ..State::default()
     };
     for e in ordered {
-        let role = roles(&e.u.author, e.u.chain_block);
+        let role = roles(&e.u.author, Some(&e.u.author_account), e.u.chain_block);
         if let Err(why) = apply(&mut s, e, role) {
             s.rejected.insert(e.id, why);
         }

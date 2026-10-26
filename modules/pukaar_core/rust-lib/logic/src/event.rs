@@ -128,6 +128,10 @@ pub struct Unsigned {
     pub ts: u64, // author's wall clock, informational only
     /// A recent chain block id. The reducer judges the author with the chain role at this block.
     pub chain_block: u64,
+    /// The LEZ account of the author. A node that sees an unknown author reads the `Member` record
+    /// at this account and judges the event with it. The record must hold the same `pukaar_key`
+    /// as `author`, so a wrong account gets the event rejected.
+    pub author_account: Key,
     pub body: Body,
 }
 

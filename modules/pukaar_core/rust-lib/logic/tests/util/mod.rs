@@ -45,6 +45,7 @@ pub fn event(key: &SigningKey, site: Id, seq: u64, prev: Id, lamport: u64, tag: 
             lamport,
             ts: seq,
             chain_block: 0,
+            author_account: [0; 32],
             body: Body::Comment {
                 issue: ZERO,
                 text: tag.into(),

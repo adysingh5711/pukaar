@@ -6,6 +6,9 @@
 //! (`to` = "site"), or a sealed box to the X25519 key of one admin (`to` = hex Pukaar key).
 //! `keyring.json` holds the site key of the newest epoch sealed to each member, and every older
 //! key encrypted under the newest. A revoke makes a new epoch and leaves the removed member out.
+//! Each entry names the LEZ account and the Pukaar key of the member. The program has no member
+//! list, so this is how an app learns which accounts to read. The chain stays the truth: an entry
+//! whose key differs from the chain `Member` record is ignored (see `Chain::set_keyring`).
 //! The chain keeps the CID and the SHA-256 of the whole file: the caller checks that hash.
 
 use crate::lezkey::{open as unseal, seal, x25519_public};
@@ -31,6 +34,14 @@ pub struct Body {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Wrap {
+    pub to: String,
+    pub ct: String,
+}
+
+/// One member of the keyring: the LEZ account, the Pukaar key (`to`) and the site key sealed to it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Seat {
+    pub user: String,
     pub to: String,
     pub ct: String,
 }
@@ -201,20 +212,21 @@ pub struct Keyring {
     pub site_id: String,
     /// The newest epoch. `members` hold its key.
     pub epoch: u64,
-    pub members: Vec<Wrap>,
+    pub members: Vec<Seat>,
     pub old: Vec<OldKey>,
 }
 
 /// Make the next epoch (1 for a new site), add its random key to `keys` and seal it to `members`
-/// (their Pukaar keys). Use it for `create_site` and for each revoke: pass only the members that stay.
-pub fn rotate(site_id: &Key, keys: &mut BTreeMap<u64, Key>, members: &[Key]) -> Result<Keyring, String> {
+/// as (LEZ account, Pukaar key). Use it for `create_site` and for each revoke: pass only the members
+/// that stay.
+pub fn rotate(site_id: &Key, keys: &mut BTreeMap<u64, Key>, members: &[(Key, Key)]) -> Result<Keyring, String> {
     let epoch = keys.keys().next_back().map_or(1, |e| e + 1);
     keys.insert(epoch, rand());
     let newest = keys[&epoch];
     let mut wraps = Vec::new();
-    for m in members {
+    for (user, m) in members {
         let vk = VerifyingKey::from_bytes(m).map_err(|_| "bad member key")?;
-        wraps.push(Wrap { to: hex::encode(m), ct: hex::encode(seal(&x25519_public(&vk), &newest)) });
+        wraps.push(Seat { user: hex::encode(user), to: hex::encode(m), ct: hex::encode(seal(&x25519_public(&vk), &newest)) });
     }
     let old = keys.iter().filter(|(e, _)| **e < epoch).map(|(e, k)| OldKey { epoch: *e, ct: hex::encode(encrypt(&newest, k)) }).collect();
     Ok(Keyring { schema: KEYRING_SCHEMA.into(), site_id: hex::encode(site_id), epoch, members: wraps, old })
@@ -230,6 +242,13 @@ pub fn keyring_from_bytes(b: &[u8]) -> Result<Keyring, String> {
         return Err(format!("unsupported keyring schema {}", k.schema));
     }
     Ok(k)
+}
+
+/// The (LEZ account, Pukaar key) of every member in the ring. A node reads these accounts from the
+/// chain. The keyring file is already checked against `Site.keyring_sha256`, but each pair is still
+/// only a hint: the chain `Member` record decides.
+pub fn entries(k: &Keyring) -> Result<Vec<(Key, Key)>, String> {
+    k.members.iter().map(|s| Ok((unhex(&s.user)?, unhex(&s.to)?))).collect()
 }
 
 /// Every site key this member can read, by epoch. A member who is not in `members` gets an error.
@@ -320,8 +339,13 @@ mod tests {
     /// Site with an admin (seed 1), members 2 and 3 in epoch 1.
     fn site() -> (BTreeMap<u64, Key>, Keyring) {
         let mut keys = BTreeMap::new();
-        let ring = rotate(&SITE_ID, &mut keys, &[pk(1), pk(2), pk(3)]).unwrap();
+        let ring = rotate(&SITE_ID, &mut keys, &[seat(1), seat(2), seat(3)]).unwrap();
         (keys, ring)
+    }
+
+    /// The keyring entry of test member `n`: its LEZ account is `[0xA0 + n; 32]`.
+    fn seat(n: u8) -> (Key, Key) {
+        ([0xA0 + n; 32], pk(n))
     }
 
     #[test]
@@ -360,7 +384,7 @@ mod tests {
     fn revoked_member_cannot_open_a_post_revoke_profile() {
         let (mut keys, ring1) = site();
         // Member 3 is revoked: epoch 2 is sealed to the others only.
-        let ring2 = rotate(&SITE_ID, &mut keys, &[pk(1), pk(2)]).unwrap();
+        let ring2 = rotate(&SITE_ID, &mut keys, &[seat(1), seat(2)]).unwrap();
         assert_eq!(ring2.epoch, 2);
         assert!(open_keyring(&ring2, &sk(3)).is_err());
         let old3 = open_keyring(&ring1, &sk(3)).unwrap();
@@ -426,8 +450,13 @@ mod tests {
         let ring = keyring_from_bytes(&keyring_to_bytes(&ring)).unwrap();
         assert_eq!(open_keyring(&ring, &sk(2)).unwrap(), keys);
         assert!(open_keyring(&ring, &sk(8)).is_err());
-        rotate(&SITE_ID, &mut keys, &[pk(1), pk(2)]).unwrap();
-        let ring3 = rotate(&SITE_ID, &mut keys, &[pk(1)]).unwrap();
+        // The ring lists the (account, key) of each member, in order.
+        assert_eq!(entries(&ring).unwrap(), [seat(1), seat(2), seat(3)]);
+        let mut bad = ring.clone();
+        bad.members[0].user = "zz".into();
+        assert!(entries(&bad).is_err());
+        rotate(&SITE_ID, &mut keys, &[seat(1), seat(2)]).unwrap();
+        let ring3 = rotate(&SITE_ID, &mut keys, &[seat(1)]).unwrap();
         assert_eq!((ring3.epoch, ring3.old.len()), (3, 2));
         assert_eq!(open_keyring(&ring3, &sk(1)).unwrap(), keys);
     }

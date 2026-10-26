@@ -130,11 +130,33 @@ impl Roster {
     pub fn role_of(&self, who: &[u8; 32], now_ms: u64) -> Option<Rank> {
         // ponytail: scan by Pukaar key, O(members). Add a key index if rosters pass thousands.
         let m = self.member(who).or_else(|| self.members.values().find(|m| m.pukaar_key == *who))?;
+        self.rank_of(m, now_ms)
+    }
+
+    /// The rank of the author of an event. With `account`, the `Member` record at that account
+    /// must hold this Pukaar key: an event that names the wrong account has no role.
+    pub fn role_for(&self, key: &[u8; 32], account: Option<&AccountId>, now_ms: u64) -> Option<Rank> {
+        let Some(a) = account else { return self.role_of(key, now_ms) };
+        let m = self.member(a).filter(|m| m.pukaar_key == *key)?;
+        self.rank_of(m, now_ms)
+    }
+
+    fn rank_of(&self, m: &Member, now_ms: u64) -> Option<Rank> {
         let Effective::Active(role) = pukaar_sites_rules::effective_status(m, now_ms) else { return None };
         match &self.site {
             Some(s) if s.is_super(&m.user) => Some(Rank::SuperAdmin),
             _ => Some(role.into()),
         }
+    }
+
+    /// Drop each member whose Pukaar key differs from the key that `expect` holds for its account.
+    pub fn retain_matching(&mut self, expect: &std::collections::BTreeMap<AccountId, [u8; 32]>) {
+        self.members.retain(|_, m| expect.get(&m.user).is_none_or(|k| *k == m.pukaar_key));
+    }
+
+    /// Does any member hold this Pukaar key?
+    pub fn has_key(&self, key: &[u8; 32]) -> bool {
+        self.members.values().any(|m| m.pukaar_key == *key)
     }
 
     /// Active admins and super admins: the readers of a first profile (before the site key wrap).

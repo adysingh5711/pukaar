@@ -163,6 +163,7 @@ fn lamport_must_increase_along_a_chain() {
         lamport: first.u.lamport,
         ts: 0,
         chain_block: 0,
+        author_account: [0; 32],
         body: Body::Comment {
             issue: ZERO,
             text: String::new(),

@@ -42,7 +42,7 @@ fn an_author_who_was_not_a_member_at_the_chain_block_is_rejected_and_kept() {
     let mut s = Site::new();
     // the provider knows the author as a resident only from block 10 up to block 50
     let author = s.asha.me();
-    let window = move |k: &_, block: u64| (*k == author && (10..50).contains(&block)).then_some(Rank::Resident);
+    let window = move |k: &_, _: Option<&_>, block: u64| (*k == author && (10..50).contains(&block)).then_some(Rank::Resident);
     s.asha.roles = Box::new(window);
     let mut at = |block: u64| {
         s.asha.chain_block = block;
@@ -65,7 +65,7 @@ fn the_chain_block_decides_not_the_arrival_time() {
     let author = s.ravi.me();
     s.ravi.chain_block = 20;
     let old = report(&mut s.ravi);
-    let revoked_at_50 = move |k: &_, block: u64| (*k == author && block < 50).then_some(Rank::Resident);
+    let revoked_at_50 = move |k: &_, _: Option<&_>, block: u64| (*k == author && block < 50).then_some(Rank::Resident);
     for n in s.nodes() {
         n.roles = Box::new(revoked_at_50);
     }

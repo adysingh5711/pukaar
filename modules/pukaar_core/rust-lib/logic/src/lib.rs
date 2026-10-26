@@ -4,6 +4,7 @@
 pub mod chain;
 pub mod checkpoint;
 pub mod event;
+pub mod fetch;
 pub mod identity;
 pub mod joinreq;
 pub mod lezkey;

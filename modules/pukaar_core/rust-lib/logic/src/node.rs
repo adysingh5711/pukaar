@@ -6,6 +6,9 @@ use crate::event::{
     decode, sign, Body, DecodeError, Event, Id, Key, Location, Unsigned, MAX_EVENT_BYTES, MAX_TEXT,
     VERSION,
 };
+use crate::fetch::SharedFetched;
+use crate::lezkey::{derive_lez_secret, lez_account_id};
+use crate::profile::Announce;
 use crate::reducer::{issue_of, reduce, Config, Issue, RoleFn, State, Status};
 use crate::rpc::{rank_name, SharedChain};
 use crate::store::{Accept, Store};
@@ -58,24 +61,35 @@ pub struct Node {
     pub roles: RoleFn,
     /// The cached chain reads that back `roles`.
     pub chain: Option<SharedChain>,
-    pub config: Config,         // 2.3: from details.json
-    pub locations: Vec<Location>, // 2.3: from places.json
-    pub names: BTreeMap<Key, String>, // 2.3: from the profiles
+    /// Our own LEZ account. Each event we sign names it as `author_account`.
+    pub account: Key,
+    pub config: Config,         // from details.json
+    pub locations: Vec<Location>, // from places.json
+    pub names: BTreeMap<Key, String>, // from the profiles
+    /// The text of each removal reason, by the SHA-256 of the text (from details.json).
+    pub reasons: BTreeMap<Key, String>,
+    /// What the Storage fetchers learned, and the version of it that we copied last.
+    pub fetched: Option<SharedFetched>,
+    fetched_version: u64,
 }
 
 impl Node {
     /// A replica of `site`, the site id that the chain gave (a format 2 log has no genesis).
     pub fn join(key: SigningKey, site: Id) -> Node {
         Node {
+            account: lez_account_id(&derive_lez_secret(&key.to_bytes())),
             key,
             store: Store::new(site),
             restore: None,
             chain_block: 0,
-            roles: Box::new(|_, _| None),
+            roles: Box::new(|_, _, _| None),
             chain: None,
             config: Config::default(),
             locations: Vec::new(),
             names: BTreeMap::new(),
+            reasons: BTreeMap::new(),
+            fetched: None,
+            fetched_version: 0,
         }
     }
 
@@ -90,8 +104,44 @@ impl Node {
     /// Back `roles` with the cached chain reads. Our events name the newest block it has read.
     pub fn attach_chain(&mut self, c: SharedChain) {
         let for_roles = c.clone();
-        self.roles = Box::new(move |k, block| for_roles.lock().unwrap().role_at(k, block));
+        self.roles = Box::new(move |k, a, block| for_roles.lock().unwrap().role_of_author(k, a, block));
         self.chain = Some(c);
+    }
+
+    /// Show what the Storage fetchers learned. `apply_fetched` copies it in.
+    pub fn attach_fetched(&mut self, f: SharedFetched) {
+        self.fetched = Some(f);
+    }
+
+    /// Copy the settings, places, names and reasons that Storage delivered, when they changed. Call
+    /// it before a read. A field that Storage has not delivered keeps its value (empty at first).
+    pub fn apply_fetched(&mut self) {
+        let Some(f) = &self.fetched else { return };
+        let f = f.lock().unwrap();
+        if f.version == self.fetched_version {
+            return;
+        }
+        self.fetched_version = f.version;
+        self.config = f.config.clone().unwrap_or_else(|| self.config.clone());
+        self.locations = f.places.clone().unwrap_or_else(|| self.locations.clone());
+        self.names = f.names.clone();
+        self.reasons = f.reasons.clone();
+    }
+
+    /// A join request from Delivery names the LEZ account of a user. Read it from the chain, so a
+    /// member that nobody else knows gets a role once an admin approves. True when it was new.
+    /// A request that is not ours, or not signed twice, is ignored.
+    pub fn on_join_req(&self, req: &[u8]) -> bool {
+        let Ok((body, _)) = crate::joinreq::parse(req) else { return false };
+        let ours = body.site_id == self.store.site;
+        ours && self.chain.as_ref().is_some_and(|c| c.lock().unwrap().hint(body.user_account, Some(&body.pukaar_ed_pk)))
+    }
+
+    /// A profile announce from Delivery: keep it for the fetchers when its signature holds. They
+    /// read the file, show the name and learn the account of an author that the chain does not
+    /// list. True when it was kept.
+    pub fn on_announce(&self, a: Announce) -> bool {
+        a.site == self.store.site && self.fetched.as_ref().is_some_and(|f| f.lock().unwrap().note_announce(a))
     }
 
     /// The sorted keys of the approved members. They elect who answers Heads.
@@ -125,6 +175,7 @@ impl Node {
             lamport: self.store.max_lamport() + 1,
             ts,
             chain_block: self.chain_block,
+            author_account: self.account,
             body,
         };
         let e = sign_within_limits(&self.key, u)?;
@@ -137,7 +188,15 @@ impl Node {
     }
 
     pub fn receive(&mut self, bytes: &[u8]) -> Result<Accept, DecodeError> {
-        let r = self.store.insert(decode(bytes)?);
+        let e = decode(bytes)?;
+        // An author that the chain roster does not know yet: read the account that the event names.
+        // The record there must hold the author key, or the reducer rejects the event.
+        if e.u.site == self.store.site {
+            if let Some(c) = &self.chain {
+                c.lock().unwrap().hint(e.u.author_account, Some(&e.u.author));
+            }
+        }
+        let r = self.store.insert(e);
         self.settle();
         Ok(r)
     }
@@ -186,7 +245,7 @@ impl Node {
     /// The newest chain role of `k`.
     #[must_use]
     pub fn role_now(&self, k: &Key) -> Option<Rank> {
-        (self.roles)(k, u64::MAX)
+        (self.roles)(k, None, u64::MAX)
     }
 
     /// Is (author, seq) inside a reproducible checkpoint that names a LEZ tx?
@@ -200,6 +259,15 @@ impl Node {
         })
     }
 
+    /// Fill `reason` of a removal row from the text in details.json. The row has the hash.
+    fn with_reason(&self, mut row: Value) -> Value {
+        let text = row["reason_sha256"].as_str().and_then(|h| hex::decode(h).ok()).and_then(|h| Key::try_from(h).ok()).and_then(|h| self.reasons.get(&h));
+        if let Some(t) = text {
+            row["reason"] = json!(t);
+        }
+        row
+    }
+
     /// Our identity, with the chain role we hold now.
     #[must_use]
     pub fn identity_json(&self) -> String {
@@ -211,7 +279,7 @@ impl Node {
             "role": role.map(rank_name),
             "super_admin": role == Some(Rank::SuperAdmin),
             "name": self.names.get(&me),
-            "revoked": self.chain.as_ref().and_then(|c| c.lock().unwrap().revocation_of(&me, &self.names)),
+            "revoked": self.chain.as_ref().and_then(|c| c.lock().unwrap().revocation_of(&me, &self.names)).map(|r| self.with_reason(r)),
             // 2.3b: "requested" once a join request of ours is known
             "pending": "none",
             "site": hex::encode(self.store.site),
@@ -237,7 +305,7 @@ impl Node {
             .filter(|e| s.rejected.contains_key(&e.id) && issue_of(&e.u.body).is_none())
             .collect();
         rejected.sort_by_key(|e| std::cmp::Reverse(e.u.ts));
-        let (people, chain) = match &self.chain {
+        let (mut people, chain) = match &self.chain {
             Some(c) => {
                 let c = c.lock().unwrap();
                 (c.people_json(&self.names), c.status_json())
@@ -247,8 +315,12 @@ impl Node {
                 json!({ "block": 0, "ok": false, "error": null }),
             ),
         };
+        let gone: Vec<Value> = people["revoked"].as_array().into_iter().flatten().map(|r| self.with_reason(r.clone())).collect();
+        people["revoked"] = json!(gone);
+        let storage = self.fetched.as_ref().map_or(json!({ "pending": 0, "error": null }), |f| f.lock().unwrap().status_json());
         json!({
             "site": hex::encode(self.store.site),
+            "storage": storage,
             "name": s.config.name,
             "categories": s.config.categories,
             "locations": s.locations.iter().map(place).collect::<Vec<_>>(),

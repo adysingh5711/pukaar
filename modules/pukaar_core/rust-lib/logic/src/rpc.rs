@@ -3,7 +3,8 @@
 //! The HTTP call sits behind the `Rpc` trait, so tests use a fake. The program has no member list:
 //! `Site.roster_len` is a count, and the `Roster` page seed of the rules crate is unused. So the
 //! app reads the members it knows by account: the creator, the super admins, its own account and
-//! every account that `Chain::track` got (join requests, from 2.3b). Reads only, no transaction.
+//! the accounts it learned from the keyring (`set_keyring`) and from hints (`hint`: an event, a join
+//! request or a profile announce). The chain `Member` record is the truth. Reads only, no transaction.
 
 use crate::chain::{b58, member_pda, shard_of, site_pda, AccountId, Roster};
 use crate::event::Key;
@@ -66,13 +67,13 @@ pub fn get_account(rpc: &dyn Rpc, program: &AccountId, id: &AccountId) -> Result
 }
 
 /// Read the Site, then the Member of every account in `users` (plus the creator and the super
-/// admins). Returns the roster, the block id read before the accounts, and the accounts read.
+/// admins). Returns the roster and the block id read before the accounts.
 pub fn read_roster(
     rpc: &dyn Rpc,
     program: &AccountId,
     site_id: &[u8; 32],
     users: &BTreeSet<AccountId>,
-) -> Result<(Roster, u64, BTreeSet<AccountId>), String> {
+) -> Result<(Roster, u64), String> {
     // The block comes first: the accounts below are at least this new.
     let block = last_block(rpc)?;
     let mut roster = Roster::new(*program, *site_id);
@@ -90,7 +91,7 @@ pub fn read_roster(
         let at = member_pda(program, site_id, u);
         roster.apply(&at, &get_account(rpc, program, &at)?)?;
     }
-    Ok((roster, block, who))
+    Ok((roster, block))
 }
 
 fn now_ms() -> u64 {
@@ -115,10 +116,20 @@ pub struct Chain {
     pub block: u64,
     pub ok: bool,
     pub error: Option<String>,
+    /// Accounts we trust enough to keep: our own and the ones `track` got.
     users: BTreeSet<AccountId>,
+    /// The (account, Pukaar key) pairs of the keyring. The chain record at an account must hold
+    /// the key listed here, or the record is ignored.
+    expect: BTreeMap<AccountId, Key>,
+    /// Accounts that an event, a join request or an announce named. At most `MAX_HINTS`, and one
+    /// that holds no record after a read is dropped, so a flood of fake accounts cannot grow it.
+    hints: BTreeSet<AccountId>,
     last_try: Option<Instant>,
     busy: bool,
 }
+
+/// How many unverified accounts one site may ask us to read.
+pub const MAX_HINTS: usize = 256;
 
 pub type SharedChain = Arc<Mutex<Chain>>;
 
@@ -133,14 +144,43 @@ impl Chain {
             ok: false,
             error: None,
             users: BTreeSet::from([me]),
+            expect: BTreeMap::new(),
+            hints: BTreeSet::new(),
             last_try: None,
             busy: false,
         }))
     }
 
-    /// Read this account from now on (a join request names it).
+    /// Read this account from now on.
     pub fn track(&mut self, user: AccountId) {
         self.users.insert(user);
+    }
+
+    /// The keyring of the site: read every account in it. `entries` are (account, Pukaar key). Call
+    /// it only with a keyring whose SHA-256 matched `Site.keyring_sha256`. A `Member` record whose
+    /// key differs from the entry is ignored at the next read. A newer keyring replaces the older.
+    /// True when it names an account that the last keyring did not.
+    pub fn set_keyring(&mut self, entries: &[(AccountId, Key)]) -> bool {
+        let new: BTreeMap<AccountId, Key> = entries.iter().copied().collect();
+        let grew = new.keys().any(|a| !self.expect.contains_key(a));
+        self.expect = new;
+        grew
+    }
+
+    /// An event, a join request or an announce names this account (with this Pukaar key when the
+    /// message names one). Read it unless we know it already. True when it was added.
+    pub fn hint(&mut self, user: AccountId, key: Option<&Key>) -> bool {
+        let known = self.users.contains(&user) || self.expect.contains_key(&user) || self.hints.contains(&user);
+        let seen = key.is_some_and(|k| self.roster.has_key(k));
+        if known || seen || self.hints.len() >= MAX_HINTS {
+            return false;
+        }
+        self.hints.insert(user)
+    }
+
+    /// The Site record and the records of every member the chain gave us.
+    pub fn snapshot(&self) -> (Option<pukaar_sites_rules::Site>, Vec<Member>) {
+        (self.roster.site.clone(), self.roster.members().cloned().collect())
     }
 
     /// True when the caller must run `refresh` now: the last try is over 10 s old and none runs.
@@ -158,6 +198,11 @@ impl Chain {
     /// revoked now loses the old events too. The anchor-bound rule of O10 (2.5) fixes that.
     pub fn role_at(&self, who: &Key, _block: u64) -> Option<Rank> {
         self.roster.role_of(who, now_ms())
+    }
+
+    /// `role_at` for the author of an event: the `Member` record at `account` must hold `who`.
+    pub fn role_of_author(&self, who: &Key, account: Option<&AccountId>, _block: u64) -> Option<Rank> {
+        self.roster.role_for(who, account, now_ms())
     }
 
     /// Active members and super admins by Pukaar key: they elect the Heads answerers.
@@ -231,15 +276,21 @@ impl Chain {
 pub fn refresh(chain: &Mutex<Chain>, rpc: &dyn Rpc) {
     let (program, site_id, users) = {
         let c = chain.lock().unwrap();
-        (c.program, c.site_id, c.users.clone())
+        let all = c.users.iter().chain(c.expect.keys()).chain(&c.hints);
+        (c.program, c.site_id, all.copied().collect())
     };
     let r = read_roster(rpc, &program, &site_id, &users);
     let mut c = chain.lock().unwrap();
     c.busy = false;
     match r {
-        Ok((roster, block, users)) => {
+        Ok((mut roster, block)) => {
+            roster.retain_matching(&c.expect);
+            // A hint with a record becomes a kept account. One without is dropped: the next message
+            // that names it adds it again.
+            let found: Vec<AccountId> = c.hints.iter().copied().filter(|a| roster.member(a).is_some()).collect();
+            c.hints.clear();
+            c.users.extend(found);
             (c.roster, c.block, c.ok, c.error) = (roster, block, true, None);
-            c.users.extend(users);
         }
         Err(e) => (c.ok, c.error) = (false, Some(e)),
     }

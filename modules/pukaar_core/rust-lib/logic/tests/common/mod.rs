@@ -17,7 +17,7 @@ pub fn node(key: SigningKey, roles: &BTreeMap<Key, Rank>) -> Node {
 /// Give a node the chain roles and the site setup (a loaded or restored node has none).
 pub fn equip(mut n: Node, roles: &BTreeMap<Key, Rank>) -> Node {
     let roles = roles.clone();
-    n.roles = Box::new(move |k, _| roles.get(k).copied());
+    n.roles = Box::new(move |k, _, _| roles.get(k).copied());
     n.config = crate::util::config();
     n.locations = crate::util::locations();
     n

@@ -10,6 +10,7 @@ fn report(key: &SigningKey, text: &str) -> Unsigned {
         lamport: 1,
         ts: 0,
         chain_block: 1234,
+        author_account: [9; 32],
         body: Body::Report {
             category: "water".into(),
             location: "W-03".into(),
@@ -61,7 +62,7 @@ fn size_limits() {
     assert_eq!(decode(&[0; 10]), Err(DecodeError::TooShort));
 }
 
-const GOLDEN_REPORT: &str = "fa0538d667b175154f3f5930bdab3fd08ef469551f41e118eacbd6df827f366e0cbdcddabb7f73c6e259af546e586206e159b8fe21c9b8df02ff2d01ba1f0a046c6f676f733a70756b6161723a32000207070707070707070707070707070707070707070707070707070707070707078a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c0000000000000000000000000000000000000000000000000000000000000000000100d2090005776174657204572d3033000b746170206c65616b696e67";
+const GOLDEN_REPORT: &str = "4f243ab1bc1a7ba4bb35ce7f62d296e6326a367b7adf40bb254a2a8acadd4134b063a45dd073a2f0d46de8ea461a4b348819201366527fa0ee0d3ad31a797a0b6c6f676f733a70756b6161723a32000207070707070707070707070707070707070707070707070707070707070707078a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c0000000000000000000000000000000000000000000000000000000000000000000100d20909090909090909090909090909090909090909090909090909090909090909090005776174657204572d3033000b746170206c65616b696e67";
 
 /// Wire compatibility of format 2: the same content signs to the same bytes, and they decode back.
 #[test]
@@ -139,4 +140,18 @@ fn every_text_is_capped_on_receipt() {
         assert_eq!(decode(&e.bytes), Err(DecodeError::TextTooLong));
     }
     assert!(Body::MarkDuplicate { issue: [1; 32], of: [2; 32] }.texts().is_empty());
+}
+
+#[test]
+fn the_author_account_is_signed_and_survives_the_wire() {
+    let k = new_key();
+    let e = sign(&k, report(&k, "x"));
+    assert_eq!(decode(&e.bytes).unwrap().u.author_account, [9; 32]);
+    // The account sits in the signed payload: another account is another event, and a flipped byte fails.
+    let other = sign(&k, Unsigned { author_account: [8; 32], ..report(&k, "x") });
+    assert_ne!(e.bytes[64..], other.bytes[64..]);
+    let mut forged = e.bytes.clone();
+    let at = (0..forged.len()).find(|&i| forged[i..].starts_with(&[9; 32])).unwrap();
+    forged[at] = 8;
+    assert_eq!(decode(&forged), Err(DecodeError::BadSig));
 }

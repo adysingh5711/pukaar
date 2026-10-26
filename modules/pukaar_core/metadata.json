@@ -7,7 +7,7 @@
   "category": "civic",
   "description": "Civic fault reports that can't be quietly closed",
   "main": "pukaar_core_plugin",
-  "dependencies": ["delivery_module"],
+  "dependencies": ["delivery_module", "lez_core", "storage_module"],
   "codegen": {
     "rust": { "crate": "rust-lib", "trait": "PukaarCoreModule" }
   },

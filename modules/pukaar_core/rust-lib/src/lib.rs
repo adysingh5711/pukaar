@@ -5,13 +5,16 @@
 //! rust-lib/Cargo.toml); this file only moves bytes between that crate, the
 //! disk and Delivery.
 
+mod storage;
+
 use pukaar_logic::event::{Body, Event, SigningKey};
+use pukaar_logic::fetch::{sync_once, Fetched};
 use pukaar_logic::identity;
 use pukaar_logic::node::{action_body, parse_id, Node};
 use pukaar_logic::lezkey::{derive_lez_secret, lez_account_id};
 use pukaar_logic::persist;
 use pukaar_logic::reducer::Rank;
-use pukaar_logic::rpc::{refresh, Chain, HttpRpc};
+use pukaar_logic::rpc::{Chain, HttpRpc};
 use pukaar_logic::store::Accept;
 use pukaar_logic::sync::{
     heads_msg, lost_node, send_queue, should_answer, to_resend, to_resend_own, SendError, Wire,
@@ -19,6 +22,7 @@ use pukaar_logic::sync::{
 };
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 // Mutex comes from the generated scaffold below (same module scope): a second
 // `use std::sync::Mutex;` here would be a duplicate import (confirmed at Step 8).
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -384,22 +388,30 @@ fn wire_chain(node: &mut Node) {
     };
     let me = lez_account_id(&derive_lez_secret(&node.key.to_bytes()));
     node.attach_chain(Chain::shared(program, node.store.site, me));
+    node.attach_fetched(Fetched::shared());
 }
 
-/// Start a chain read when one is due (at most one per 10 s). It never runs inside the call that
-/// the UI waits on: the thread fills the cache and the calls read the cached copy.
+/// The Storage client of this module, made on the first sync. Its temp files live in `dir`.
+static STORE: OnceLock<storage::LogosStore> = OnceLock::new();
+
+/// Start a chain read and a Storage fetch when one is due (at most one per 10 s). It never runs
+/// inside the call that the UI waits on: the thread fills the caches and the calls read the cached
+/// copies. Storage can take a minute on a cold start, which only delays the names and the settings.
 fn chain_tick() {
-    let chain = SHARED
-        .lock()
-        .unwrap()
-        .as_ref()
-        .and_then(|sh| sh.node.as_ref())
-        .and_then(|n| n.chain.clone());
-    let Some(chain) = chain else { return };
+    let parts = {
+        let g = SHARED.lock().unwrap();
+        let sh = g.as_ref();
+        let node = sh.and_then(|sh| sh.node.as_ref());
+        node.and_then(|n| Some((n.chain.clone()?, n.fetched.clone()?, n.key.clone(), sh?.dir.join("storage-tmp"))))
+    };
+    let Some((chain, fetched, key, tmp)) = parts else { return };
     if !chain.lock().unwrap().start() {
         return;
     }
-    std::thread::spawn(move || refresh(&chain, &HttpRpc::new(&env_or("PUKAAR_LEZ_RPC", LEZ_RPC))));
+    std::thread::spawn(move || {
+        let store = STORE.get_or_init(|| storage::LogosStore::new(tmp));
+        sync_once(&HttpRpc::new(&env_or("PUKAAR_LEZ_RPC", LEZ_RPC)), store, &chain, &fetched, &key);
+    });
 }
 
 /// Called from the Delivery event thread for every channel message; only our site's count
@@ -445,8 +457,16 @@ fn on_wire(channel: &str, bytes: &[u8]) {
             };
             outbox.extend(batch.into_iter().map(|b| Wire::Event(b).encode()));
         }
-        // 2.3: queue a JoinReq for the admin batch, keep a ProfileAnnounce, show a ChainPending chip
-        Some(Wire::JoinReq(_) | Wire::ProfileAnnounce(_) | Wire::ChainPending { .. }) => {}
+        // The account of a join request is read from the chain. 2.3b-2 queues it for the admin batch.
+        Some(Wire::JoinReq(req)) => {
+            node.on_join_req(&req);
+        }
+        // The fetchers read the file of an announce and show the newer name.
+        Some(Wire::ProfileAnnounce(a)) => {
+            node.on_announce(a);
+        }
+        // 2.3b-2: show a ChainPending chip
+        Some(Wire::ChainPending { .. }) => {}
         None => {} // junk on the topic
     }
 }
@@ -525,9 +545,10 @@ fn flush() {
 }
 
 fn read<T>(f: impl FnOnce(&Node) -> T) -> Result<T, String> {
-    let g = SHARED.lock().unwrap();
-    let sh = g.as_ref().ok_or("module not ready")?;
-    let node = sh.node.as_ref().ok_or(NO_SITE)?;
+    let mut g = SHARED.lock().unwrap();
+    let sh = g.as_mut().ok_or("module not ready")?;
+    let node = sh.node.as_mut().ok_or(NO_SITE)?;
+    node.apply_fetched(); // what Storage delivered since the last read
     Ok(f(node))
 }
 
@@ -538,6 +559,7 @@ fn write<T>(
     let mut g = SHARED.lock().unwrap();
     let sh = g.as_mut().ok_or("module not ready")?;
     let node = sh.node.as_mut().ok_or(NO_SITE)?;
+    node.apply_fetched();
     let r = f(node, &mut sh.outbox)?;
     sh.persist(); // our own events are never debounced
     Ok(r)
