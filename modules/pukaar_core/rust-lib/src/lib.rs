@@ -50,8 +50,9 @@ pub trait PukaarCoreModule: Send + 'static {
     /// Stop waiting for a restored identity's history (allowed 10 min after the restore).
     fn skip_history_sync(&mut self) -> String;
     /// Seals and uploads the profile and announces it to the site: members see it at once. The chain
-    /// pointer follows at the next admin `send_batch`. `{"ok":true,"queued":id}`.
-    fn set_profile(&mut self, display_name: String) -> String;
+    /// pointer follows at the next admin `send_batch`. `{"ok":true,"queued":id}`. `bio` and
+    /// `experience` are optional: a call with the name only keeps working, and clears both.
+    fn set_profile(&mut self, display_name: String, bio: Option<String>, experience: Option<String>) -> String;
     /// Held until an admin calls `send_batch`. `name` is required for steward/admin and optional for
     /// residents. Only a super admin
     /// grants "admin" or changes an admin's role; nobody changes a super admin's.
@@ -852,6 +853,10 @@ impl PukaarCoreModule for Pukaar {
         .ok()
         .flatten()
         .unwrap_or_else(|| serde_json::json!({ "site": null }));
+        // No site yet: the account still shows, so the user can fund it before the first write.
+        if v["account"].is_null() {
+            v["account"] = SHARED.lock().unwrap().as_ref().and_then(|sh| persist::account_b58(&sh.dir).ok()).into();
+        }
         v["delivery"] = delivery_status().into();
         v.to_string()
     }
@@ -881,10 +886,10 @@ impl PukaarCoreModule for Pukaar {
             .unwrap_or_else(err)
     }
 
-    fn set_profile(&mut self, display_name: String) -> String {
+    fn set_profile(&mut self, display_name: String, bio: Option<String>, experience: Option<String>) -> String {
         // Members read the new profile as soon as it is in Storage and announced. The chain pointer
         // follows at the next admin batch.
-        let r = queued(|node, q, _| ops::set_profile(node, q, &display_name, now_ms()));
+        let r = queued(|node, q, _| ops::set_profile(node, q, &display_name, bio.as_deref().unwrap_or(""), experience.as_deref().unwrap_or(""), now_ms()));
         flush();
         id_reply(r)
     }

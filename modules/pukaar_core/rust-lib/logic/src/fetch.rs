@@ -36,6 +36,7 @@ const MAX_BLOB: usize = 1 << 20;
 /// Announces of authors the chain does not list (yet).
 const MAX_ANNOUNCES: usize = 64;
 const MAX_NAME: usize = 64;
+const MAX_ABOUT: usize = 500;
 /// Chain read, then fetch, again while the fetch found new accounts.
 const ROUNDS: usize = 3;
 
@@ -119,8 +120,12 @@ pub struct Fetched {
     pub version: u64,
     pub config: Option<Config>,
     pub places: Option<Vec<Location>>,
+    /// The places that an admin hid (the `retired` list of places.json).
+    pub retired: Vec<Location>,
     /// The display name of each member, by Pukaar key.
     pub names: BTreeMap<Key, String>,
+    /// The bio and the experience of each member, by Pukaar key.
+    pub about: BTreeMap<Key, (String, String)>,
     /// The removal reasons, by SHA-256 of the text.
     pub reasons: BTreeMap<Key, String>,
     /// How many files of the chain records have not arrived (or did not match) yet.
@@ -213,7 +218,16 @@ fn clean(name: &str) -> String {
     name.chars().filter(|c| !c.is_control()).take(MAX_NAME).collect::<String>().trim().to_string()
 }
 
-fn read_profile(bytes: &[u8], site: &str, m: &Member, version: u64, me: &SigningKey, keys: &BTreeMap<u64, Key>) -> Result<String, String> {
+/// A bio or an experience text: capped, no control characters except a new line.
+fn clean_about(text: &str) -> String {
+    text.chars().filter(|c| *c == '\n' || !c.is_control()).take(MAX_ABOUT).collect::<String>().trim().to_string()
+}
+
+fn about_of(b: &profile::Body) -> (String, String) {
+    (clean_about(&b.bio), clean_about(&b.experience))
+}
+
+fn read_profile(bytes: &[u8], site: &str, m: &Member, version: u64, me: &SigningKey, keys: &BTreeMap<u64, Key>) -> Result<profile::Body, String> {
     let e = profile::from_bytes(bytes)?;
     if e.site_id != site || e.user != hex::encode(m.user) || e.pukaar_key != hex::encode(m.pukaar_key) {
         return Err("the file belongs to someone else".into());
@@ -221,7 +235,7 @@ fn read_profile(bytes: &[u8], site: &str, m: &Member, version: u64, me: &Signing
     if e.version != version {
         return Err("the version differs from the pointer".into());
     }
-    Ok(clean(&profile::open(&e, me, keys)?.display_name))
+    profile::open(&e, me, keys)
 }
 
 fn cycle(store: &dyn Store, chain: &SharedChain, fx: &SharedFetched, me: &SigningKey) -> bool {
@@ -317,20 +331,22 @@ fn cycle(store: &dyn Store, chain: &SharedChain, fx: &SharedFetched, me: &Signin
         Some(Err(e)) => errors.push(e),
         None => {}
     }
-    let mut place_list = f.places.clone();
+    let (mut place_list, mut retired) = (f.places.clone(), f.retired.clone());
     match places {
-        Some(Ok(p)) => place_list = Some(p.places),
+        Some(Ok(p)) => (place_list, retired) = (Some(p.places), p.retired),
         Some(Err(e)) => errors.push(e),
         None => {}
     }
 
     let mut names = f.names.clone(); // a name stays when its newer file has not arrived
+    let mut about = f.about.clone();
     for m in &members {
         let (cid, _, version) = pointer(m);
         let Some(bytes) = file(&cid) else { continue };
         match read_profile(bytes, &site_hex, m, version, me, &site_keys) {
-            Ok(n) => {
-                names.insert(m.pukaar_key, n);
+            Ok(b) => {
+                names.insert(m.pukaar_key, clean(&b.display_name));
+                about.insert(m.pukaar_key, about_of(&b));
             }
             Err(e) => errors.push(format!("profile {}: {e}", crate::node::fingerprint(&m.pukaar_key))),
         }
@@ -346,6 +362,7 @@ fn cycle(store: &dyn Store, chain: &SharedChain, fx: &SharedFetched, me: &Signin
         if genuine {
             if let Ok(body) = profile::open(&e, me, &site_keys) {
                 names.insert(a.author, clean(&body.display_name));
+                about.insert(a.author, about_of(&body));
             }
         }
     }
@@ -356,8 +373,10 @@ fn cycle(store: &dyn Store, chain: &SharedChain, fx: &SharedFetched, me: &Signin
     f.site_keys = site_keys;
     f.pending = pending;
     f.error = errors.into_iter().next();
-    if (f.config.as_ref(), f.places.as_ref(), &f.names, &f.reasons) != (config.as_ref(), place_list.as_ref(), &names, &reasons) {
-        (f.config, f.places, f.names, f.reasons) = (config, place_list, names, reasons);
+    if (f.config.as_ref(), f.places.as_ref(), &f.retired, &f.names, &f.about, &f.reasons)
+        != (config.as_ref(), place_list.as_ref(), &retired, &names, &about, &reasons)
+    {
+        (f.config, f.places, f.retired, f.names, f.about, f.reasons) = (config, place_list, retired, names, about, reasons);
         f.version += 1;
     }
     grew

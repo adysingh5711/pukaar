@@ -204,13 +204,20 @@ fn profile_versions_only_grow() {
     let n = node(&w, 1);
     let mut q = locked(&w);
     let v = |q: &Queue, id: u64| match &q.entries.iter().find(|e| e.id == id).unwrap().intent {
-        Intent::Publish { name, version } => (name.clone(), *version),
+        Intent::Publish { name, version, .. } => (name.clone(), *version),
         _ => panic!(),
     };
-    let a = set_profile(&n, &mut q, " Asha\u{7} ", NOW).unwrap();
-    let b = set_profile(&n, &mut q, "Asha K", NOW).unwrap();
+    let a = set_profile(&n, &mut q, " Asha\u{7} ", "", "", NOW).unwrap();
+    let b = set_profile(&n, &mut q, "Asha K", "", "", NOW).unwrap();
     assert_eq!((v(&q, a), v(&q, b)), (("Asha".into(), 1), ("Asha K".into(), 2)));
-    assert!(set_profile(&n, &mut q, &"x".repeat(65), NOW).unwrap_err().contains("too long"));
+    assert!(set_profile(&n, &mut q, &"x".repeat(65), "", "", NOW).unwrap_err().contains("too long"));
+    // The bio and the experience travel with the name, cleaned, and have a cap of their own.
+    let c = set_profile(&n, &mut q, "Asha", " nurse\u{7}\nnights ", "10 years", NOW).unwrap();
+    let e = q.entries.iter().find(|e| e.id == c).unwrap();
+    assert!(matches!(&e.intent, Intent::Publish { bio, experience, .. } if bio == "nurse\nnights" && experience == "10 years"));
+    assert!(set_profile(&n, &mut q, "Asha", &"x".repeat(501), "", NOW).unwrap_err().contains("bio"));
+    assert!(set_profile(&n, &mut q, "Asha", "", &"x".repeat(501), NOW).unwrap_err().contains("experience"));
+    q.entries.retain(|e| e.id != c);
     assert_eq!(q.entries.len(), 2);
     assert_eq!(q.entries[0].state, St::Preparing);
 }
@@ -226,7 +233,7 @@ fn a_join_request_is_signed_twice_and_kept() {
     assert_eq!((body.user_account, body.pukaar_ed_pk, body.site_id), (acct(4), pk(4), w.site_id()));
     assert!(check_join_request(req.as_slice().try_into().unwrap(), &w.site_id(), None, NOW).is_ok());
     assert_eq!(q.mine.as_deref(), Some(&req[..]));
-    assert!(matches!(&q.entries.iter().find(|e| e.id == id).unwrap().intent, Intent::Publish { name, version: 1 } if name.is_empty()));
+    assert!(matches!(&q.entries.iter().find(|e| e.id == id).unwrap().intent, Intent::Publish { name, version: 1, .. } if name.is_empty()));
     // It survives a restart: `my_identity.pending` stays "requested".
     q.save();
     assert!(Queue::load(&w.dir).mine.is_some());
@@ -252,7 +259,7 @@ fn a_new_site_has_its_files_and_the_first_profile_behind_it() {
     let mine: Vec<_> = q.entries.iter().filter(|e| e.site == site_id).collect();
     assert_eq!((mine[0].id, mine[0].intent.name(), mine[0].blobs.len()), (id, "create_site", 3));
     assert_eq!((mine[1].intent.name(), mine[1].state), ("profile", St::Preparing));
-    assert!(matches!(&mine[1].intent, Intent::Publish { name, version: 1 } if name == "Asha"));
+    assert!(matches!(&mine[1].intent, Intent::Publish { name, version: 1, .. } if name == "Asha"));
 }
 
 #[test]
@@ -265,9 +272,10 @@ fn status_has_the_shape_of_chain_status() {
     let s = status(&n, &q);
     assert_eq!((s["key"].as_str(), s["waiting"].as_u64(), s["refresh_waiting"].as_u64()), (Some("not imported yet"), Some(1), Some(0)));
     let w0 = &s["writes"][0];
-    for f in ["id", "kind", "state", "tx", "reason", "items"] {
+    for f in ["id", "kind", "state", "tx", "reason", "items", "accounts"] {
         assert!(w0.get(f).is_some(), "writes[0] has {f}");
     }
     assert_eq!((w0["kind"].as_str(), w0["state"].as_str()), (Some("set_role"), Some("waiting")));
+    assert_eq!(w0["accounts"], serde_json::json!([crate::chain::b58(&acct(2))]), "the row of the member is found by its account");
     let _ = PROGRAM;
 }

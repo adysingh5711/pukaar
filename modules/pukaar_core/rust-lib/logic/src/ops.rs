@@ -104,7 +104,7 @@ pub fn new_site(key: &SigningKey, g: &Genesis) -> Result<NewSite, String> {
 pub fn create_site(node: &Node, q: &mut Queue, ns: NewSite, admin_name: &str, now: u64) -> u64 {
     let id = q.push(ns.site_id, Intent::CreateSite { salt: ns.salt, pukaar_key: node.me() }, St::Preparing, ns.blobs, now);
     let version = next_version(node, q);
-    q.push(ns.site_id, Intent::Publish { name: admin_name.into(), version }, St::Preparing, vec![], now);
+    q.push(ns.site_id, Intent::Publish { name: admin_name.into(), version, bio: String::new(), experience: String::new() }, St::Preparing, vec![], now);
     id
 }
 
@@ -114,17 +114,27 @@ pub fn join(node: &Node, q: &mut Queue, now: u64) -> (Vec<u8>, u64) {
     let req = joinreq::build(&node.key, &derive_lez_secret(&node.key.to_bytes()), node.store.site, now, now + REQUEST_VALID_MS).to_vec();
     q.mine = Some(req.clone());
     let version = next_version(node, q);
-    let id = q.push(node.store.site, Intent::Publish { name: String::new(), version }, St::Preparing, vec![], now);
+    let id = q.push(node.store.site, Intent::Publish { name: String::new(), version, bio: String::new(), experience: String::new() }, St::Preparing, vec![], now);
     (req, id)
 }
 
-pub fn set_profile(node: &Node, q: &mut Queue, display_name: &str, now: u64) -> Result<u64, String> {
+/// A bio or an experience text: no control characters except a new line, at most `MAX_TEXT` characters.
+fn about_text(what: &str, text: &str) -> Result<String, String> {
+    let t: String = text.chars().filter(|c| *c == '\n' || !c.is_control()).collect::<String>().trim().to_string();
+    if t.chars().count() > MAX_TEXT {
+        return Err(format!("too long: keep the {what} under {MAX_TEXT} characters"));
+    }
+    Ok(t)
+}
+
+pub fn set_profile(node: &Node, q: &mut Queue, display_name: &str, bio: &str, experience: &str, now: u64) -> Result<u64, String> {
     let name: String = display_name.chars().filter(|c| !c.is_control()).collect::<String>().trim().to_string();
     if name.chars().count() > 64 {
         return Err("too long: keep the name under 64 characters".into());
     }
+    let (bio, experience) = (about_text("bio", bio)?, about_text("experience", experience)?);
     let version = next_version(node, q);
-    Ok(q.push(node.store.site, Intent::Publish { name, version }, St::Preparing, vec![], now))
+    Ok(q.push(node.store.site, Intent::Publish { name, version, bio, experience }, St::Preparing, vec![], now))
 }
 
 // ---- roles ----

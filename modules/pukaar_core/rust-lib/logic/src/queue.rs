@@ -122,7 +122,15 @@ pub enum Intent {
     SuperRemove(AccountId),
     SuperTransfer(AccountId),
     /// Not a chain write: seal our profile, upload it and send the announce. Blob: the profile file.
-    Publish { name: String, version: u64 },
+    Publish {
+        name: String,
+        version: u64,
+        /// Older `writes.json` files have none of these two.
+        #[serde(default)]
+        bio: String,
+        #[serde(default)]
+        experience: String,
+    },
 }
 
 impl Intent {
@@ -490,6 +498,8 @@ impl Queue {
                 serde_json::json!({
                     "id": e.id, "kind": e.intent.name(), "state": e.state_name(), "items": e.intent.len(),
                     "tx": e.tx.as_ref().map(|t| t.chars().take(10).collect::<String>()), "reason": e.reason,
+                    // The members that the write is about (base58), so the UI can mark their rows.
+                    "accounts": e.intent.users().iter().map(crate::chain::b58).collect::<Vec<_>>(),
                 })
             })
             .collect();
@@ -711,7 +721,7 @@ fn prepare(env: &Env, e: &mut Entry) -> Result<(), String> {
                 let next = profile::rotate(&e.site, &mut keys, &staying)?;
                 e.blobs = vec![Blob::new(profile::keyring_to_bytes(&next))];
             }
-            Intent::Publish { name, version } => return prepare_publish(env, e, &name, version),
+            Intent::Publish { name, version, bio, experience } => return prepare_publish(env, e, profile::Body { display_name: name, bio, experience }, version),
             // The other writes carry no file, or their files were made with the entry (create_site).
             _ => {}
         }
@@ -748,7 +758,7 @@ fn prepare_approve(env: &Env, e: &mut Entry, mut items: Vec<ApproveReq>) -> Resu
 
 /// Seal our profile (the site key when we are in the keyring, else the admins) and upload it. Then the
 /// announce goes to the site and the entry is done. The chain pointer follows in the next admin batch.
-fn prepare_publish(env: &Env, e: &mut Entry, name: &str, version: u64) -> Result<(), String> {
+fn prepare_publish(env: &Env, e: &mut Entry, body: profile::Body, version: u64) -> Result<(), String> {
     if e.blobs.is_empty() {
         let (site, _) = env.chain.lock().unwrap().snapshot();
         let site = site.ok_or("waiting for the chain")?;
@@ -761,7 +771,7 @@ fn prepare_publish(env: &Env, e: &mut Entry, name: &str, version: u64) -> Result
             return Err("waiting for the site key".into());
         }
         let readers = if site_key.is_some() { vec![] } else { admins };
-        let body = profile::Body { display_name: name.trim().into(), bio: String::new(), experience: String::new() };
+        let body = profile::Body { display_name: body.display_name.trim().into(), ..body };
         let file = profile::build(env.key, &e.site, &env.me(), version, site.key_epoch, &body, site_key.as_ref(), &readers)?;
         e.blobs = vec![Blob::new(profile::to_bytes(&file))];
     }

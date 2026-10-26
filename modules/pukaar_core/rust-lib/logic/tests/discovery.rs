@@ -93,7 +93,8 @@ fn details() -> Details {
 }
 
 fn places() -> Places {
-    Places::new(vec![Location { code: "W-01".into(), label: "Tap".into(), group: "Water".into() }])
+    let hidden = Location { code: "W-02".into(), label: "Old tap".into(), group: "Water".into() };
+    Places { retired: vec![hidden], ..Places::new(vec![Location { code: "W-01".into(), label: "Tap".into(), group: "Water".into() }]) }
 }
 
 struct World {
@@ -133,7 +134,7 @@ impl World {
 
     /// A profile of user `n` named "User n", sealed under the site key of epoch 1.
     fn profile(&self, n: u8) -> (String, [u8; 32]) {
-        let body = profile::Body { display_name: format!("User{n}"), bio: String::new(), experience: String::new() };
+        let body = profile::Body { display_name: format!("User{n}"), bio: format!("bio{n}"), experience: format!("exp{n}") };
         let e = profile::build(&sk(n), &SITE, &acct(n), 1, 1, &body, Some(&self.keys[&1]), &[]).unwrap();
         self.put(&profile::to_bytes(&e))
     }
@@ -214,6 +215,9 @@ fn the_keyring_lists_the_members_and_the_fetchers_fill_site_info() {
     assert_eq!((i["name"].as_str(), i["sla_ack_h"].as_u64(), i["sla_fix_h"].as_u64()), (Some("Dhun Camp"), Some(24), Some(72)));
     assert_eq!(i["categories"], json!(["water"]));
     assert_eq!(i["locations"].as_array().unwrap().len(), 1);
+    assert_eq!((i["locations"][0]["ever_used"].as_bool(), i["locations"][0]["open_issues"].as_u64()), (Some(false), Some(0)));
+    // A hidden place is listed apart, so the UI can show it and an admin can restore it.
+    assert_eq!(i["retired_locations"].as_array().unwrap().iter().map(|l| l["code"].as_str().unwrap()).collect::<Vec<_>>(), ["W-02"]);
     assert_eq!(names(&i), ["User1", "User2", "User3"]);
     assert_eq!(i["chain"]["known"], 3);
     assert_eq!(i["storage"], json!({ "pending": 0, "error": null }));
@@ -221,6 +225,7 @@ fn the_keyring_lists_the_members_and_the_fetchers_fill_site_info() {
     assert_eq!(n.role_now(&key(1)), Some(Rank::SuperAdmin));
     let me: Value = serde_json::from_str(&n.identity_json()).unwrap();
     assert_eq!((me["name"].as_str(), me["role"].as_str()), (Some("User3"), Some("Resident")));
+    assert_eq!((me["bio"].as_str(), me["experience"].as_str()), (Some("bio3"), Some("exp3")));
 }
 
 #[test]

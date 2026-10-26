@@ -3,7 +3,7 @@ mod util;
 use common::*;
 use pukaar_logic::node::Node;
 use pukaar_logic::node::action_body;
-use pukaar_logic::persist::{join_site, leave, load, load_or_create_key, save};
+use pukaar_logic::persist::{account_b58, join_site, leave, load, load_or_create_key, save};
 
 #[test]
 fn save_then_load_gives_the_same_state() {
@@ -87,5 +87,16 @@ fn fork_evidence_survives_a_restart_whatever_the_file_order() {
     let reversed = equip(load(&dir).unwrap().unwrap(), &s.roles);
     assert_eq!(view(&reversed), view(&s.admin));
     assert_eq!(reversed.state(), s.admin.state());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn the_account_shows_before_any_site_and_stays_the_same() {
+    let dir = std::env::temp_dir().join(format!("pukaar-account-{}", std::process::id()));
+    let first = account_b58(&dir).unwrap();
+    assert_eq!(first, account_b58(&dir).unwrap());
+    // It is the account that a node on this key signs with.
+    let node = Node::join(load_or_create_key(&dir).unwrap(), [7; 32]);
+    assert_eq!(first, pukaar_logic::chain::b58(&node.account));
     std::fs::remove_dir_all(dir).unwrap();
 }

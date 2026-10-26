@@ -65,7 +65,11 @@ pub struct Node {
     pub account: Key,
     pub config: Config,         // from details.json
     pub locations: Vec<Location>, // from places.json
+    /// The hidden places of places.json (retired or removed): an admin can restore them.
+    pub retired: Vec<Location>,
     pub names: BTreeMap<Key, String>, // from the profiles
+    /// The bio and the experience of each member, from the profiles.
+    pub about: BTreeMap<Key, (String, String)>,
     /// The text of each removal reason, by the SHA-256 of the text (from details.json).
     pub reasons: BTreeMap<Key, String>,
     /// What the Storage fetchers learned, and the version of it that we copied last.
@@ -86,7 +90,9 @@ impl Node {
             chain: None,
             config: Config::default(),
             locations: Vec::new(),
+            retired: Vec::new(),
             names: BTreeMap::new(),
+            about: BTreeMap::new(),
             reasons: BTreeMap::new(),
             fetched: None,
             fetched_version: 0,
@@ -124,7 +130,9 @@ impl Node {
         self.fetched_version = f.version;
         self.config = f.config.clone().unwrap_or_else(|| self.config.clone());
         self.locations = f.places.clone().unwrap_or_else(|| self.locations.clone());
+        self.retired = f.retired.clone();
         self.names = f.names.clone();
+        self.about = f.about.clone();
         self.reasons = f.reasons.clone();
     }
 
@@ -279,6 +287,8 @@ impl Node {
             "role": role.map(rank_name),
             "super_admin": role == Some(Rank::SuperAdmin),
             "name": self.names.get(&me),
+            "bio": self.about.get(&me).map(|a| &a.0),
+            "experience": self.about.get(&me).map(|a| &a.1),
             "revoked": self.chain.as_ref().and_then(|c| c.lock().unwrap().revocation_of(&me, &self.names)).map(|r| self.with_reason(r)),
             // 2.3b: "requested" once a join request of ours is known
             "pending": "none",
@@ -295,6 +305,8 @@ impl Node {
             let mut v = json!(l);
             v["state"] = json!("active");
             v["open_issues"] = json!(s.open_issues_at(&l.code));
+            // A place that no report ever named can be removed (the same hiding as retire).
+            v["ever_used"] = json!(s.issues.values().any(|i| i.location == l.code));
             v
         };
         // events no issue timeline shows (a rejected checkpoint), newest first
@@ -324,6 +336,7 @@ impl Node {
             "name": s.config.name,
             "categories": s.config.categories,
             "locations": s.locations.iter().map(place).collect::<Vec<_>>(),
+            "retired_locations": self.retired.iter().map(|l| json!(l)).collect::<Vec<_>>(),
             "members": people["members"], "super_admins": people["super_admins"], "revoked": people["revoked"],
             "pending": [], // 2.3b: the join requests that Delivery brought
             "chain": chain,

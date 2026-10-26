@@ -97,6 +97,13 @@ pub fn load_or_create_key(dir: &Path) -> io::Result<SigningKey> {
     Ok(k)
 }
 
+/// The LEZ account of the key of this device (base58), made with the key if it is not there yet.
+/// The user funds it before the first write, so it must show before any site exists.
+pub fn account_b58(dir: &Path) -> io::Result<String> {
+    let key = load_or_create_key(dir)?;
+    Ok(crate::chain::b58(&crate::lezkey::lez_account_id(&crate::lezkey::derive_lez_secret(&key.to_bytes()))))
+}
+
 pub fn load(dir: &Path) -> io::Result<Option<Node>> {
     let Ok(site) = fs::read(dir.join("site")) else {
         return Ok(None);

@@ -600,7 +600,7 @@ fn a_dead_storage_gives_up_after_five_tries() {
 fn a_profile_is_sealed_uploaded_and_announced() {
     let w = World::new();
     crate::rpc::refresh(&w.chain, &*w.rpc);
-    let id = w.push(Intent::Publish { name: "Asha".into(), version: 3 }, St::Preparing, vec![]);
+    let id = w.push(Intent::Publish { name: "Asha".into(), version: 3, bio: "nurse".into(), experience: "10 years".into() }, St::Preparing, vec![]);
     // We are a member, so we wait up to a minute for the site key.
     w.tick(T0 + 1_000);
     let e = w.entry(id);
@@ -615,7 +615,8 @@ fn a_profile_is_sealed_uploaded_and_announced() {
     let bytes = w.store.get(&a.cid);
     assert_eq!(sha256(&bytes), a.sha256);
     let file = profile::from_bytes(&bytes).unwrap();
-    assert_eq!(profile::open(&file, &key(1), &Default::default()).unwrap().display_name, "Asha");
+    let body = profile::open(&file, &key(1), &Default::default()).unwrap();
+    assert_eq!((body.display_name.as_str(), body.bio.as_str(), body.experience.as_str()), ("Asha", "nurse", "10 years"));
     assert!(w.fetched.lock().unwrap().announce_of(&pk(1)).is_some(), "we keep our own announce");
     assert!(w.sent().is_empty(), "a profile is no chain write");
 }
@@ -728,4 +729,12 @@ fn create_site_waits_for_nothing_and_ends_when_the_site_shows() {
     assert_eq!((ix.args.site_id, ix.args.creator, ix.now_ms), (site_id, acct(1), CLOCK_NOW));
     assert_eq!(ix.args.keyring_sha256, sha256(b"keyring"));
     assert_eq!(w.entry(id).state, St::Sent);
+}
+
+#[test]
+fn a_saved_profile_job_without_bio_still_loads() {
+    // writes.json of an earlier build: no bio, no experience.
+    let old = r#"{"Publish":{"name":"Asha","version":3}}"#;
+    let i: Intent = serde_json::from_str(old).unwrap();
+    assert_eq!(i, Intent::Publish { name: "Asha".into(), version: 3, bio: String::new(), experience: String::new() });
 }
