@@ -53,7 +53,7 @@ pub enum Poll {
     Rejected(String),
 }
 
-/// The wallet side. `LezWriter` (the module) calls `lez_core`, the tests use a fake.
+/// The wallet side. `WalletWriter` (the module) uses the LEZ wallet crate, the tests use a fake.
 pub trait ChainWriter: Send + Sync {
     /// Put our derived LEZ key (64 hex chars) in the wallet. An already imported key is success.
     fn import_key(&self, secret_hex: &str) -> Result<(), String>;

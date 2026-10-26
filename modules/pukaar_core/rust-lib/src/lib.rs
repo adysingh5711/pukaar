@@ -5,7 +5,7 @@
 //! rust-lib/Cargo.toml); this file only moves bytes between that crate, the
 //! disk and Delivery.
 
-mod lez;
+mod wallet;
 mod storage;
 
 use pukaar_logic::event::{Body, Event, Key, SigningKey};
@@ -446,8 +446,8 @@ fn store(tmp: PathBuf) -> &'static storage::LogosStore {
     STORE.get_or_init(|| storage::LogosStore::new(tmp))
 }
 
-/// The wallet of this module: `lez_core` through the raw SDK.
-static WRITER: OnceLock<lez::LezWriter> = OnceLock::new();
+/// The wallet of this module: the LEZ wallet crate, with the key in memory only.
+static WRITER: OnceLock<wallet::WalletWriter> = OnceLock::new();
 
 /// Start a chain read and a Storage fetch when one is due (at most one per 10 s). It never runs
 /// inside the call that the UI waits on: the thread fills the caches and the calls read the cached
@@ -477,9 +477,9 @@ fn write_tick() {
         let g = SHARED.lock().unwrap();
         let sh = g.as_ref();
         let node = sh.and_then(|sh| sh.node.as_ref());
-        node.and_then(|n| Some((n.chain.clone()?, n.fetched.clone()?, n.key.clone(), sh?.dir.join("storage-tmp"), sh?.queue.clone())))
+        node.and_then(|n| Some((n.chain.clone()?, n.fetched.clone()?, n.key.clone(), sh?.dir.clone(), sh?.queue.clone())))
     };
-    let (Some((chain, fetched, key, tmp, queue)), Some(program)) = (parts, program_id()) else { return };
+    let (Some((chain, fetched, key, dir, queue)), Some(program)) = (parts, program_id()) else { return };
     {
         let mut q = queue.lock().unwrap();
         if !q.wants_tick() || !q.start() {
@@ -494,9 +494,9 @@ fn write_tick() {
         };
         let rpc = HttpRpc::new(&env_or("PUKAAR_LEZ_RPC", LEZ_RPC));
         let env = queue::Env {
-            writer: WRITER.get_or_init(lez::LezWriter::new),
+            writer: WRITER.get_or_init(|| wallet::WalletWriter::new(dir.join("wallet"), env_or("PUKAAR_LEZ_RPC", LEZ_RPC))),
             rpc: &rpc,
-            store: store(tmp),
+            store: store(dir.join("storage-tmp")),
             chain: &chain,
             fetched: &fetched,
             key: &key,
