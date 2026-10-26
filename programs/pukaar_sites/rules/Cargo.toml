@@ -1,0 +1,11 @@
+[package]
+name = "pukaar_sites_rules"
+version = "0.1.0"
+edition = "2024"
+
+# No zkVM and no wallet dependency: the guest and the app both link this crate.
+[dependencies]
+borsh = { version = "1", features = ["derive"] }
+sha2 = "0.10.8"
+# probe step (d). Patched to the risc0 curve25519 fork in ../Cargo.toml for the guest.
+ed25519-dalek = { version = "2", default-features = false }

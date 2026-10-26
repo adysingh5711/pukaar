@@ -1,0 +1,3 @@
+# Host toolchain: same as LEZ v0.3.1 (rust-toolchain.toml there); the guest uses risc0 rustc 1.88.
+[toolchain]
+channel = "1.98.1"
