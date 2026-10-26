@@ -5,10 +5,11 @@
 //! rust-lib/Cargo.toml); this file only moves bytes between that crate, the
 //! disk and Delivery.
 
-use pukaar_logic::event::{Body, Event, Role, SigningKey};
+use pukaar_logic::event::{Body, Event, Key, SigningKey};
 use pukaar_logic::identity;
-use pukaar_logic::node::{action_body, genesis_from_json, parse_id, Node};
+use pukaar_logic::node::{action_body, parse_id, Node};
 use pukaar_logic::persist;
+use pukaar_logic::reducer::Rank;
 use pukaar_logic::store::Accept;
 use pukaar_logic::sync::{
     heads_msg, lost_node, send_queue, should_answer, to_resend, to_resend_own, SendError, Wire,
@@ -178,20 +179,6 @@ impl Shared {
             self.persist();
         }
     }
-
-    /// Seal every notice that ended `SEAL_GRACE` ago (`Node::auto_seal`: staff only, once each),
-    /// save, and queue the seals to go out.
-    fn auto_seal(&mut self) {
-        let Some(node) = self.node.as_mut() else {
-            return;
-        };
-        let seals = node.auto_seal(now());
-        if !seals.is_empty() {
-            self.outbox
-                .extend(seals.into_iter().map(|e| Wire::Event(e.bytes).encode()));
-            self.persist();
-        }
-    }
 }
 
 static SHARED: Mutex<Option<Shared>> = Mutex::new(None);
@@ -205,6 +192,11 @@ fn now() -> u64 {
 
 fn err(e: impl std::fmt::Display) -> String {
     format!("error: {e}")
+}
+
+/// The answer of every method whose event left the log in format 2.
+fn moved() -> String {
+    r#"{"ok":false,"error":"moved to the chain in 2.3"}"#.into()
 }
 
 const NO_SITE: &str = "no site yet: create or join one";
@@ -356,7 +348,7 @@ fn create_and_listen() -> Result<(), String> {
 }
 
 fn open_channel(site_hex: &str, me_hex: &str) -> Result<(), String> {
-    let topic = format!("/pukaar/1/site-{site_hex}/proto");
+    let topic = format!("/pukaar/2/site-{site_hex}/proto");
     // An existing channel (our earlier load, or a failed channelClose) already carries our site.
     delivered_once(
         "channelCreate",
@@ -367,6 +359,12 @@ fn open_channel(site_hex: &str, me_hex: &str) -> Result<(), String> {
             DELIVERY_TIMEOUT,
         ),
     )
+}
+
+/// The sorted keys of the approved members, from the chain roster. They elect who answers Heads.
+fn chain_roster() -> Vec<Key> {
+    // 2.3: read the approved members from chain::Roster. Empty until then: every node answers.
+    Vec::new()
 }
 
 /// Called from the Delivery event thread for every channel message; only our site's count
@@ -402,16 +400,18 @@ fn on_wire(channel: &str, bytes: &[u8]) {
             // Everyone re-sends their OWN missing events; only the kiosk (admin) and 3 elected
             // peers re-send everyone's, so a newcomer gets 3-4 copies instead of 30.
             *last_answer = Some(Instant::now());
-            let st = node.state();
-            let members: Vec<_> = st.roles.keys().copied().collect();
+            let members = chain_roster();
             let me = node.me();
-            let batch = if st.admin == Some(me) || should_answer(&me, &members, bytes, now() / 60) {
+            let kiosk = node.role_now(&me).is_some_and(|r| r >= Rank::Admin);
+            let batch = if kiosk || should_answer(&me, &members, bytes, now() / 60) {
                 to_resend(&node.store, &theirs)
             } else {
                 to_resend_own(&node.store, &theirs, &me)
             };
             outbox.extend(batch.into_iter().map(|b| Wire::Event(b).encode()));
         }
+        // 2.3: queue a JoinReq for the admin batch, keep a ProfileAnnounce, show a ChainPending chip
+        Some(Wire::JoinReq(_) | Wire::ProfileAnnounce(_) | Wire::ChainPending { .. }) => {}
         None => {} // junk on the topic
     }
 }
@@ -463,7 +463,6 @@ fn flush() {
         let Some(sh) = g.as_mut() else {
             return;
         };
-        sh.auto_seal(); // the poll is also the clock for notice deadlines
         sh.save_due(false); // the poll is the clock for debounced saves
         if sh.retry_at.is_some_and(|t| Instant::now() < t) {
             return; // Delivery just failed: don't stall this call on it again (the outbox waits)
@@ -528,6 +527,8 @@ fn publish(body: Body) -> String {
 }
 
 /// Create or join: install a fresh Node for this instance.
+// 2.3: site_create and site_join call this again, with the site id from the chain.
+#[allow(dead_code)]
 fn start_site(make: impl FnOnce(SigningKey, &Path) -> Result<Node, String>) -> String {
     let site = {
         let mut g = SHARED.lock().unwrap();
@@ -549,7 +550,7 @@ fn start_site(make: impl FnOnce(SigningKey, &Path) -> Result<Node, String>) -> S
             return err(e);
         }
         let site = hex::encode(node.store.site);
-        // send what we just signed (genesis, or the joiner's announce) straight away
+        // send what we just signed straight away
         sh.outbox.extend(
             node.store
                 .events
@@ -577,19 +578,12 @@ impl logos_rust_sdk::AboutToUnload for Pukaar {
 }
 
 impl PukaarCoreModule for Pukaar {
-    fn site_create(&mut self, genesis_json: String) -> String {
-        match genesis_from_json(&genesis_json) {
-            Ok(g) => start_site(|key, _| Node::create_site(key, g, now())),
-            Err(e) => err(e),
-        }
+    fn site_create(&mut self, _genesis_json: String) -> String {
+        moved()
     }
 
-    fn site_join(&mut self, site_hex: String) -> String {
-        match parse_id(site_hex.trim()) {
-            // announce with an empty profile, so a pseudonymous joiner still appears as pending
-            Some(site) => start_site(|key, dir| Ok(persist::join_site(dir, key, site, now()))),
-            None => err("site id must be 64 hex characters"),
-        }
+    fn site_join(&mut self, _site_hex: String) -> String {
+        moved()
     }
 
     fn leave_site(&mut self) -> String {
@@ -621,7 +615,7 @@ impl PukaarCoreModule for Pukaar {
 
     fn my_identity(&mut self) -> String {
         flush();
-        let mut v = read(|n| n.identity_json_at(now()))
+        let mut v = read(|n| n.identity_json())
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_else(|| serde_json::json!({ "site": null }));
@@ -652,90 +646,70 @@ impl PukaarCoreModule for Pukaar {
             .unwrap_or_else(err)
     }
 
-    fn set_profile(&mut self, display_name: String) -> String {
-        let name = Some(display_name.trim().to_string()).filter(|n| !n.is_empty());
-        publish(Body::Profile { display_name: name })
+    fn set_profile(&mut self, _display_name: String) -> String {
+        moved()
     }
 
-    fn grant_role(&mut self, subject_hex: String, role: String, name: String) -> String {
-        let role = match role.as_str() {
-            "resident" => Role::Resident,
-            "steward" => Role::Steward,
-            "admin" => Role::Admin,
-            other => return err(format!("unknown role {other}")),
-        };
-        match parse_id(subject_hex.trim()) {
-            Some(subject) => {
-                let name = Some(name.trim().to_string()).filter(|n| !n.is_empty());
-                publish(Body::RoleGrant {
-                    subject,
-                    role,
-                    name,
-                })
-            }
-            None => err("bad key"),
-        }
+    fn grant_role(&mut self, _subject_hex: String, _role: String, _name: String) -> String {
+        moved()
     }
 
-    fn revoke_role(&mut self, subject_hex: String, reason: String) -> String {
-        publish_with(|n| n.revoke_role(&subject_hex, &reason, now()))
+    fn revoke_role(&mut self, _subject_hex: String, _reason: String) -> String {
+        moved()
     }
 
-    fn add_super_admin(&mut self, subject_hex: String) -> String {
-        publish_with(|n| n.add_super_admin(&subject_hex, now()))
+    fn add_super_admin(&mut self, _subject_hex: String) -> String {
+        moved()
     }
 
-    fn remove_super_admin(&mut self, subject_hex: String) -> String {
-        publish_with(|n| n.remove_super_admin(&subject_hex, now()))
+    fn remove_super_admin(&mut self, _subject_hex: String) -> String {
+        moved()
     }
 
-    fn transfer_super_admin(&mut self, to_hex: String) -> String {
-        publish_with(|n| n.transfer_super_admin(&to_hex, now()))
+    fn transfer_super_admin(&mut self, _to_hex: String) -> String {
+        moved()
     }
 
     fn admin_notice(
         &mut self,
-        subject_hex: String,
-        outcome: String,
-        deadline: i64,
-        reason: String,
+        _subject_hex: String,
+        _outcome: String,
+        _deadline: i64,
+        _reason: String,
     ) -> String {
-        let Ok(deadline) = u64::try_from(deadline) else {
-            return err("bad deadline");
-        };
-        publish_with(|n| n.admin_notice(&subject_hex, &outcome, deadline, &reason, now()))
+        moved()
     }
 
-    fn cancel_notice(&mut self, subject_hex: String) -> String {
-        publish_with(|n| n.cancel_notice(&subject_hex, now()))
+    fn cancel_notice(&mut self, _subject_hex: String) -> String {
+        moved()
     }
 
-    fn end_notice_now(&mut self, subject_hex: String) -> String {
-        publish_with(|n| n.end_notice_now(&subject_hex, now()))
+    fn end_notice_now(&mut self, _subject_hex: String) -> String {
+        moved()
     }
 
-    fn add_location(&mut self, code: String, label: String, group: String) -> String {
-        publish_with(|n| n.add_location(&code, &label, &group, now()))
+    fn add_location(&mut self, _code: String, _label: String, _group: String) -> String {
+        moved()
     }
 
-    fn retire_location(&mut self, code: String, reason: String) -> String {
-        publish_with(|n| n.retire_location(&code, &reason, now()))
+    fn retire_location(&mut self, _code: String, _reason: String) -> String {
+        moved()
     }
 
-    fn restore_location(&mut self, code: String, reason: String) -> String {
-        publish_with(|n| n.restore_location(&code, &reason, now()))
+    fn restore_location(&mut self, _code: String, _reason: String) -> String {
+        moved()
     }
 
-    fn edit_location(&mut self, code: String, label: String, group: String) -> String {
-        publish_with(|n| n.edit_location(&code, &label, &group, now()))
+    fn edit_location(&mut self, _code: String, _label: String, _group: String) -> String {
+        moved()
     }
 
-    fn remove_location(&mut self, code: String, reason: String) -> String {
-        publish_with(|n| n.remove_location(&code, &reason, now()))
+    fn remove_location(&mut self, _code: String, _reason: String) -> String {
+        moved()
     }
 
-    fn undo_remove_location(&mut self, code: String, reason: String) -> String {
-        publish_with(|n| n.undo_remove_location(&code, &reason, now()))
+    fn undo_remove_location(&mut self, _code: String, _reason: String) -> String {
+        moved()
     }
 
     fn report(
@@ -785,7 +759,7 @@ impl PukaarCoreModule for Pukaar {
     }
 
     fn site_info(&mut self) -> String {
-        read(|n| n.site_info_json(now())).unwrap_or_else(err)
+        read(|n| n.site_info_json()).unwrap_or_else(err)
     }
 
     fn checkpoint_now(&mut self) -> String {

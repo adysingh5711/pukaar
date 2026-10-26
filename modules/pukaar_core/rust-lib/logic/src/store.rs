@@ -4,15 +4,14 @@
 //! Every validly signed event for this site is *held*. Per author, the **canonical chain** is
 //! picked by a fixed rule that ignores arrival order: walk seq 0, 1, 2, …; at each seq take, among
 //! the held candidates whose `prev` is the canonical event one seq lower (seq 0: any, `prev` is
-//! ZERO by construction) and whose lamport is higher than it, the one with the **lowest id**
-//! (the site's genesis always wins its slot). The chain ends at the first seq with no such
+//! ZERO by construction) and whose lamport is higher than it, the one with the **lowest id**. The chain ends at the first seq with no such
 //! candidate. Only canonical events are applied, named in heads and covered by checkpoints.
 //! Every other held event (a double-signed twin, an event built on one, an event breaking the
 //! chain rules) is **fork evidence**: kept, persisted, re-sent, counted, never applied. So two
 //! devices running one identity can fork it, and every replica still keeps the same branch.
 //! Out-of-order arrivals (nothing held yet at seq-1) wait in `pending`.
 
-use crate::event::{Body, Event, Id, Key, ZERO};
+use crate::event::{Event, Id, Key, ZERO};
 use std::collections::BTreeMap;
 
 // ponytail: fixed pending cap; per-author quotas if one author floods gaps.
@@ -30,12 +29,14 @@ pub enum Accept {
     Pending,
     /// Held as fork evidence, not applied.
     Fork,
-    /// Not held (wrong site, bad genesis, bad seq 0), or, for "lamport must increase", held as
+    /// Not held (wrong site, bad seq 0), or, for "lamport must increase", held as
     /// evidence but never canonical: an honest client never signs it.
     Rejected(&'static str),
 }
 
 pub struct Store {
+    /// The site id from the chain (`Site.site_id`). A format 2 log has no genesis event: the
+    /// caller names the site.
     pub site: Id,
     /// The canonical chains: what the reducer applies, heads name and checkpoints cover.
     pub events: BTreeMap<(Key, u64), Event>,
@@ -45,14 +46,9 @@ pub struct Store {
     pub pending: BTreeMap<(Key, u64), Vec<Event>>,
 }
 
-/// Lowest first: the site's genesis, then by id.
-fn rank(site: &Id, e: &Event) -> (bool, Id) {
-    (e.id != *site, e.id)
-}
-
-/// Insert `e` in rank order, keeping only the `MAX_ALTS` best. False if `e` didn't make the cut.
-fn hold(site: &Id, v: &mut Vec<Event>, e: Event) -> bool {
-    match v.binary_search_by_key(&rank(site, &e), |x| rank(site, x)) {
+/// Insert `e` in id order (lowest first), keeping only the `MAX_ALTS` best. False if `e` didn't make the cut.
+fn hold(v: &mut Vec<Event>, e: Event) -> bool {
+    match v.binary_search_by_key(&e.id, |x| x.id) {
         Err(i) if i < MAX_ALTS => {
             v.insert(i, e);
             v.truncate(MAX_ALTS);
@@ -78,11 +74,7 @@ impl Store {
 
     /// Checks that need nothing but the event itself.
     fn check(&self, e: &Event) -> Result<(), &'static str> {
-        if matches!(e.u.body, Body::Genesis { .. }) {
-            if e.id != self.site || e.u.site != ZERO || e.u.seq != 0 {
-                return Err("genesis does not match site");
-            }
-        } else if e.u.site != self.site {
+        if e.u.site != self.site {
             return Err("wrong site");
         }
         if e.u.seq == 0 && e.u.prev != ZERO {
@@ -112,7 +104,7 @@ impl Store {
         }
         if seq > 0 && !self.holds_any(&(author, seq - 1)) {
             if self.pending.len() < MAX_PENDING || self.pending.contains_key(&k) {
-                hold(&self.site, self.pending.entry(k).or_default(), e);
+                hold(self.pending.entry(k).or_default(), e);
             }
             return Accept::Pending;
         }
@@ -143,7 +135,7 @@ impl Store {
     fn demote(&mut self, k: (Key, u64)) -> Option<Id> {
         let e = self.events.remove(&k)?;
         let id = e.id;
-        hold(&self.site, self.alts.entry(k).or_default(), e);
+        hold(self.alts.entry(k).or_default(), e);
         Some(id)
     }
 
@@ -151,7 +143,7 @@ impl Store {
     /// counts it); `recanon` puts the winner back.
     fn hold_at(&mut self, k: (Key, u64), e: Event) {
         self.demote(k);
-        hold(&self.site, self.alts.entry(k).or_default(), e);
+        hold(self.alts.entry(k).or_default(), e);
     }
 
     /// Re-pick `author`'s canonical chain from seq `from` (see the module doc). Candidates

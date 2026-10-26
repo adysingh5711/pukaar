@@ -6,7 +6,6 @@
 
 use crate::event::{decode, Id};
 use crate::node::{Node, Restore};
-use crate::store::Store;
 use ed25519_dalek::SigningKey;
 use std::fs;
 use std::io;
@@ -75,13 +74,13 @@ pub fn leave(dir: &Path, site: &Id) -> io::Result<()> {
         .try_for_each(|f| remove_if_present(&dir.join(f)))
 }
 
-/// Join `site`: announce ourselves, unless this key left it before, in which case our chain
-/// is already out there and we wait for it like a restore (re-signing seq 0 would fork it).
+/// Join `site`, unless this key left it before: then our chain is already out there and we wait
+/// for it like a restore (re-signing seq 0 would fork it).
 pub fn join_site(dir: &Path, key: SigningKey, site: Id, now: u64) -> Node {
     if left_list(dir, &site).1 {
         Node::join_restored(key, site, now)
     } else {
-        Node::join_announced(key, site, now)
+        Node::join(key, site)
     }
 }
 
@@ -109,11 +108,8 @@ pub fn load(dir: &Path) -> io::Result<Option<Node>> {
     let restore = fs::read(dir.join(RESTORING))
         .ok()
         .map(|b| Restore::new(b.try_into().map(u64::from_le_bytes).unwrap_or(0)));
-    let mut node = Node {
-        key,
-        store: Store::new(site),
-        restore,
-    };
+    let mut node = Node::join(key, site);
+    node.restore = restore;
     let buf = fs::read(dir.join("events.bin")).unwrap_or_default();
     let mut rest = &buf[..];
     while rest.len() >= 4 {

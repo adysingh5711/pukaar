@@ -1,9 +1,33 @@
 mod common;
 mod util;
 use common::*;
-use pukaar_logic::event::{new_key, Body, Id, Location, Role, MAX_TEXT};
+use pukaar_logic::event::{new_key, Body, Id, MAX_TEXT};
 use pukaar_logic::node::Node;
-use pukaar_logic::reducer::{Status, REMOVAL_COOLDOWN};
+use pukaar_logic::reducer::Status;
+
+fn json(s: &str) -> serde_json::Value {
+    serde_json::from_str(s).unwrap()
+}
+
+const H: u64 = 3600;
+
+fn report_at(n: &mut Node, ts: u64) -> Id {
+    n.publish(
+        Body::Report {
+            category: "water".into(),
+            location: "W-03".into(),
+            landmark: String::new(),
+            text: format!("reported at {ts}"),
+        },
+        ts,
+    )
+    .unwrap()
+    .id
+}
+
+fn issues(n: &Node, now: u64) -> Vec<serde_json::Value> {
+    serde_json::from_str(&n.issues_json(now)).unwrap()
+}
 
 fn report(n: &mut Node) -> Id {
     n.publish(
@@ -251,22 +275,15 @@ fn two_residents_reopen_a_wontfix() {
 #[test]
 fn membership_and_caps() {
     let mut s = Site::new();
-    let mut stranger = Node::join(new_key(), s.admin.store.site);
-    stranger
-        .publish(
-            Body::Profile {
-                display_name: Some("Kiran".into()),
-            },
-            1,
-        )
-        .unwrap();
+    // no chain role: the node signs, the reducer rejects and keeps the event
+    let mut stranger = node(new_key(), &s.roles);
     let r = report(&mut stranger);
     for e in stranger.store.events.values() {
         s.admin.receive(&e.bytes).unwrap();
     }
     let st = s.admin.state();
-    assert!(st.pending_members.contains(&stranger.me()));
-    assert!(st.rejected[&r].contains("not a member"));
+    assert!(st.rejected[&r].contains("not an approved member"));
+    assert!(!st.issues.contains_key(&r));
 
     let ids: Vec<Id> = (0..4).map(|_| report(&mut s.asha)).collect();
     let st = s.asha.state();
@@ -328,7 +345,7 @@ fn anchored_checkpoint_shows_in_timeline() {
 fn site_info_reports_the_latest_anchor() {
     let mut s = Site::new();
     let info =
-        |n: &Node| -> serde_json::Value { serde_json::from_str(&n.site_info_json(0)).unwrap() };
+        |n: &Node| -> serde_json::Value { serde_json::from_str(&n.site_info_json()).unwrap() };
     assert!(
         info(&s.steward)["last_anchor"].is_null(),
         "nothing anchored yet"
@@ -368,14 +385,18 @@ fn site_info_reports_the_latest_anchor() {
 }
 
 #[test]
-fn site_info_lists_members_and_map() {
+fn site_info_lists_the_map_and_identity_has_the_chain_role() {
     let s = Site::new();
-    let info: serde_json::Value = serde_json::from_str(&s.admin.site_info_json(0)).unwrap();
-    assert_eq!(info["members"].as_array().unwrap().len(), 5);
+    let info = json(&s.admin.site_info_json());
     assert_eq!(info["locations"][0]["code"], "W-03");
-    let me: serde_json::Value = serde_json::from_str(&s.asha.identity_json()).unwrap();
+    assert_eq!(info["name"], "Dhun test");
+    let me = json(&s.asha.identity_json());
     assert_eq!(me["role"], "Resident");
+    assert_eq!(me["super_admin"], false);
     assert_eq!(me["fingerprint"].as_str().unwrap().len(), 6);
+    let boss = json(&s.admin.identity_json());
+    assert_eq!((&boss["role"], &boss["super_admin"]), (&"SuperAdmin".into(), &true.into()));
+    assert_eq!(boss["site"], hex::encode(util::SITE));
 }
 
 #[test]
@@ -446,80 +467,6 @@ fn updates_track_what_happens_next() {
 }
 
 #[test]
-fn staff_are_named_and_residents_choose() {
-    let mut s = Site::new();
-    let mut newbie = Node::join(new_key(), s.admin.store.site);
-    newbie
-        .publish(Body::Profile { display_name: None }, 1)
-        .unwrap();
-    for e in newbie.store.events.values() {
-        s.admin.receive(&e.bytes).unwrap();
-    }
-    let nameless = s
-        .admin
-        .publish(
-            Body::RoleGrant {
-                subject: newbie.me(),
-                role: Role::Steward,
-                name: None,
-            },
-            2,
-        )
-        .unwrap();
-    let st = s.admin.state();
-    assert!(st.rejected[&nameless.id].contains("staff must be named"));
-    // a steward can't rename (or un-name) themselves
-    s.sync();
-    let hide = s
-        .steward
-        .publish(Body::Profile { display_name: None }, 4)
-        .unwrap();
-    s.sync();
-    let st = s.admin.state();
-    assert!(st.rejected[&hide.id].contains("set by the admin"));
-    assert_eq!(st.names[&s.steward.me()], "Facilities");
-    assert_eq!(st.names[&s.admin.me()], "Site admin");
-    assert!(
-        !st.names.contains_key(&s.ravi.me()),
-        "residents stay pseudonymous by default"
-    );
-}
-
-#[test]
-fn a_name_the_admin_gives_a_resident_shows_on_both_sides_until_they_change_it() {
-    let mut s = Site::new();
-    let mut asha = Node::join_announced(new_key(), s.admin.store.site, 5);
-    copy_all(&asha, &mut s.admin);
-    let grant = s
-        .admin
-        .publish(
-            Body::RoleGrant {
-                subject: asha.me(),
-                role: Role::Resident,
-                name: Some(" Asha ".into()),
-            },
-            6,
-        )
-        .unwrap();
-    copy_all(&s.admin, &mut asha);
-    assert!(!s.admin.state().rejected.contains_key(&grant.id));
-    let info: serde_json::Value = serde_json::from_str(&s.admin.site_info_json(0)).unwrap();
-    let me = hex::encode(asha.me());
-    let row = info["members"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|m| m["key"] == me.as_str());
-    assert_eq!(row.unwrap()["name"], "Asha", "the admin's Members page");
-    let mine: serde_json::Value = serde_json::from_str(&asha.identity_json()).unwrap();
-    assert_eq!(mine["name"], "Asha", "the resident's own sidebar");
-    // residents still choose: their own profile replaces or clears it
-    asha.publish(Body::Profile { display_name: None }, 7)
-        .unwrap();
-    assert!(!asha.state().names.contains_key(&asha.me()));
-}
-
-#[test]
 fn unlisted_place_needs_a_landmark() {
     let mut s = Site::new();
     let bare = s
@@ -549,20 +496,8 @@ fn unlisted_place_needs_a_landmark() {
     let st = s.asha.state();
     assert!(st.rejected[&bare.id].contains("landmark"));
     assert_eq!(st.issues[&ok.id].landmark, "pipe behind tent 4");
-    let info: serde_json::Value = serde_json::from_str(&s.asha.site_info_json(0)).unwrap();
+    let info: serde_json::Value = serde_json::from_str(&s.asha.site_info_json()).unwrap();
     assert_eq!(info["locations"][0]["group"], "Water points");
-}
-
-#[test]
-fn a_pseudonymous_joiner_still_shows_up_for_approval() {
-    let mut s = Site::new();
-    let joiner = Node::join_announced(new_key(), s.admin.store.site, 5);
-    for e in joiner.store.events.values() {
-        s.admin.receive(&e.bytes).unwrap();
-    }
-    let st = s.admin.state();
-    assert!(st.pending_members.contains(&joiner.me()));
-    assert!(!st.names.contains_key(&joiner.me()), "no name was set");
 }
 
 #[test]
@@ -668,16 +603,6 @@ fn an_oversize_note_is_refused() {
     assert_eq!(s.steward.store.events.len(), before);
 }
 
-fn many_locations(n: usize) -> Vec<Location> {
-    (0..n)
-        .map(|k| Location {
-            code: format!("W-{k:03}"),
-            label: format!("Tap number {k} behind the long row of tents"),
-            group: "Water points".into(),
-        })
-        .collect()
-}
-
 #[test]
 fn an_event_over_the_size_cap_is_refused() {
     let mut s = Site::new();
@@ -685,168 +610,15 @@ fn an_event_over_the_size_cap_is_refused() {
     let e = s
         .admin
         .publish(
-            Body::LocationsAdd {
-                locations: many_locations(100),
+            Body::Checkpoint {
+                heads: (0..130u8).map(|k| ([k; 32], 1)).collect(),
+                lez_tx: "tx".into(),
             },
             5,
         )
         .unwrap_err();
     assert!(e.starts_with("too long"), "{e}");
     assert_eq!(s.admin.store.events.len(), before);
-}
-
-#[test]
-fn an_oversize_genesis_is_refused() {
-    let mut g = genesis();
-    if let Body::Genesis { locations, .. } = &mut g {
-        *locations = many_locations(100);
-    }
-    let e = Node::create_site(new_key(), g, 0).err().unwrap();
-    assert!(e.starts_with("too long"), "{e}");
-}
-
-// ---- role revoke ----
-
-#[test]
-fn the_admin_revokes_a_steward_with_a_reason() {
-    let mut s = Site::new();
-    let steward = hex::encode(s.steward.me());
-    let before = s.admin.store.events.len();
-    assert_eq!(
-        s.admin.revoke_role(&steward, "  ", 5).unwrap_err(),
-        "a revoke needs a reason"
-    );
-    assert_eq!(s.admin.store.events.len(), before, "nothing signed");
-    let e = s.admin.revoke_role(&steward, "left the site", 5).unwrap();
-    assert!(!s.admin.state().rejected.contains_key(&e.id));
-    assert!(!s.admin.state().roles.contains_key(&s.steward.me()));
-    // a non-admin's revoke is recorded but inert
-    let admin = hex::encode(s.admin.me());
-    let r = s.asha.revoke_role(&admin, "coup", 6).unwrap();
-    assert_eq!(s.asha.state().rejected[&r.id], "only admin revokes roles");
-    assert!(
-        json(&s.asha.site_info_json(0))["revoked"]
-            .as_array()
-            .unwrap()
-            .is_empty(),
-        "an inert revoke records nothing"
-    );
-}
-
-fn json(s: &str) -> serde_json::Value {
-    serde_json::from_str(s).unwrap()
-}
-
-#[test]
-fn a_revoke_is_kept_with_who_when_and_why_until_a_new_grant() {
-    let mut s = Site::new();
-    let i = report(&mut s.asha);
-    s.asha
-        .publish(
-            Body::Comment {
-                issue: i,
-                text: "still leaking".into(),
-            },
-            11,
-        )
-        .unwrap();
-    s.sync();
-    let asha = hex::encode(s.asha.me());
-    let admin = hex::encode(s.admin.me());
-    s.admin.revoke_role(&asha, "left the camp", 20).unwrap();
-    s.sync();
-
-    let info = json(&s.steward.site_info_json(0));
-    let r = &info["revoked"][0];
-    assert_eq!(info["revoked"].as_array().unwrap().len(), 1);
-    assert_eq!(r["key"], asha);
-    assert_eq!(r["fingerprint"].as_str().unwrap().len(), 6);
-    assert!(r["name"].is_null(), "asha is a pseudonym");
-    assert_eq!(r["by"], admin);
-    assert_eq!(r["by_name"], "Site admin");
-    assert_eq!(r["ts"], 20);
-    assert_eq!(r["reason"], "left the camp");
-
-    let me = json(&s.asha.identity_json());
-    assert!(me["role"].is_null());
-    assert_eq!(me["revoked"]["by"], admin);
-    assert_eq!(me["revoked"]["by_name"], "Site admin");
-    assert_eq!(me["revoked"]["ts"], 20);
-    assert_eq!(me["revoked"]["reason"], "left the camp");
-    assert!(json(&s.ravi.identity_json())["revoked"].is_null());
-
-    // their past report and its timeline say "former member"; everyone else's do not
-    assert_eq!(issues(&s.steward, 30)[0]["former"], true);
-    let tl = json(&s.steward.timeline_json(&hex::encode(i), 30));
-    assert_eq!(tl["issue"]["former"], true);
-    let events = tl["events"].as_array().unwrap();
-    assert_eq!(events.len(), 2);
-    assert!(events.iter().all(|e| e["former"] == true));
-
-    // granted again: no longer removed, no longer former
-    s.admin
-        .publish(
-            Body::RoleGrant {
-                subject: s.asha.me(),
-                role: Role::Resident,
-                name: None,
-            },
-            25,
-        )
-        .unwrap();
-    s.sync();
-    assert!(json(&s.steward.site_info_json(0))["revoked"]
-        .as_array()
-        .unwrap()
-        .is_empty());
-    assert!(json(&s.asha.identity_json())["revoked"].is_null());
-    assert_eq!(issues(&s.steward, 30)[0]["former"], false);
-    let tl = json(&s.steward.timeline_json(&hex::encode(i), 30));
-    assert!(tl["events"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .all(|e| e["former"] == false));
-}
-
-#[test]
-fn removed_members_are_listed_newest_first_and_the_genesis_admin_stays() {
-    let mut s = Site::new();
-    let [asha, ravi, admin] = [s.asha.me(), s.ravi.me(), s.admin.me()].map(hex::encode);
-    s.admin.revoke_role(&asha, "left", 20).unwrap();
-    s.admin.revoke_role(&ravi, "moved", 30).unwrap();
-    let e = s.admin.revoke_role(&admin, "oops", 40).unwrap();
-    assert_eq!(s.admin.state().rejected[&e.id], "admin cannot be revoked");
-    let keys: Vec<_> = json(&s.admin.site_info_json(0))["revoked"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|r| r["key"].as_str().unwrap().to_owned())
-        .collect();
-    assert_eq!(keys, [ravi, asha]);
-    assert!(json(&s.admin.identity_json())["revoked"].is_null());
-}
-
-// ---- board order, SLA flags ----
-
-const H: u64 = 3600;
-
-fn report_at(n: &mut Node, ts: u64) -> Id {
-    n.publish(
-        Body::Report {
-            category: "water".into(),
-            location: "W-03".into(),
-            landmark: String::new(),
-            text: format!("reported at {ts}"),
-        },
-        ts,
-    )
-    .unwrap()
-    .id
-}
-
-fn issues(n: &Node, now: u64) -> Vec<serde_json::Value> {
-    serde_json::from_str(&n.issues_json(now)).unwrap()
 }
 
 #[test]
@@ -924,114 +696,9 @@ fn sla_flags_follow_the_site_settings() {
         (f.clone(), f.clone(), f.clone())
     );
     assert_eq!(flags(&s.asha, claim + 48 * H + 1), (f.clone(), f, t));
-    let info: serde_json::Value = serde_json::from_str(&s.asha.site_info_json(0)).unwrap();
+    let info: serde_json::Value = serde_json::from_str(&s.asha.site_info_json()).unwrap();
     assert_eq!(
         (info["sla_ack_h"].as_u64(), info["sla_fix_h"].as_u64()),
         (Some(12), Some(48))
     );
-}
-
-/// Every applied place change, as (kind, code, ts, reason) newest first.
-fn place_log(n: &Node, now: u64) -> Vec<serde_json::Value> {
-    json(&n.site_info_json(now))["place_log"]
-        .as_array()
-        .unwrap()
-        .clone()
-}
-
-/// P2 added, edited, renamed, retired, restored, removal started and undone; B-07 removal started.
-fn place_history(s: &mut Site) {
-    let a = &mut s.admin;
-    a.add_location("P2", "Lane behind the clinic", "Paths", 100)
-        .unwrap();
-    a.edit_location("P2", "Lane behind the clinic", "Lanes", 110)
-        .unwrap();
-    a.edit_location("P2", "Lane by the clinic", "Lanes", 120)
-        .unwrap();
-    a.retire_location("P2", "closed for construction", 130)
-        .unwrap();
-    a.restore_location("P2", "open again", 140).unwrap();
-    a.remove_location("P2", "added by mistake", 150).unwrap();
-    a.undo_remove_location("P2", "still needed", 160).unwrap();
-    a.remove_location("B-07", "bin taken away", 170).unwrap();
-    s.sync();
-    // a forged steward edit skips the pre-check: kept, rejected, and not a change
-    let forged = s
-        .steward
-        .publish(
-            Body::LocationEdit {
-                code: "P2".into(),
-                label: "Mine now".into(),
-                group: "Lanes".into(),
-            },
-            180,
-        )
-        .unwrap();
-    s.sync();
-    assert!(s.admin.state().rejected.contains_key(&forged.id));
-}
-
-#[test]
-fn the_change_log_lists_every_applied_place_change_newest_first() {
-    let mut s = Site::new();
-    place_history(&mut s);
-    let log = place_log(&s.admin, 171);
-    let rows: Vec<(&str, &str, u64, &str)> = log
-        .iter()
-        .map(|e| {
-            (
-                e["kind"].as_str().unwrap(),
-                e["code"].as_str().unwrap(),
-                e["ts"].as_u64().unwrap(),
-                e["reason"].as_str().unwrap(),
-            )
-        })
-        .collect();
-    assert_eq!(
-        rows,
-        [
-            ("removal_started", "B-07", 170, "bin taken away"),
-            ("removal_undone", "P2", 160, "still needed"),
-            ("removal_started", "P2", 150, "added by mistake"),
-            ("restored", "P2", 140, "open again"),
-            ("retired", "P2", 130, "closed for construction"),
-            ("renamed", "P2", 120, ""),
-            ("edited", "P2", 110, ""),
-            ("added", "P2", 100, ""),
-        ]
-    );
-    let admin = hex::encode(s.admin.me());
-    for e in &log {
-        assert_eq!(e["by"], admin.as_str());
-        assert_eq!(e["by_name"], "Site admin");
-    }
-    assert_eq!(log[0]["label"], "Bin at path junction");
-    assert_eq!(log[0]["ends_at"], 170 + REMOVAL_COOLDOWN);
-    assert_eq!(log[1]["label"], "Lane by the clinic", "the current name");
-    assert_eq!(log[5]["from"], "Lane behind the clinic");
-    assert_eq!(log[5]["to"], "Lane by the clinic");
-    assert!(
-        log[6].get("from").is_none(),
-        "a group change is not a rename"
-    );
-}
-
-#[test]
-fn a_removal_shows_as_removed_only_once_its_cooldown_is_over() {
-    let mut s = Site::new();
-    place_history(&mut s);
-    let end = 170 + REMOVAL_COOLDOWN;
-    assert!(place_log(&s.admin, end - 1)
-        .iter()
-        .all(|e| e["kind"] != "removed"));
-    let log = place_log(&s.admin, end);
-    assert_eq!(log.len(), 9);
-    let r = &log[0];
-    assert_eq!(r["kind"], "removed");
-    assert_eq!(r["code"], "B-07");
-    assert_eq!(r["ts"], end);
-    assert_eq!(r["since"], 170);
-    assert_eq!(r["reason"], "bin taken away");
-    assert_eq!(r["by_name"], "Site admin");
-    assert_eq!(log[1]["kind"], "removal_started");
 }

@@ -143,19 +143,14 @@ fn a_failed_import_writes_nothing() {
 
 // ---- a restored identity must not fork its own chain before its history is back ----
 
-use pukaar_logic::event::{Body, Key};
+use pukaar_logic::event::Key;
 use pukaar_logic::node::{Node, HEADS_TO_SETTLE, SKIP_SYNC_AFTER};
 use pukaar_logic::store::Accept;
 
 const SYNCING: &str = "still syncing your history, try again shortly";
 
 fn note(n: &mut Node) -> Result<pukaar_logic::event::Event, String> {
-    n.publish(
-        Body::Profile {
-            display_name: Some("asha".into()),
-        },
-        200,
-    )
+    n.publish(comment("asha"), 200)
 }
 
 /// Asha has two events out there (seq 0 and 1); then she restores on a new device.

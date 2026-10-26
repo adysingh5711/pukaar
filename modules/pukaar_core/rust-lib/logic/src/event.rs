@@ -1,4 +1,4 @@
-//! Signed event envelope. Wire form, AccountLog-style:
+//! Signed event envelope, wire format 2. Wire form, AccountLog-style:
 //!   bytes   = sig(64) || payload
 //!   payload = DOMAIN || postcard(Unsigned)
 //!   id      = sha256(payload)
@@ -10,8 +10,8 @@ use ed25519_dalek::{Signature, Signer, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub const DOMAIN: &[u8] = b"logos:pukaar:1\0";
-pub const VERSION: u8 = 1;
+pub const DOMAIN: &[u8] = b"logos:pukaar:2\0";
+pub const VERSION: u8 = 2;
 // ponytail: 4 KiB fits a checkpoint listing ~100 authors; move heads to Storage past that.
 pub const MAX_EVENT_BYTES: usize = 4096;
 pub const MAX_TEXT: usize = 500;
@@ -26,32 +26,7 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
     Sha256::digest(data).into()
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Role {
-    Resident,
-    Steward,
-    Admin,
-}
-
-/// What an admin notice ends in. APPEND-ONLY, like `Body`.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum NoticeOutcome {
-    Steward,
-    Remove,
-}
-
-impl NoticeOutcome {
-    /// The role the subject is judged with once the notice is over (`None`: not a member).
-    #[must_use]
-    pub fn role(self) -> Option<Role> {
-        match self {
-            NoticeOutcome::Steward => Some(Role::Steward),
-            NoticeOutcome::Remove => None,
-        }
-    }
-}
-
+/// A place on the site map. It lives in `places.json` on Storage, not in the log.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Location {
     pub code: String,
@@ -60,34 +35,10 @@ pub struct Location {
     pub group: String,
 }
 
-/// APPEND-ONLY: postcard encodes the variant index, so never reorder or remove variants.
+/// Format 2 log bodies: issue events and checkpoints only. Members, roles, profiles and places live
+/// on the chain. The variant index is part of the wire format, so append only.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub enum Body {
-    Genesis {
-        name: String,
-        admin_name: String,
-        categories: Vec<String>,
-        locations: Vec<Location>,
-        sla_ack_h: u32,
-        sla_fix_h: u32,
-        max_open_per_author: u32,
-    },
-    /// `name` is required for steward/admin (staff are always named) and optional for residents.
-    RoleGrant {
-        subject: Key,
-        role: Role,
-        name: Option<String>,
-    },
-    RoleRevoke {
-        subject: Key,
-        reason: String,
-    },
-    Profile {
-        display_name: Option<String>,
-    },
-    LocationsAdd {
-        locations: Vec<Location>,
-    },
     /// `landmark`: free-text detail ("behind tent 4, by the neem tree"); required when location is `other`.
     Report {
         category: String,
@@ -135,95 +86,14 @@ pub enum Body {
         heads: Vec<(Key, u64)>,
         lez_tx: String,
     },
-    /// Admin only. `retired: false` restores. Never a delete: the location and its old
-    /// issues stay; a retired location just takes no new reports.
-    LocationRetire {
-        code: String,
-        retired: bool,
-        reason: String,
-    },
-    /// Admin only. New name and group for an existing location; the code is its identity and
-    /// never changes. Old issues show the new name.
-    LocationEdit {
-        code: String,
-        label: String,
-        group: String,
-    },
-    /// Admin only, and only for a location no report has ever named. Starts a 30-day undo
-    /// window (`undo: true` ends it early); after that the location is hidden for good. Never a
-    /// delete: this event and the location's history stay in everyone's log.
-    LocationRemove {
-        code: String,
-        undo: bool,
-        reason: String,
-    },
-    /// Super admin only: a second super admin (at most two), an existing named member, who
-    /// also becomes an admin.
-    SuperAdminAdd {
-        subject: Key,
-    },
-    /// Super admin only, on the other super admin; they stay an admin.
-    SuperAdminRemove {
-        subject: Key,
-    },
-    /// Super admin only: the author steps down (stays an admin) and `to` takes their place.
-    SuperAdminTransfer {
-        to: Key,
-    },
-    /// Super admin only, on an admin who is not a super admin: they keep their powers until
-    /// `deadline` (unix seconds, at or after this event's ts), then become `outcome`. Replaces
-    /// the subject's earlier notice.
-    AdminNotice {
-        subject: Key,
-        outcome: NoticeOutcome,
-        deadline: u64,
-        reason: String,
-    },
-    /// Super admin only, before the notice is sealed.
-    AdminNoticeCancel {
-        subject: Key,
-    },
-    /// Super admin only: the notice ends at this event's ts, sealed with `seen_seq` (as
-    /// `NoticeSeal`).
-    AdminNoticeEndNow {
-        subject: Key,
-        seen_seq: u64,
-    },
-    /// Any member, at or after the deadline: makes the notice's outcome final. `seen_seq` is
-    /// the subject's next seq as the sealer saw it: their events from it on are judged with the
-    /// outcome role, whatever their ts.
-    NoticeSeal {
-        subject: Key,
-        seen_seq: u64,
-    },
-}
-
-fn location_texts(ls: &[Location]) -> impl Iterator<Item = &str> {
-    ls.iter()
-        .flat_map(|l| [l.code.as_str(), &l.label, &l.group])
 }
 
 impl Body {
-    /// Every free-text field, for the sender's length check.
+    /// Every free-text field, for the length check.
     #[must_use]
     pub fn texts(&self) -> Vec<&str> {
         use Body::*;
         match self {
-            Genesis {
-                name,
-                admin_name,
-                categories,
-                locations,
-                ..
-            } => [name.as_str(), admin_name]
-                .into_iter()
-                .chain(categories.iter().map(String::as_str))
-                .chain(location_texts(locations))
-                .collect(),
-            RoleGrant { name, .. } | Profile { display_name: name } => {
-                name.as_deref().into_iter().collect()
-            }
-            LocationsAdd { locations } => location_texts(locations).collect(),
             Report {
                 category,
                 location,
@@ -233,26 +103,14 @@ impl Body {
             Update {
                 note, next_step, ..
             } => vec![note, next_step],
-            RoleRevoke { reason: t, .. }
-            | Reopen { reason: t, .. }
+            Reopen { reason: t, .. }
             | CloseWontfix { reason: t, .. }
             | Acknowledge { note: t, .. }
             | ClaimResolved { note: t, .. }
             | Confirm { note: t, .. }
             | Comment { text: t, .. }
-            | AdminNotice { reason: t, .. }
             | Checkpoint { lez_tx: t, .. } => vec![t],
-            LocationRetire { code, reason, .. } | LocationRemove { code, reason, .. } => {
-                vec![code, reason]
-            }
-            LocationEdit { code, label, group } => vec![code, label, group],
-            MarkDuplicate { .. }
-            | SuperAdminAdd { .. }
-            | SuperAdminRemove { .. }
-            | SuperAdminTransfer { .. }
-            | AdminNoticeCancel { .. }
-            | AdminNoticeEndNow { .. }
-            | NoticeSeal { .. } => vec![],
+            MarkDuplicate { .. } => vec![],
         }
     }
 }
@@ -262,12 +120,14 @@ impl Body {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Unsigned {
     pub v: u8,
-    pub site: Id, // ZERO for the genesis event; site_id = id of genesis
+    pub site: Id, // the site id of the chain (`Site.site_id`)
     pub author: Key,
     pub seq: u64,
     pub prev: Id, // id of author's seq-1 event, ZERO at seq 0
     pub lamport: u64,
     pub ts: u64, // author's wall clock, informational only
+    /// A recent chain block id. The reducer judges the author with the chain role at this block.
+    pub chain_block: u64,
     pub body: Body,
 }
 
@@ -330,16 +190,7 @@ pub fn decode(bytes: &[u8]) -> Result<Event, DecodeError> {
     if u.v != VERSION {
         return Err(BadVersion);
     }
-    // ponytail: only these bodies are capped on receipt (the sender caps every text);
-    // capping the rest would retroactively reject already-shared events.
-    let over = match &u.body {
-        Body::Report { text, landmark, .. } => [text, landmark].iter().any(|t| t.len() > MAX_TEXT),
-        b @ (Body::LocationRetire { .. }
-        | Body::LocationEdit { .. }
-        | Body::LocationRemove { .. }
-        | Body::AdminNotice { .. }) => b.texts().iter().any(|t| t.len() > MAX_TEXT),
-        _ => false,
-    };
+    let over = u.body.texts().iter().any(|t| t.len() > MAX_TEXT);
     if over {
         return Err(TextTooLong);
     }

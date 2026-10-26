@@ -1,8 +1,10 @@
 //! Anti-entropy: every node broadcasts its heads every 60 s; whoever holds newer
 //! events re-sends them. This is the catch-up path; Delivery's storeQuery is best-effort only.
 
-use crate::event::{sha256, Key};
+use crate::event::{sha256, Key, MAX_EVENT_BYTES};
+use crate::profile;
 use crate::store::Store;
+use pukaar_sites_rules::JOIN_REQ_LEN;
 use serde::{Deserialize, Serialize};
 
 // ponytail: fixed batch; a ~300-event site catches up in 2 pulls. Page by author if logs grow past ~10k.
@@ -19,12 +21,34 @@ pub const ANSWERERS: usize = 3;
 pub const DELIVERY_CFG: &str =
     r#"{"mode":"Edge","preset":"logos.dev","channelsOverrides":{"sdsCausalHistorySize":0}}"#;
 
-/// What goes on the site channel. `Heads` is unsigned: lying about heads only
-/// changes what gets re-sent, and re-sends are capped.
+/// The kind of a chain write that a `Wire::ChainPending` names. APPEND-ONLY, like `Wire`.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WriteKind {
+    CreateSite,
+    Approve,
+    SetRole,
+    Revoke,
+    SetProfile,
+    SuperAdmin,
+    Anchor,
+}
+
+/// A wire message is an event (at most `MAX_EVENT_BYTES`) plus a few bytes of framing.
+pub const MAX_WIRE_BYTES: usize = MAX_EVENT_BYTES + 16;
+
+/// What goes on the site channel. Only `Event` is signed as a log entry. `Heads` is unsigned:
+/// lying about heads only changes what gets re-sent, and re-sends are capped. APPEND-ONLY: postcard
+/// encodes the variant index.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub enum Wire {
     Event(Vec<u8>),
     Heads(Vec<(Key, u64)>),
+    /// A signed join request, `JOIN_REQ_LEN` (290) bytes. Admins queue it for the next batch.
+    JoinReq(Vec<u8>),
+    /// A member's signed announce of a new profile file (see `profile::Announce`).
+    ProfileAnnounce(profile::Announce),
+    /// A chain write is on its way: peers show a pending chip. `tx` is the transaction hash.
+    ChainPending { tx: Key, kind: WriteKind },
 }
 
 impl Wire {
@@ -32,9 +56,24 @@ impl Wire {
     pub fn encode(&self) -> Vec<u8> {
         postcard::to_allocvec(self).expect("postcard encode")
     }
+
+    /// `None` for junk: bad framing, trailing bytes, or a size outside the limits of its kind.
     #[must_use]
     pub fn decode(b: &[u8]) -> Option<Wire> {
-        postcard::from_bytes(b).ok()
+        if b.len() > MAX_WIRE_BYTES {
+            return None;
+        }
+        let (w, tail): (Wire, &[u8]) = postcard::take_from_bytes(b).ok()?;
+        if !tail.is_empty() {
+            return None;
+        }
+        let ok = match &w {
+            Wire::Event(e) => e.len() <= MAX_EVENT_BYTES,
+            Wire::JoinReq(r) => r.len() == JOIN_REQ_LEN,
+            Wire::ProfileAnnounce(a) => a.well_formed(),
+            Wire::Heads(_) | Wire::ChainPending { .. } => true,
+        };
+        ok.then_some(w)
     }
 }
 

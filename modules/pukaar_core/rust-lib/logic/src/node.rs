@@ -3,25 +3,20 @@
 
 use crate::checkpoint::{checkpoint_now, n_events, root_for};
 use crate::event::{
-    decode, sign, Body, DecodeError, Event, Id, Key, Location, NoticeOutcome, Role, Unsigned,
-    MAX_EVENT_BYTES, MAX_TEXT, OTHER_LOCATION, VERSION, ZERO,
+    decode, sign, Body, DecodeError, Event, Id, Key, Location, Unsigned, MAX_EVENT_BYTES, MAX_TEXT,
+    VERSION,
 };
-use crate::reducer::{
-    issue_of, reduce, require, Issue, Notice, PlaceChange, PlaceChangeKind, Revocation, State,
-    Status, REMOVAL_COOLDOWN,
-};
+use crate::reducer::{issue_of, reduce, Config, Issue, RoleFn, State, Status};
 use crate::store::{Accept, Store};
 use ed25519_dalek::SigningKey;
+use pukaar_sites_rules::Rank;
 use serde_json::{json, Value};
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 
 /// Heads messages to hear after a restore before trusting that our history is back.
 pub const HEADS_TO_SETTLE: u32 = 3;
 /// Seconds after a restore before the user may skip the wait (history lost with the old device).
 pub const SKIP_SYNC_AFTER: u64 = 600;
-/// Seconds past a notice's deadline before a node signs the seal on its own: a politeness to
-/// the admin, not a validity rule (the reducer accepts a seal from the deadline on).
-pub const SEAL_GRACE: u64 = 10 * 60;
 const SYNCING: &str = "still syncing your history, try again shortly";
 
 /// A restored identity's chain lives on other devices: signing before it's back would reuse
@@ -56,36 +51,27 @@ pub struct Node {
     pub store: Store,
     /// `Some` while a restored identity waits for its own history.
     pub restore: Option<Restore>,
+    /// The newest chain block we know. Each event we sign names it as `chain_block`.
+    pub chain_block: u64, // 2.3: set from the chain
+    /// The chain role of an author at a block. No roles until the chain is wired.
+    pub roles: RoleFn, // 2.3: backed by chain::Roster
+    pub config: Config,         // 2.3: from details.json
+    pub locations: Vec<Location>, // 2.3: from places.json
+    pub names: BTreeMap<Key, String>, // 2.3: from the profiles
 }
 
 impl Node {
-    /// A new site from its genesis; refused if the genesis breaks a receiver limit.
-    pub fn create_site(key: SigningKey, genesis: Body, ts: u64) -> Result<Node, String> {
-        let u = Unsigned {
-            v: VERSION,
-            site: ZERO,
-            author: key.verifying_key().to_bytes(),
-            seq: 0,
-            prev: ZERO,
-            lamport: 1,
-            ts,
-            body: genesis,
-        };
-        let e = sign_within_limits(&key, u)?;
-        let mut store = Store::new(e.id);
-        assert_eq!(store.insert(e), Accept::New);
-        Ok(Node {
-            key,
-            store,
-            restore: None,
-        })
-    }
-
+    /// A replica of `site`, the site id that the chain gave (a format 2 log has no genesis).
     pub fn join(key: SigningKey, site: Id) -> Node {
         Node {
             key,
             store: Store::new(site),
             restore: None,
+            chain_block: 0,
+            roles: Box::new(|_, _| None),
+            config: Config::default(),
+            locations: Vec::new(),
+            names: BTreeMap::new(),
         }
     }
 
@@ -95,15 +81,6 @@ impl Node {
             restore: Some(Restore::new(now)),
             ..Node::join(key, site)
         }
-    }
-
-    /// Join and announce ourselves with an empty profile, so the admin sees us as a pending
-    /// member even if we never set a name (staying a pseudonym).
-    pub fn join_announced(key: SigningKey, site: Id, ts: u64) -> Node {
-        let mut n = Node::join(key, site);
-        n.publish(Body::Profile { display_name: None }, ts)
-            .expect("an empty profile is within every limit");
-        n
     }
 
     #[must_use]
@@ -127,6 +104,7 @@ impl Node {
             prev,
             lamport: self.store.max_lamport() + 1,
             ts,
+            chain_block: self.chain_block,
             body,
         };
         let e = sign_within_limits(&self.key, u)?;
@@ -182,7 +160,13 @@ impl Node {
 
     #[must_use]
     pub fn state(&self) -> State {
-        reduce(self.store.ordered())
+        reduce(self.store.ordered(), &*self.roles, &self.config, &self.locations)
+    }
+
+    /// The newest chain role of `k`.
+    #[must_use]
+    pub fn role_now(&self, k: &Key) -> Option<Rank> {
+        (self.roles)(k, u64::MAX)
     }
 
     /// Is (author, seq) inside a reproducible checkpoint that names a LEZ tx?
@@ -196,70 +180,34 @@ impl Node {
         })
     }
 
-    /// `identity_json_at` before any notice deadline: roles as granted.
+    /// Our identity, with the chain role we hold now.
     #[must_use]
     pub fn identity_json(&self) -> String {
-        self.identity_json_at(0)
-    }
-
-    /// Our identity; `role` is ours as of `now` (unix seconds), so it flips at a notice's deadline.
-    #[must_use]
-    pub fn identity_json_at(&self, now: u64) -> String {
-        let s = self.state();
         let me = self.me();
+        let role = self.role_now(&me);
         json!({
             "key": hex::encode(me),
             "fingerprint": fingerprint(&me),
-            "role": s.role_at(&me, now).map(|r| format!("{r:?}")),
-            "super_admin": s.super_admins.contains(&me),
-            "notice": s.notices.get(&me).map(|n| notice_json(&s, &me, n)),
-            "name": s.names.get(&me),
-            "revoked": s.revoked.get(&me).map(|r| revocation_json(&s, r)),
+            "role": role.map(|r| format!("{r:?}")),
+            "super_admin": role == Some(Rank::SuperAdmin),
+            "name": self.names.get(&me),
+            "revoked": null, // 2.3: from the Member record
             "site": hex::encode(self.store.site),
             "syncing_own_history": self.restore.is_some(),
         })
         .to_string()
     }
 
-    /// `now` (unix seconds) decides which removals are over: those leave `locations` for
-    /// `removed_locations` and show as `removed` in `place_log`, the admin's change log.
     #[must_use]
-    pub fn site_info_json(&self, now: u64) -> String {
-        let mut s = self.state();
-        let mut log = std::mem::take(&mut s.place_log);
-        log.extend(
-            s.pending_removal
-                .iter()
-                .filter(|(_, r)| r.is_done(now))
-                .map(|(code, r)| PlaceChange {
-                    ts: r.removes_at(),
-                    by: r.by,
-                    code: code.clone(),
-                    kind: PlaceChangeKind::Removed,
-                    reason: r.reason.clone(),
-                    rename: None,
-                }),
-        );
-        // newest first; on a tie, the later-applied one first
-        log.reverse();
-        log.sort_by_key(|c| std::cmp::Reverse(c.ts));
-        let (removed, listed): (Vec<&Location>, Vec<&Location>) =
-            s.locations.iter().partition(|l| {
-                s.pending_removal
-                    .get(&l.code)
-                    .is_some_and(|r| r.is_done(now))
-            });
-        let mut revoked: Vec<_> = s.revoked.iter().collect();
-        revoked.sort_by_key(|(_, r)| std::cmp::Reverse(r.ts));
-        let member = |k: &Key| {
-            let demotions = s.demotions.get(k).map_or(&[][..], Vec::as_slice);
-            json!({
-                "key": hex::encode(k), "fingerprint": fingerprint(k), "name": s.names.get(k),
-                "super_admin": s.super_admins.contains(k),
-                "demotions": demotions.iter().map(|n| notice_json(&s, k, n)).collect::<Vec<_>>(),
-            })
+    pub fn site_info_json(&self) -> String {
+        let s = self.state();
+        let place = |l: &Location| {
+            let mut v = json!(l);
+            v["state"] = json!("active");
+            v["open_issues"] = json!(s.open_issues_at(&l.code));
+            v
         };
-        // events no issue timeline shows, newest first
+        // events no issue timeline shows (a rejected checkpoint), newest first
         let mut rejected: Vec<&Event> = self
             .store
             .events
@@ -271,19 +219,13 @@ impl Node {
             "site": hex::encode(self.store.site),
             "name": s.config.name,
             "categories": s.config.categories,
-            "locations": listed.into_iter().map(|l| location_json(&s, l, now)).collect::<Vec<_>>(),
-            "removed_locations": removed.into_iter().map(|l| removed_json(&s, l)).collect::<Vec<_>>(),
-            "place_log": log.iter().map(|c| place_change_json(&s, c)).collect::<Vec<_>>(),
-            // as of `now`: a member whose notice ended in removal leaves at the deadline
-            "members": s.roles.keys().filter_map(|k| { let mut m = member(k); m["role"] = json!(format!("{:?}", s.role_at(k, now)?)); Some(m) }).collect::<Vec<_>>(),
-            "super_admins": s.super_admins.iter().map(member).collect::<Vec<_>>(),
-            "notices": s.notices.iter().map(|(k, n)| notice_json(&s, k, n)).collect::<Vec<_>>(),
+            "locations": s.locations.iter().map(place).collect::<Vec<_>>(),
+            // 2.3: the member lists come from the chain roster
+            "members": [], "super_admins": [], "pending": [], "revoked": [],
             "rejected": rejected.into_iter().map(|e| json!({
                 "id": hex::encode(e.id), "kind": kind_name(&e.u.body), "author": hex::encode(e.u.author),
-                "author_name": s.names.get(&e.u.author), "ts": e.u.ts, "reason": s.rejected[&e.id],
+                "author_name": self.names.get(&e.u.author), "ts": e.u.ts, "reason": s.rejected[&e.id],
             })).collect::<Vec<_>>(),
-            "pending": s.pending_members.iter().map(member).collect::<Vec<_>>(),
-            "revoked": revoked.into_iter().map(|(k, r)| { let mut m = member(k); merge(&mut m, revocation_json(&s, r)); m }).collect::<Vec<_>>(),
             "sla_ack_h": s.config.sla_ack_h,
             "sla_fix_h": s.config.sla_fix_h,
             "events": self.store.events.len(),
@@ -294,7 +236,7 @@ impl Node {
                 "ts": c.ts,
                 "tx": c.lez_tx,
                 "by": hex::encode(c.by),
-                "by_name": s.names.get(&c.by),
+                "by_name": self.names.get(&c.by),
                 "events_covered": n_events(&c.heads),
                 "reproducible": root_for(&self.store, &c.heads).is_some(),
             })),
@@ -316,225 +258,6 @@ impl Node {
         json!({ "heads": heads, "heads_root": h(&cp.heads_root), "n_events": cp.n_events,
                 "signer": h(&cp.signer), "sig": h(&cp.sig), "spel": spel })
         .to_string()
-    }
-
-    /// Revoke a member's role. The reason is required here, at creation (like the admin's
-    /// name), not in the reducer, so replaying shared events never changes their outcome.
-    pub fn revoke_role(
-        &mut self,
-        subject_hex: &str,
-        reason: &str,
-        ts: u64,
-    ) -> Result<Event, String> {
-        let reason = reason.trim();
-        require(!reason.is_empty(), "a revoke needs a reason")?;
-        self.publish_about(subject_hex, ts, |subject, _| Body::RoleRevoke {
-            subject,
-            reason: reason.into(),
-        })
-    }
-
-    /// Sign a body about one member: `body` gets their key and their next seq as we hold it.
-    fn publish_about(
-        &mut self,
-        subject_hex: &str,
-        ts: u64,
-        body: impl FnOnce(Key, u64) -> Body,
-    ) -> Result<Event, String> {
-        let subject = parse_id(subject_hex.trim()).ok_or("bad key")?;
-        let seen = self.store.next_seq(&subject).0;
-        self.publish(body(subject, seen), ts)
-    }
-
-    /// Super admin only: a second super admin (a named member; at most two).
-    pub fn add_super_admin(&mut self, subject_hex: &str, ts: u64) -> Result<Event, String> {
-        self.publish_about(subject_hex, ts, |subject, _| Body::SuperAdminAdd {
-            subject,
-        })
-    }
-
-    /// Super admin only, on the other one; they stay an admin.
-    pub fn remove_super_admin(&mut self, subject_hex: &str, ts: u64) -> Result<Event, String> {
-        self.publish_about(subject_hex, ts, |subject, _| Body::SuperAdminRemove {
-            subject,
-        })
-    }
-
-    /// Super admin only: hand our place to `to`; we stay an admin.
-    pub fn transfer_super_admin(&mut self, to_hex: &str, ts: u64) -> Result<Event, String> {
-        self.publish_about(to_hex, ts, |to, _| Body::SuperAdminTransfer { to })
-    }
-
-    /// Super admin only: `subject` stays an admin until `deadline` (unix seconds), then becomes a
-    /// steward (`outcome` "steward") or leaves (`remove`). The reason is required here, at creation.
-    pub fn admin_notice(
-        &mut self,
-        subject_hex: &str,
-        outcome: &str,
-        deadline: u64,
-        reason: &str,
-        ts: u64,
-    ) -> Result<Event, String> {
-        let outcome = match outcome {
-            "steward" => NoticeOutcome::Steward,
-            "remove" => NoticeOutcome::Remove,
-            other => return Err(format!("unknown outcome {other}")),
-        };
-        let reason = reason.trim();
-        require(!reason.is_empty(), "a notice needs a reason")?;
-        self.publish_about(subject_hex, ts, |subject, _| Body::AdminNotice {
-            subject,
-            outcome,
-            deadline,
-            reason: reason.into(),
-        })
-    }
-
-    pub fn cancel_notice(&mut self, subject_hex: &str, ts: u64) -> Result<Event, String> {
-        self.publish_about(subject_hex, ts, |subject, _| Body::AdminNoticeCancel {
-            subject,
-        })
-    }
-
-    /// End a notice at `ts` and seal it at once.
-    pub fn end_notice_now(&mut self, subject_hex: &str, ts: u64) -> Result<Event, String> {
-        self.publish_about(subject_hex, ts, |subject, seen_seq| {
-            Body::AdminNoticeEndNow { subject, seen_seq }
-        })
-    }
-
-    /// Seal every notice whose deadline passed `SEAL_GRACE` ago and that no seal has closed yet,
-    /// unless we already signed one for it. Any staff member's node does this, unasked, for a
-    /// notice that isn't theirs: the first seal applied wins and later ones change nothing.
-    /// The events signed, to send.
-    pub fn auto_seal(&mut self, now: u64) -> Vec<Event> {
-        let s = self.state();
-        let me = self.me();
-        if self.restore.is_some()
-            || !matches!(s.role_at(&me, now), Some(Role::Steward | Role::Admin))
-        {
-            return Vec::new();
-        }
-        let due: Vec<(Key, u64)> = s
-            .notices
-            .iter()
-            .filter(|(k, n)| {
-                **k != me
-                    && n.sealed.is_none()
-                    && now >= n.deadline + SEAL_GRACE
-                    && !self.sealed_by_me(k, n)
-            })
-            .map(|(k, _)| (*k, self.store.next_seq(k).0))
-            .collect();
-        due.into_iter()
-            .filter_map(|(subject, seen_seq)| {
-                self.publish(Body::NoticeSeal { subject, seen_seq }, now)
-                    .ok()
-            })
-            .collect()
-    }
-
-    /// Have we signed a seal on `subject` since `n` ended (it may not have reached anyone yet)?
-    fn sealed_by_me(&self, subject: &Key, n: &Notice) -> bool {
-        let me = self.me();
-        self.store
-            .events
-            .range((me, 0)..=(me, u64::MAX))
-            .any(|(_, e)| {
-                e.u.ts >= n.deadline
-                    && matches!(e.u.body, Body::NoticeSeal { subject: s, .. } if s == *subject)
-            })
-    }
-
-    /// Sign a location change only if the rules (`State::check_location_body`) accept it, so a
-    /// refusal like "W-03 has 2 open issues" publishes nothing.
-    fn publish_location(&mut self, body: Body, ts: u64) -> Result<Event, String> {
-        self.state().check_location_body(&self.me(), &body, ts)?;
-        self.publish(body, ts)
-    }
-
-    /// A new place on the site map; a code that was ever used is refused before signing.
-    pub fn add_location(
-        &mut self,
-        code: &str,
-        label: &str,
-        group: &str,
-        ts: u64,
-    ) -> Result<Event, String> {
-        let locations = vec![Location {
-            code: code.trim().into(),
-            label: label.trim().into(),
-            group: group.trim().into(),
-        }];
-        self.publish_location(Body::LocationsAdd { locations }, ts)
-    }
-
-    pub fn retire_location(&mut self, code: &str, reason: &str, ts: u64) -> Result<Event, String> {
-        self.set_location_retired(code, true, reason, ts)
-    }
-
-    pub fn restore_location(&mut self, code: &str, reason: &str, ts: u64) -> Result<Event, String> {
-        self.set_location_retired(code, false, reason, ts)
-    }
-
-    fn set_location_retired(
-        &mut self,
-        code: &str,
-        retired: bool,
-        reason: &str,
-        ts: u64,
-    ) -> Result<Event, String> {
-        let body = Body::LocationRetire {
-            code: code.trim().into(),
-            retired,
-            reason: reason.trim().into(),
-        };
-        self.publish_location(body, ts)
-    }
-
-    /// New name and group; the code never changes (it is the location's identity).
-    pub fn edit_location(
-        &mut self,
-        code: &str,
-        label: &str,
-        group: &str,
-        ts: u64,
-    ) -> Result<Event, String> {
-        let body = Body::LocationEdit {
-            code: code.trim().into(),
-            label: label.trim().into(),
-            group: group.trim().into(),
-        };
-        self.publish_location(body, ts)
-    }
-
-    /// Start removing a never-used location (see `REMOVAL_COOLDOWN`).
-    pub fn remove_location(&mut self, code: &str, reason: &str, ts: u64) -> Result<Event, String> {
-        self.set_location_removed(code, false, reason, ts)
-    }
-
-    pub fn undo_remove_location(
-        &mut self,
-        code: &str,
-        reason: &str,
-        ts: u64,
-    ) -> Result<Event, String> {
-        self.set_location_removed(code, true, reason, ts)
-    }
-
-    fn set_location_removed(
-        &mut self,
-        code: &str,
-        undo: bool,
-        reason: &str,
-        ts: u64,
-    ) -> Result<Event, String> {
-        let body = Body::LocationRemove {
-            code: code.trim().into(),
-            undo,
-            reason: reason.trim().into(),
-        };
-        self.publish_location(body, ts)
     }
 
     /// After `spel anchor` succeeds: publish the checkpoint so every client can check it.
@@ -568,7 +291,7 @@ impl Node {
         let s = self.state();
         let mut v: Vec<&Issue> = s.issues.values().collect();
         v.sort_by_key(|i| (i.reported_ts, i.id));
-        Value::Array(v.into_iter().map(|i| issue_json(&s, i, now)).collect()).to_string()
+        Value::Array(v.into_iter().map(|i| issue_json(self, &s, i, now)).collect()).to_string()
     }
 
     #[must_use]
@@ -587,18 +310,18 @@ impl Node {
                     "id": hex::encode(e.id),
                     "kind": kind_name(&e.u.body),
                     "author": hex::encode(e.u.author),
-                    "author_name": s.names.get(&e.u.author),
-                    "former": s.revoked.contains_key(&e.u.author),
+                    "author_name": self.names.get(&e.u.author),
+                    "former": self.role_now(&e.u.author).is_none(),
                     "ts": e.u.ts,
                     "body": body_text(&e.u.body),
                     "rejected": s.rejected.get(&e.id),
                     "anchored_tx": anchor.map(|(tx, _)| tx),
                     "anchored_by": anchor.map(|(_, by)| hex::encode(by)),
-                    "anchored_by_name": anchor.and_then(|(_, by)| s.names.get(&by)),
+                    "anchored_by_name": anchor.and_then(|(_, by)| self.names.get(&by)),
                 })
             })
             .collect();
-        json!({ "issue": issue_json(&s, i, now), "events": events }).to_string()
+        json!({ "issue": issue_json(self, &s, i, now), "events": events }).to_string()
     }
 }
 
@@ -653,62 +376,6 @@ pub fn action_body(
     })
 }
 
-/// The create form's placeholder: a genesis still carrying it names nobody.
-const NAME_PLACEHOLDER: &str = "<your name>";
-
-/// The first value listed twice.
-fn twice<'a>(mut it: impl Iterator<Item = &'a str>) -> Option<&'a str> {
-    let mut seen = BTreeSet::new();
-    it.find(|x| !seen.insert(*x))
-}
-
-/// `{"Genesis": {...}}` (the serde shape of `Body::Genesis`) -> the body, if it passes the
-/// site-setup rules. They are checked here, at creation, not in the reducer: replaying an
-/// already-shared genesis must never change its outcome. Staff are always named, so a new
-/// site's admin must be too. Size limits are `create_site`'s (it signs within them).
-pub fn genesis_from_json(json: &str) -> Result<Body, String> {
-    let body: Body = serde_json::from_str(json).map_err(|e| e.to_string())?;
-    let Body::Genesis {
-        name,
-        admin_name,
-        categories,
-        locations,
-        ..
-    } = &body
-    else {
-        return Err("not a genesis body".into());
-    };
-    require(
-        !matches!(admin_name.trim(), "" | NAME_PLACEHOLDER),
-        "the admin must be named",
-    )?;
-    require(!name.trim().is_empty(), "the site needs a name")?;
-    require(!categories.is_empty(), "add at least one category")?;
-    require(
-        categories.iter().all(|c| !c.trim().is_empty()),
-        "a category can't be empty",
-    )?;
-    if let Some(c) = twice(categories.iter().map(|c| c.trim())) {
-        return Err(format!("category {c} is listed twice"));
-    }
-    for l in locations {
-        let code = l.code.trim();
-        require(!code.is_empty(), "every location needs a code")?;
-        require(
-            code != OTHER_LOCATION,
-            format!("the code {OTHER_LOCATION} is reserved for places not on the list"),
-        )?;
-        require(
-            !l.label.trim().is_empty() && !l.group.trim().is_empty(),
-            format!("location {code} needs a name and a group"),
-        )?;
-    }
-    if let Some(c) = twice(locations.iter().map(|l| l.code.trim())) {
-        return Err(format!("location code {c} is used twice"));
-    }
-    Ok(body)
-}
-
 /// 6 hex chars, read aloud at check-in to match a pending member.
 #[must_use]
 pub fn fingerprint(k: &Key) -> String {
@@ -745,89 +412,7 @@ fn past(now: u64, ts: u64, h: u32) -> bool {
     deadline(ts, h).is_some_and(|d| now > d)
 }
 
-/// A location plus its state (active, retired, pending_removal or removed at `now`), why, when a
-/// removal completes (0 = none), whether any report ever named it, and its open issues.
-fn location_json(s: &State, l: &Location, now: u64) -> Value {
-    let removal = s.pending_removal.get(&l.code);
-    let retired = s.retired.get(&l.code);
-    let mut v = json!(l);
-    v["state"] = json!(match (removal, retired) {
-        (Some(r), _) if r.is_done(now) => "removed",
-        (Some(_), _) => "pending_removal",
-        (None, Some(_)) => "retired",
-        (None, None) => "active",
-    });
-    v["retired"] = json!(retired.is_some());
-    v["retired_reason"] = json!(retired.map_or("", String::as_str));
-    v["removal_reason"] = json!(removal.map_or("", |r| r.reason.as_str()));
-    v["removes_at"] = json!(removal.map_or(0, |r| r.removes_at()));
-    v["renamed_from"] = json!(s.renamed_from.get(&l.code));
-    v["ever_used"] = json!(s.ever_used(&l.code));
-    v["open_issues"] = json!(s.open_issues_at(&l.code));
-    v
-}
-
-/// A notice on `subject`: who gave it, the outcome, the deadline, why, and whether (and by
-/// whom, when) it's sealed.
-fn notice_json(s: &State, subject: &Key, n: &Notice) -> Value {
-    json!({
-        "subject": hex::encode(subject), "subject_name": s.names.get(subject),
-        "by": hex::encode(n.by), "by_name": s.names.get(&n.by), "ts": n.ts,
-        "outcome": n.outcome, "deadline": n.deadline, "reason": n.reason, "sealed": n.sealed.is_some(),
-        "sealed_by": n.sealed.map(|x| hex::encode(x.by)),
-        "sealed_by_name": n.sealed.and_then(|x| s.names.get(&x.by)),
-        "sealed_ts": n.sealed.map(|x| x.ts),
-    })
-}
-
-/// Who took a member's role away, when and why.
-fn revocation_json(s: &State, r: &Revocation) -> Value {
-    json!({ "by": hex::encode(r.by), "by_name": s.names.get(&r.by), "ts": r.ts, "reason": r.reason })
-}
-
-/// Copy `extra`'s fields into the object `v`.
-fn merge(v: &mut Value, extra: Value) {
-    if let (Value::Object(v), Value::Object(extra)) = (v, extra) {
-        v.extend(extra);
-    }
-}
-
-/// A change-log row for a location whose removal is over.
-fn removed_json(s: &State, l: &Location) -> Value {
-    let r = &s.pending_removal[&l.code];
-    json!({
-        "code": l.code, "label": l.label, "group": l.group,
-        "by": hex::encode(r.by), "by_name": s.names.get(&r.by),
-        "reason": r.reason, "since": r.since, "removed_at": r.removes_at(),
-    })
-}
-
-/// A change-log row; `label` is the place's current name.
-fn place_change_json(s: &State, c: &PlaceChange) -> Value {
-    let label = s
-        .locations
-        .iter()
-        .find(|l| l.code == c.code)
-        .map(|l| &l.label);
-    let mut v = json!({
-        "ts": c.ts, "by": hex::encode(c.by), "by_name": s.names.get(&c.by),
-        "code": c.code, "label": label, "kind": c.kind, "reason": c.reason,
-    });
-    match c.kind {
-        PlaceChangeKind::RemovalStarted => {
-            v["ends_at"] = json!(c.ts.saturating_add(REMOVAL_COOLDOWN))
-        }
-        PlaceChangeKind::Removed => v["since"] = json!(c.ts.saturating_sub(REMOVAL_COOLDOWN)),
-        _ => {}
-    }
-    if let Some((from, to)) = &c.rename {
-        v["from"] = json!(from);
-        v["to"] = json!(to);
-    }
-    v
-}
-
-fn issue_json(s: &State, i: &Issue, now: u64) -> Value {
+fn issue_json(n: &Node, s: &State, i: &Issue, now: u64) -> Value {
     let location_label = s
         .locations
         .iter()
@@ -836,7 +421,7 @@ fn issue_json(s: &State, i: &Issue, now: u64) -> Value {
     let progress = i.progress.as_ref().map(|p| {
         json!({
             "by": hex::encode(p.by),
-            "by_name": s.names.get(&p.by),
+            "by_name": n.names.get(&p.by),
             "ts": p.ts,
             "note": p.note,
             "next_step": p.next_step,
@@ -852,14 +437,13 @@ fn issue_json(s: &State, i: &Issue, now: u64) -> Value {
         "category": i.category,
         "location": i.location,
         "location_label": location_label,
-        "location_renamed_from": s.renamed_from.get(&i.location),
-        "location_retired": s.retired.contains_key(&i.location),
+        "location_retired": false,
         "landmark": i.landmark,
         "text": i.text,
         "progress": progress,
         "reporter": hex::encode(i.reporter),
-        "reporter_name": s.names.get(&i.reporter),
-        "former": s.revoked.contains_key(&i.reporter),
+        "reporter_name": n.names.get(&i.reporter),
+        "former": n.role_now(&i.reporter).is_none(),
         "claimant": i.claimant.map(hex::encode),
         "confirms": i.confirms.len(),
         "reopen_count": i.reopen_count,
@@ -878,11 +462,6 @@ fn issue_json(s: &State, i: &Issue, now: u64) -> Value {
 pub fn kind_name(b: &Body) -> &'static str {
     use Body::*;
     match b {
-        Genesis { .. } => "genesis",
-        RoleGrant { .. } => "role_grant",
-        RoleRevoke { .. } => "role_revoke",
-        Profile { .. } => "profile",
-        LocationsAdd { .. } => "locations_add",
         Report { .. } => "report",
         Acknowledge { .. } => "acknowledge",
         Update { .. } => "update",
@@ -893,16 +472,6 @@ pub fn kind_name(b: &Body) -> &'static str {
         MarkDuplicate { .. } => "mark_duplicate",
         Comment { .. } => "comment",
         Checkpoint { .. } => "checkpoint",
-        LocationRetire { .. } => "location_retire",
-        LocationEdit { .. } => "location_edit",
-        LocationRemove { .. } => "location_remove",
-        SuperAdminAdd { .. } => "super_admin_add",
-        SuperAdminRemove { .. } => "super_admin_remove",
-        SuperAdminTransfer { .. } => "super_admin_transfer",
-        AdminNotice { .. } => "admin_notice",
-        AdminNoticeCancel { .. } => "admin_notice_cancel",
-        AdminNoticeEndNow { .. } => "admin_notice_end_now",
-        NoticeSeal { .. } => "notice_seal",
     }
 }
 

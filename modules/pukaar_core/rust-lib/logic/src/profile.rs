@@ -248,6 +248,58 @@ pub fn open_keyring(k: &Keyring, me: &SigningKey) -> Result<BTreeMap<u64, Key>, 
     Ok(keys)
 }
 
+/// The signed message that `Wire::ProfileAnnounce` carries: a member tells the site that a new profile
+/// file is in Storage, before the chain pointer moves. Readers keep the highest version with a valid
+/// signature (the version rule).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Announce {
+    pub site: Key,
+    /// The Pukaar key of the author.
+    pub author: Key,
+    pub version: u64,
+    pub cid: String,
+    /// SHA-256 of the profile file, the same hash the chain keeps.
+    pub sha256: [u8; 32],
+    /// ed25519 signature, 64 bytes. A `Vec` because serde has no impl for `[u8; 64]`.
+    pub sig: Vec<u8>,
+}
+
+pub const ANNOUNCE_DOMAIN: &[u8] = b"pukaar.profile.announce/1\0";
+pub const MAX_CID: usize = 128;
+
+impl Announce {
+    fn message(&self) -> Vec<u8> {
+        [ANNOUNCE_DOMAIN, &self.site, &self.author, &self.version.to_be_bytes(), &self.sha256, self.cid.as_bytes()].concat()
+    }
+
+    pub fn sign(author: &SigningKey, site: Key, version: u64, cid: &str, sha256: [u8; 32]) -> Announce {
+        let mut a = Announce {
+            site,
+            author: author.verifying_key().to_bytes(),
+            version,
+            cid: cid.into(),
+            sha256,
+            sig: Vec::new(),
+        };
+        a.sig = author.sign(&a.message()).to_bytes().to_vec();
+        a
+    }
+
+    /// Sizes only: what a receiver checks before it spends a signature check.
+    pub fn well_formed(&self) -> bool {
+        !self.cid.is_empty() && self.cid.len() <= MAX_CID && self.sig.len() == 64
+    }
+
+    pub fn verify(&self) -> Result<(), String> {
+        if !self.well_formed() {
+            return Err("bad profile announce size".into());
+        }
+        let vk = VerifyingKey::from_bytes(&self.author).map_err(|_| "bad author key")?;
+        let sig = Signature::from_slice(&self.sig).map_err(|_| "bad signature bytes")?;
+        vk.verify_strict(&self.message(), &sig).map_err(|_| "bad profile announce signature".to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -391,5 +443,22 @@ mod tests {
         assert_eq!(e.pukaar_key, hex::encode(pk(2)));
         assert_eq!((e.version, e.key_epoch), (1, 1));
         assert_eq!(open(&e, &sk(1), &BTreeMap::new()).unwrap(), body());
+    }
+
+    #[test]
+    fn announce_signs_verifies_and_rejects_tampering() {
+        let a = Announce::sign(&sk(1), [7; 32], 3, "zDvZRwzm", [9; 32]);
+        a.verify().unwrap();
+        for t in [
+            Announce { version: 4, ..a.clone() },
+            Announce { site: [8; 32], ..a.clone() },
+            Announce { cid: "zOther".into(), ..a.clone() },
+            Announce { sha256: [1; 32], ..a.clone() },
+            Announce { author: pk(2), ..a.clone() },
+            Announce { sig: a.sig[..63].to_vec(), ..a.clone() },
+            Announce { cid: "x".repeat(MAX_CID + 1), ..a.clone() },
+        ] {
+            assert!(t.verify().is_err());
+        }
     }
 }
