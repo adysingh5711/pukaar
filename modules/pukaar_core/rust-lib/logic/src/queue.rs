@@ -663,6 +663,7 @@ fn fetch_blob(env: &Env, cid: &str, sha: &[u8; 32]) -> Result<Vec<u8>, String> {
     if sha256(&b) != *sha {
         return Err(format!("storage: {cid} does not match the SHA-256 on the chain"));
     }
+    env.fetched.lock().unwrap().put(cid, &b);
     Ok(b)
 }
 
@@ -685,7 +686,10 @@ fn open_ring(env: &Env, site: &Site) -> Result<(profile::Keyring, std::collectio
 fn upload_all(env: &Env, e: &mut Entry) -> Result<bool, String> {
     for b in e.blobs.iter_mut().filter(|b| b.cid.is_none()) {
         match env.store.upload(&b.bytes) {
-            Ok(cid) => b.cid = Some(cid),
+            Ok(cid) => {
+                env.fetched.lock().unwrap().put(&cid, &b.bytes); // so that we can answer a `BlobReq`
+                b.cid = Some(cid);
+            }
             Err(err) => {
                 e.tries += 1;
                 if e.tries >= UPLOAD_TRIES {
@@ -753,6 +757,7 @@ fn prepare_approve(env: &Env, e: &mut Entry, mut items: Vec<ApproveReq>) -> Resu
         profile::add_site_wrap(&mut file, env.key, &keys)?;
         let out = profile::to_bytes(&file);
         let cid = env.store.upload(&out).map_err(|e| format!("storage: {e}"))?;
+        env.fetched.lock().unwrap().put(&cid, &out);
         it.profile = Some(Prof { cid, sha: sha256(&out), version: a.version });
         seats.push((body.user_account, body.pukaar_ed_pk));
     }

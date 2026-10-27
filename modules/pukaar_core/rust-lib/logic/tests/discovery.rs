@@ -8,6 +8,8 @@ use pukaar_logic::lezkey::{derive_lez_secret, lez_account_id};
 use pukaar_logic::node::Node;
 use pukaar_logic::profile::{self, Announce};
 use pukaar_logic::reducer::Rank;
+use pukaar_logic::sync::{Wire, BLOB_CHUNK, MAX_CHUNKS};
+use std::time::Duration;
 use pukaar_logic::rpc::{Chain, Rpc, SharedChain, MAX_HINTS};
 use pukaar_sites_rules::{GateConfig, Member, MemberStatus, Revocation, Role, Site, RECORD_VERSION};
 use ed25519_dalek::SigningKey;
@@ -423,4 +425,141 @@ fn unverified_accounts_are_capped_and_a_known_key_is_not_read_again() {
     };
     let added = (0..MAX_HINTS + 10).filter(|i| g.hint(fake(*i), None)).count();
     assert_eq!(added, MAX_HINTS);
+}
+
+// ---- Delivery fallback: Storage cannot connect, the files come over BlobReq and BlobChunk ----
+
+/// Wire round trip, as the module does it.
+fn over_the_wire(w: &Wire) -> Wire {
+    Wire::decode(&w.encode()).expect("a valid message")
+}
+
+/// Every request that `joiner` made goes to `admin`, every chunk comes back. Returns the requests.
+fn pump(admin: &Node, joiner: &Node, jf: &SharedFetched) -> Vec<Wire> {
+    let reqs: Vec<Wire> = std::mem::take(&mut jf.lock().unwrap().out);
+    for r in &reqs {
+        for chunk in admin.on_blob(&over_the_wire(r), 0) {
+            joiner.on_blob(&over_the_wire(&chunk), 0);
+        }
+    }
+    reqs
+}
+
+/// An admin that holds the files (it read them from its Storage), a joiner whose Storage is dead.
+fn admin_and_dead_joiner(w: &World) -> (Node, Node, SharedChain, SharedFetched) {
+    let (mut a, ac, af) = w.node(1);
+    w.sync(&mut a, &ac, &af);
+    w.store.down.store(true, Ordering::SeqCst);
+    let (j, jc, jf) = w.node(3);
+    (a, j, jc, jf)
+}
+
+fn joiner_reaches_the_site(details: &Details, name_len: usize) {
+    let w = World::new(&TRIO, &[seat(1), seat(2), seat(3)], details);
+    let (a, mut j, jc, jf) = admin_and_dead_joiner(&w);
+    let mut asked = 0;
+    for _ in 0..4 {
+        w.sync(&mut j, &jc, &jf);
+        asked += pump(&a, &j, &jf).len();
+    }
+    w.sync(&mut j, &jc, &jf);
+    let i = info(&j);
+    assert!(asked >= 6, "keyring, details, places and the profiles were asked for: {asked}");
+    assert_eq!(i["name"].as_str().map(str::len), Some(name_len));
+    assert_eq!(i["locations"].as_array().unwrap().len(), 1);
+    assert_eq!(names(&i), ["User1", "User2", "User3"], "the admin profile came too");
+    assert_eq!(i["storage"], json!({ "pending": 0, "error": null }));
+    assert!(jf.lock().unwrap().out.is_empty(), "nothing left to ask");
+}
+
+#[test]
+fn the_site_shows_through_delivery_when_storage_cannot_connect() {
+    joiner_reaches_the_site(&details(), "Dhun Camp".len());
+}
+
+#[test]
+fn a_file_of_100_kb_comes_in_chunks_and_reassembles() {
+    let big = Details { name: "x".repeat(100_000), ..details() };
+    assert!(big.to_bytes().len() > 100_000 && big.to_bytes().len().div_ceil(BLOB_CHUNK) > 30);
+    joiner_reaches_the_site(&big, 100_000);
+}
+
+#[test]
+fn when_storage_works_no_request_goes_out() {
+    let w = World::new(&TRIO, &[seat(1), seat(2), seat(3)], &details());
+    let (mut n, c, f) = w.node(3);
+    w.sync(&mut n, &c, &f);
+    assert!(f.lock().unwrap().out.is_empty());
+    assert_eq!(info(&n)["storage"]["pending"], 0);
+}
+
+#[test]
+fn an_offline_admin_leaves_the_joiner_asking_and_waiting() {
+    let w = World::new(&TRIO, &[seat(1), seat(2), seat(3)], &details());
+    w.store.down.store(true, Ordering::SeqCst);
+    let (mut n, c, f) = w.node(3);
+    w.sync(&mut n, &c, &f);
+    let first = std::mem::take(&mut f.lock().unwrap().out);
+    assert!(first.iter().any(|m| matches!(m, Wire::BlobReq { .. })), "it asks at once");
+    w.sync(&mut n, &c, &f);
+    assert!(f.lock().unwrap().out.is_empty(), "not again inside the back-off");
+    f.lock().unwrap().req_every = Duration::ZERO; // the back-off is over
+    w.sync(&mut n, &c, &f);
+    let again = std::mem::take(&mut f.lock().unwrap().out);
+    assert!(!again.is_empty() && again.iter().all(|m| first.contains(m)), "it asks again for the same files");
+    let i = info(&n);
+    assert!(i["storage"]["pending"].as_u64().unwrap() >= 3, "still waiting for the site data");
+    assert!(i["storage"]["error"].as_str().is_some());
+}
+
+#[test]
+fn bad_unasked_repeated_and_oversize_chunks_are_refused() {
+    let w = World::new(&TRIO, &[seat(1), seat(2), seat(3)], &details());
+    let (a, mut j, jc, jf) = admin_and_dead_joiner(&w);
+    w.sync(&mut j, &jc, &jf);
+    let reqs = std::mem::take(&mut jf.lock().unwrap().out);
+    let Some(Wire::BlobReq { cid, sha256 }) = reqs.into_iter().next() else { panic!("a request") };
+    let good: Vec<Wire> = a.on_blob(&Wire::BlobReq { cid: cid.clone(), sha256 }, 0);
+    let Wire::BlobChunk { bytes, total, .. } = &good[0] else { panic!("a chunk") };
+    assert_eq!(*total, 1, "a small file is one chunk");
+    let chunk = |cid: &str, sha: [u8; 32], index: u16, total: u16, b: &[u8]| Wire::BlobChunk { cid: cid.into(), sha256: sha, index, total, bytes: b.to_vec() };
+    let try_chunk = |c: Wire| {
+        j.on_blob(&c, 0);
+        jf.lock().unwrap().cached(&cid, &sha256).is_some()
+    };
+    let mut evil = bytes.clone();
+    evil[0] ^= 1;
+    assert!(!try_chunk(chunk(&cid, sha256, 0, 1, &evil)), "a bad hash");
+    assert!(!try_chunk(chunk("zOther", sha256, 0, 1, bytes)), "a cid that we did not ask for");
+    assert!(!try_chunk(chunk(&cid, [9; 32], 0, 1, bytes)), "another sha than the one that we asked with");
+    assert!(!try_chunk(chunk(&cid, sha256, 0, 1, &vec![1; BLOB_CHUNK + 1])), "a chunk over the size");
+    assert!(!try_chunk(chunk(&cid, sha256, 0, MAX_CHUNKS as u16 + 1, bytes)), "too many chunks");
+    assert!(!try_chunk(chunk(&cid, sha256, 1, 1, bytes)), "an index past the total");
+    // Chunks that together pass the largest file: the last ones are dropped, the file never completes.
+    for i in 0..MAX_CHUNKS as u16 {
+        assert!(!try_chunk(chunk(&cid, sha256, i, MAX_CHUNKS as u16, &vec![3; BLOB_CHUNK])));
+    }
+    // A spoiled start (another total, a half file) does not block the honest file, which completes.
+    assert!(!try_chunk(chunk(&cid, sha256, 0, 2, &bytes[..bytes.len() / 2])));
+    assert!(!try_chunk(chunk(&cid, sha256, 0, 2, &bytes[..bytes.len() / 2])), "a repeat of a chunk");
+    assert!(try_chunk(chunk(&cid, sha256, 0, 1, bytes)), "the honest chunk is accepted");
+    assert!(!jf.lock().unwrap().note_chunk(&cid, &sha256, 0, 1, bytes), "a file that we hold needs no chunk");
+    assert_eq!(jf.lock().unwrap().cached(&cid, &sha256).as_deref(), Some(&bytes[..]));
+}
+
+#[test]
+fn a_flood_of_requests_gets_few_answers() {
+    let mut f = Fetched::default();
+    let blobs: Vec<(String, Vec<u8>)> = (0..8u8).map(|n| (format!("c{n}"), vec![n; 250_000])).collect();
+    for (cid, b) in &blobs {
+        f.put(cid, b);
+    }
+    // The same file again and again: one answer. A file that we do not hold, or a wrong sha: none.
+    let sha0 = sha256(&blobs[0].1);
+    assert_eq!(f.answer("c0", &sha0).len(), 84);
+    assert!((0..100).all(|_| f.answer("c0", &sha0).is_empty()));
+    assert!(f.answer("nope", &sha0).is_empty() && f.answer("c1", &sha0).is_empty());
+    // Many different files: the chunks of one minute stop at the cap.
+    let sent: usize = blobs.iter().map(|(c, b)| f.answer(c, &sha256(b)).len()).sum::<usize>() + 84;
+    assert!(sent <= 400 && sent > 300, "{sent} chunks in a minute");
 }

@@ -2,7 +2,7 @@
 //! events re-sends them. This is the catch-up path; Delivery's storeQuery is best-effort only.
 
 use crate::event::{sha256, Key, MAX_EVENT_BYTES};
-use crate::profile::{self, MAX_INLINE_PROFILE};
+use crate::profile::{self, MAX_CID, MAX_INLINE_PROFILE};
 use crate::store::Store;
 use pukaar_sites_rules::JOIN_REQ_LEN;
 use serde::{Deserialize, Serialize};
@@ -40,6 +40,13 @@ pub enum WriteKind {
 pub const MAX_WIRE_BYTES: usize = MAX_INLINE_PROFILE + 512;
 const _: () = assert!(MAX_EVENT_BYTES + 16 <= MAX_WIRE_BYTES);
 
+/// A site file that travels over Delivery when Storage cannot connect (`BlobReq`, `BlobChunk`): the
+/// bytes of one chunk, the largest file and so the most chunks. A chunk with its CID and framing is
+/// about 3.2 KB, under `MAX_WIRE_BYTES`. The same size as a profile file, which Delivery already carries.
+pub const BLOB_CHUNK: usize = 3000;
+pub const MAX_FALLBACK: usize = 256 * 1024;
+pub const MAX_CHUNKS: usize = MAX_FALLBACK.div_ceil(BLOB_CHUNK);
+
 /// What goes on the site channel. Only `Event` is signed as a log entry. `Heads` is unsigned:
 /// lying about heads only changes what gets re-sent, and re-sends are capped. APPEND-ONLY: postcard
 /// encodes the variant index.
@@ -57,6 +64,11 @@ pub enum Wire {
     /// admin can approve without a download from the Storage node of the author. A file over the cap
     /// is not sent this way: the author sends `ProfileAnnounce` and readers download by CID.
     ProfileBlob { announce: profile::Announce, file: Vec<u8> },
+    /// "Who holds this file?" for a site file whose Storage download failed. Not trusted: the answer
+    /// is checked against `sha256`, the value that the chain holds.
+    BlobReq { cid: String, sha256: Key },
+    /// Chunk `index` of `total` of the file that `BlobReq` named. The receiver checks the whole file.
+    BlobChunk { cid: String, sha256: Key, index: u16, total: u16, bytes: Vec<u8> },
 }
 
 impl Wire {
@@ -80,6 +92,10 @@ impl Wire {
             Wire::JoinReq(r) => r.len() == JOIN_REQ_LEN,
             Wire::ProfileAnnounce(a) => a.well_formed(),
             Wire::ProfileBlob { announce, file } => announce.well_formed() && !file.is_empty() && file.len() <= MAX_INLINE_PROFILE,
+            Wire::BlobReq { cid, .. } => !cid.is_empty() && cid.len() <= MAX_CID,
+            Wire::BlobChunk { cid, index, total, bytes, .. } => {
+                !cid.is_empty() && cid.len() <= MAX_CID && index < total && usize::from(*total) <= MAX_CHUNKS && !bytes.is_empty() && bytes.len() <= BLOB_CHUNK
+            }
             Wire::Heads(_) | Wire::ChainPending { .. } => true,
         };
         ok.then_some(w)

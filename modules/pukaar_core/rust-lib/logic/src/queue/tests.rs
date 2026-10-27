@@ -595,6 +595,20 @@ fn places_are_edited_on_the_fresh_file() {
 }
 
 #[test]
+fn what_we_upload_goes_in_the_cache_so_that_we_can_answer_for_it() {
+    let w = World::new();
+    let l = |c: &str| crate::event::Location { code: c.into(), label: "Bin".into(), group: "Bins".into() };
+    let id = w.push(Intent::Places { ops: vec![PlaceOp::Add(l("B-01"))] }, St::Preparing, vec![]);
+    w.tick(T0);
+    let b = &w.entry(id).blobs[0];
+    let sha = sha256(&b.bytes);
+    let cid = b.cid.clone().expect("uploaded");
+    let held = w.fetched.lock().unwrap().cached(&cid, &sha);
+    assert_eq!(held.as_deref(), Some(&b.bytes[..]));
+    assert!(w.fetched.lock().unwrap().answer(&cid, &sha).len() == 1, "and it answers a BlobReq");
+}
+
+#[test]
 fn a_dead_storage_gives_up_after_five_tries() {
     let w = World::new();
     let id = w.push(Intent::Places { ops: vec![PlaceOp::Retire("W-01".into())] }, St::Preparing, vec![]);

@@ -158,6 +158,30 @@ impl Node {
         a.site == self.store.site && self.fetched.as_ref().is_some_and(|f| f.lock().unwrap().note_blob(a, file))
     }
 
+    /// A `BlobReq` or a `BlobChunk` from Delivery (any other message gives nothing). A request gives the
+    /// chunks to send, when we hold the file, are an admin or one of the elected few (like a Heads
+    /// answer, so 30 members do not all send it) and the rate limits allow. A chunk is kept for the
+    /// fetchers when we asked for it. Nothing here is trusted: the file is checked against the chain.
+    pub fn on_blob(&self, w: &crate::sync::Wire, minute: u64) -> Vec<crate::sync::Wire> {
+        use crate::sync::{should_answer, Wire};
+        let Some(f) = &self.fetched else { return vec![] };
+        match w {
+            Wire::BlobReq { cid, sha256 } => {
+                let me = self.me();
+                let admin = self.role_now(&me).is_some_and(|r| r >= Rank::Admin);
+                if !admin && !should_answer(&me, &self.approved_keys(), &w.encode(), minute) {
+                    return vec![];
+                }
+                f.lock().unwrap().answer(cid, sha256)
+            }
+            Wire::BlobChunk { cid, sha256, index, total, bytes } => {
+                f.lock().unwrap().note_chunk(cid, sha256, *index, *total, bytes);
+                vec![]
+            }
+            _ => vec![],
+        }
+    }
+
     /// The sorted keys of the approved members. They elect who answers Heads.
     #[must_use]
     pub fn approved_keys(&self) -> Vec<Key> {

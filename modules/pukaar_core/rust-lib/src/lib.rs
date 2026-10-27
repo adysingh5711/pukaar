@@ -466,6 +466,11 @@ fn chain_tick() {
     }
     std::thread::spawn(move || {
         sync_once(&HttpRpc::new(&env_or("PUKAAR_LEZ_RPC", LEZ_RPC)), store(dir), &chain, &fetched, &key);
+        // Storage failed for some file: ask the peers for it over Delivery (the outbox goes out in `flush`).
+        let asks = std::mem::take(&mut fetched.lock().unwrap().out);
+        if let Some(sh) = SHARED.lock().unwrap().as_mut() {
+            sh.outbox.extend(asks.iter().map(Wire::encode));
+        }
     });
 }
 
@@ -570,6 +575,10 @@ fn on_wire(channel: &str, bytes: &[u8]) {
         // The same with the file inside: an admin can approve without a download from the author.
         Some(Wire::ProfileBlob { announce, file }) => {
             node.on_profile_blob(announce, file);
+        }
+        // A site file over Delivery, for a node whose Storage cannot reach the one that holds it.
+        Some(w @ (Wire::BlobReq { .. } | Wire::BlobChunk { .. })) => {
+            outbox.extend(node.on_blob(&w, now() / 60).iter().map(Wire::encode));
         }
         // Only recorded: `site_info.chain.pending_peers` shows it for a while.
         Some(Wire::ChainPending { tx, kind }) => {

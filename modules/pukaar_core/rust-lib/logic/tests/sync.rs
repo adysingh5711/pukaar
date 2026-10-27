@@ -7,7 +7,7 @@ use pukaar_logic::profile::{Announce, MAX_CID, MAX_INLINE_PROFILE};
 use pukaar_logic::store::{Accept, Store};
 use pukaar_logic::sync::{
     heads_msg, lost_node, send_queue, should_answer, to_resend, to_resend_own, SendError, Wire,
-    WriteKind, ANSWERERS, DELIVERY_CFG, MAX_RESEND, MAX_WIRE_BYTES,
+    WriteKind, ANSWERERS, BLOB_CHUNK, DELIVERY_CFG, MAX_CHUNKS, MAX_RESEND, MAX_WIRE_BYTES,
 };
 use pukaar_sites_rules::JOIN_REQ_LEN;
 use util::*;
@@ -224,6 +224,8 @@ fn every_message_kind_round_trips() {
         Wire::ProfileAnnounce(announce()),
         Wire::ChainPending { tx: [3; 32], kind: WriteKind::Approve },
         Wire::ProfileBlob { announce: announce(), file: vec![7; 900] },
+        Wire::BlobReq { cid: "zCid".into(), sha256: [4; 32] },
+        Wire::BlobChunk { cid: "zCid".into(), sha256: [4; 32], index: 1, total: 3, bytes: vec![8; BLOB_CHUNK] },
     ];
     for m in msgs {
         assert_eq!(Wire::decode(&m.encode()), Some(m));
@@ -301,6 +303,25 @@ fn a_blob_is_kept_only_when_hash_and_signature_hold() {
     let mut late = Fetched::default();
     assert!(late.note_announce(a.clone()));
     assert!(late.note_blob(a, file));
+}
+
+#[test]
+fn blob_messages_have_limits_and_fit_the_wire() {
+    let chunk = |cid: &str, index: u16, total: u16, n: usize| Wire::BlobChunk { cid: cid.into(), sha256: [4; 32], index, total, bytes: vec![1; n] }.encode();
+    let cid = "z".repeat(MAX_CID);
+    assert!(chunk(&cid, 0, 1, BLOB_CHUNK).len() <= MAX_WIRE_BYTES, "the largest chunk fits");
+    assert!(Wire::decode(&chunk(&cid, 0, 1, BLOB_CHUNK)).is_some());
+    assert!(Wire::decode(&chunk("c", 0, 1, BLOB_CHUNK + 1)).is_none(), "over the chunk size");
+    assert!(Wire::decode(&chunk("c", 0, 1, 0)).is_none(), "no bytes");
+    assert!(Wire::decode(&chunk("c", 1, 1, 9)).is_none(), "index past the total");
+    assert!(Wire::decode(&chunk("c", 0, MAX_CHUNKS as u16, 9)).is_some());
+    assert!(Wire::decode(&chunk("c", 0, MAX_CHUNKS as u16 + 1, 9)).is_none(), "more chunks than the largest file");
+    assert!(Wire::decode(&chunk("", 0, 1, 9)).is_none(), "no cid");
+    assert!(Wire::decode(&chunk(&"z".repeat(MAX_CID + 1), 0, 1, 9)).is_none(), "long cid");
+    assert_eq!(Wire::BlobReq { cid: "c".into(), sha256: [4; 32] }.encode()[0], 6, "appended after ProfileBlob (5)");
+    assert_eq!(chunk("c", 0, 1, 1)[0], 7);
+    assert!(Wire::decode(&Wire::BlobReq { cid: String::new(), sha256: [4; 32] }.encode()).is_none());
+    assert!(Wire::decode(&Wire::BlobReq { cid: "z".repeat(MAX_CID + 1), sha256: [4; 32] }.encode()).is_none());
 }
 
 #[test]
