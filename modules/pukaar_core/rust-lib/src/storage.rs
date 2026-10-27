@@ -17,14 +17,21 @@
 //! `filesharing-ui` does, and hand the CID to the core. This needs a new module method that takes
 //! a CID, and a QML change. Do that only if the check of step 2.5 fails.
 //!
-//! The node reads the config from `~/.logos_storage/config.json` (`loadConfigOrDefault`) and `init`
-//! writes it back. `PUKAAR_STORAGE_CFG` holds a JSON object that overrides keys of that config (for
-//! a local test: `nat`, `bootstrap-node`, `data-dir`). A test must redirect `HOME` first.
+//! The node starts from `loadConfigOrDefault` (the file `~/.logos_storage/config.json`, or the
+//! defaults). `node_config` then gives this profile its own `data-dir` (`<module data>/storage`):
+//! the metadata store of a data dir is locked, so two Storage nodes on one data dir cannot both
+//! start ("Should create metadata store!"). The listen port is 0 (the OS picks a free one) and the
+//! REST and metrics servers are off, so no port can clash. `PUKAAR_STORAGE_CFG` holds a JSON object
+//! that overrides keys of the result (for a local test: `nat`, `bootstrap-node`, `data-dir`).
+//!
+//! A successful `init` of storage_module 3.0.2 writes the config to `$HOME/.logos_storage/config.json`
+//! and no key, variable or argument moves that file. That file belongs to the default Basecamp
+//! profile, so `keep_file` puts the old content back after `init`.
 
 use logos_rust_sdk::{EventData, LogosError, LogosModuleSDK, PluginProxy};
 use pukaar_logic::fetch::Store;
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -105,16 +112,68 @@ fn call(p: &PluginProxy, method: &str, args: Value, limit: Duration) -> Result<V
     value_of(r).map_err(|e| format!("{method}: {e}"))
 }
 
+/// First wait after a failed start, and the longest wait.
+const RETRY_FIRST: Duration = Duration::from_secs(5);
+const RETRY_MAX: Duration = Duration::from_secs(60);
+
+/// The wait after a failure: 5 s, then twice the last one, at most 60 s.
+fn next_wait(last: Option<Duration>) -> Duration {
+    last.map_or(RETRY_FIRST, |w| (w * 2).min(RETRY_MAX))
+}
+
+/// The config of this node: `base` (what the module loaded) with its own data dir, a free listen
+/// port and no REST or metrics server, then the keys of `over` (`PUKAAR_STORAGE_CFG`).
+fn node_config(mut base: Value, data_dir: &Path, over: Option<&str>) -> Result<Value, String> {
+    let o = base.as_object_mut().ok_or("loadConfigOrDefault: not an object")?;
+    o.insert("data-dir".into(), json!(data_dir.to_string_lossy()));
+    o.insert("listen-port".into(), json!(0));
+    o.remove("api-bindaddr");
+    o.remove("metrics");
+    if let Some(over) = over {
+        let over: Value = serde_json::from_str(over).map_err(|e| format!("PUKAAR_STORAGE_CFG: {e}"))?;
+        for (k, v) in over.as_object().into_iter().flatten() {
+            o.insert(k.clone(), v.clone());
+        }
+    }
+    Ok(base)
+}
+
+/// Run `f`, then put `path` back as it was before: the old bytes, or no file if there was none.
+/// ponytail: no lock, so a write by another process inside `f` is lost. Add a lock if that shows up.
+fn keep_file<T>(path: &Path, f: impl FnOnce() -> T) -> T {
+    let old = std::fs::read(path).ok();
+    let r = f();
+    match old {
+        Some(b) => {
+            let _ = std::fs::write(path, b);
+        }
+        None => {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+    r
+}
+
+/// The file that `init` writes: `$HOME/.logos_storage/config.json`.
+fn user_config_file() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").filter(|h| !h.is_empty())?;
+    Some(PathBuf::from(home).join(".logos_storage").join("config.json"))
+}
+
 /// The proxy and the events. `ready` is true once `init` and `start` worked. The subscriptions are
-/// made once: a failed start is retried without new listener threads.
+/// made once: a failed start is retried without new listener threads, after `hold` (the last error
+/// and the time of the next try, so a dead Storage is not asked every 10 s).
 struct Client {
     proxy: PluginProxy,
     events: Arc<Events>,
     ready: bool,
+    hold: Option<(Instant, String)>,
+    wait: Option<Duration>,
 }
 
 pub struct LogosStore {
-    /// Temp files for the transfers.
+    /// The module data dir of this profile: `storage-tmp` holds the temp files of the transfers and
+    /// `storage` the data of the Storage node.
     dir: PathBuf,
     seq: AtomicU64,
     /// Held for a whole transfer: one at a time, as `uploadUrl` needs.
@@ -136,38 +195,42 @@ impl Client {
                 }
             });
         }
-        Ok(Client { proxy, events, ready: false })
+        Ok(Client { proxy, events, ready: false, hold: None, wait: None })
     }
 
     /// Load the config, `init`, `start`, and wait until the node runs. `init` refuses a second
     /// call, and the module is shared with other modules, so "already" is not a failure.
-    fn bring_up(&mut self) -> Result<(), String> {
+    fn bring_up(&mut self, data_dir: &Path) -> Result<(), String> {
         let p = &self.proxy;
-        let mut cfg = match call(p, "loadConfigOrDefault", json!([]), CALL)? {
+        let base = match call(p, "loadConfigOrDefault", json!([]), CALL)? {
             Value::String(s) => serde_json::from_str(&s).map_err(|e| format!("loadConfigOrDefault: {e}"))?,
             v => v,
         };
-        if let Ok(over) = std::env::var("PUKAAR_STORAGE_CFG") {
-            let over: Value = serde_json::from_str(&over).map_err(|e| format!("PUKAAR_STORAGE_CFG: {e}"))?;
-            for (k, v) in over.as_object().into_iter().flatten() {
-                cfg[k] = v.clone();
-            }
-        }
-        // A refused `init` answers a bare `false` (seen: a config key it does not know). The node may
-        // also be set up by another module, so go on to `start`, which then reports the real failure.
-        match call(p, "init", json!([cfg.to_string()]), START) {
+        let data = data_dir.join("storage");
+        std::fs::create_dir_all(&data).map_err(|e| format!("{}: {e}", data.display()))?;
+        let cfg = node_config(base, &data, std::env::var("PUKAAR_STORAGE_CFG").ok().as_deref())?;
+        // A refused `init` answers a bare `false`, and the module writes the reason only to its log
+        // (seen: a config key it does not know, or a data dir that another node holds). The node may
+        // also be set up by another module, so go on to `start`, which then reports the failure.
+        let run = || call(p, "init", json!([cfg.to_string()]), START);
+        let init = match user_config_file() {
+            Some(f) => keep_file(&f, run),
+            None => run(),
+        };
+        let mut note = String::new();
+        match init {
             Ok(v) if !matches!(v, Value::Bool(false)) => {}
             Err(e) if e.contains("already") => {}
-            Ok(_) => eprintln!("pukaar: storage init was refused"),
-            Err(e) => eprintln!("pukaar: storage init: {e}"),
+            Ok(_) => note = format!("init was refused (see the storage_module log; data dir {})", data.display()),
+            Err(e) => note = e,
         }
         if matches!(call(p, "start", json!([]), START)?, Value::Bool(false)) {
-            return Err("storage start was refused".into());
+            return Err(format!("storage start was refused{}", if note.is_empty() { String::new() } else { format!(": {note}") }));
         }
         let end = Instant::now() + START;
         while !truthy(&p.call_json_with_timeout("isRunning", &json!([]), CALL).map_err(|e| format!("isRunning: {e}"))?) {
             if Instant::now() > end {
-                return Err("the Storage node did not start".into());
+                return Err(format!("the Storage node did not start{}", if note.is_empty() { String::new() } else { format!(": {note}") }));
             }
             std::thread::sleep(Duration::from_millis(500));
         }
@@ -188,14 +251,27 @@ impl LogosStore {
         }
         let node = guard.as_mut().expect("set above");
         if !node.ready {
-            node.bring_up()?;
+            if let Some((at, err)) = &node.hold {
+                if Instant::now() < *at {
+                    return Err(err.clone());
+                }
+            }
+            if let Err(e) = node.bring_up(&self.dir) {
+                let wait = next_wait(node.wait);
+                node.wait = Some(wait);
+                let e = format!("{e} (next try in {} s)", wait.as_secs());
+                node.hold = Some((Instant::now() + wait, e.clone()));
+                return Err(e);
+            }
+            node.wait = None;
         }
         f(&node.proxy, &node.events)
     }
 
     fn temp(&self, tag: &str) -> Result<PathBuf, String> {
-        std::fs::create_dir_all(&self.dir).map_err(|e| format!("{}: {e}", self.dir.display()))?;
-        Ok(self.dir.join(format!("{tag}-{}-{}", std::process::id(), self.seq.fetch_add(1, Ordering::Relaxed))))
+        let dir = self.dir.join("storage-tmp");
+        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        Ok(dir.join(format!("{tag}-{}-{}", std::process::id(), self.seq.fetch_add(1, Ordering::Relaxed))))
     }
 }
 
@@ -229,5 +305,52 @@ impl Store for LogosStore {
         });
         let _ = std::fs::remove_file(&path);
         r
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base() -> Value {
+        json!({"config-version": 3, "data-dir": "/home/u/.logos_storage/data", "listen-port": 8070, "api-bindaddr": "127.0.0.1", "metrics": true, "nat": "auto"})
+    }
+
+    #[test]
+    fn config_gets_own_data_dir_and_free_ports() {
+        let c = node_config(base(), Path::new("/m/spike-a/storage"), None).unwrap();
+        assert_eq!(c["data-dir"], "/m/spike-a/storage");
+        assert_eq!(c["listen-port"], 0);
+        assert!(c.get("api-bindaddr").is_none() && c.get("metrics").is_none());
+        assert_eq!(c["nat"], "auto");
+        let d = node_config(base(), Path::new("/m/spike-b/storage"), None).unwrap();
+        assert_ne!(c["data-dir"], d["data-dir"]);
+    }
+
+    #[test]
+    fn env_override_wins_and_bad_json_is_an_error() {
+        let c = node_config(base(), Path::new("/m/s"), Some(r#"{"data-dir":"/t","nat":"extip:1.2.3.4"}"#)).unwrap();
+        assert_eq!((c["data-dir"].as_str(), c["nat"].as_str()), (Some("/t"), Some("extip:1.2.3.4")));
+        assert!(node_config(base(), Path::new("/m/s"), Some("{")).unwrap_err().starts_with("PUKAAR_STORAGE_CFG"));
+        assert!(node_config(json!("x"), Path::new("/m/s"), None).is_err());
+    }
+
+    #[test]
+    fn wait_grows_to_one_minute() {
+        let w: Vec<u64> = std::iter::successors(Some(next_wait(None)), |w| Some(next_wait(Some(*w)))).take(6).map(|d| d.as_secs()).collect();
+        assert_eq!(w, [5, 10, 20, 40, 60, 60]);
+    }
+
+    #[test]
+    fn keep_file_restores_or_removes() {
+        let dir = std::env::temp_dir().join(format!("pukaar-keep-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("config.json");
+        keep_file(&f, || std::fs::write(&f, "ours").unwrap());
+        assert!(!f.exists(), "no file before: no file after");
+        std::fs::write(&f, "theirs").unwrap();
+        keep_file(&f, || std::fs::write(&f, "ours").unwrap());
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "theirs");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

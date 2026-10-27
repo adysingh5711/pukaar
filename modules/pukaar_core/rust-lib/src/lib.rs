@@ -439,11 +439,12 @@ fn wire_chain(node: &mut Node) {
     node.attach_fetched(Fetched::shared());
 }
 
-/// The Storage client of this module, made on the first sync. Its temp files live in `dir`.
+/// The Storage client of this module, made on the first sync. Its temp files and its data live in
+/// `dir`, the module data dir of this profile.
 static STORE: OnceLock<storage::LogosStore> = OnceLock::new();
 
-fn store(tmp: PathBuf) -> &'static storage::LogosStore {
-    STORE.get_or_init(|| storage::LogosStore::new(tmp))
+fn store(dir: PathBuf) -> &'static storage::LogosStore {
+    STORE.get_or_init(|| storage::LogosStore::new(dir))
 }
 
 /// The wallet of this module: the LEZ wallet crate, with the key in memory only.
@@ -457,14 +458,14 @@ fn chain_tick() {
         let g = SHARED.lock().unwrap();
         let sh = g.as_ref();
         let node = sh.and_then(|sh| sh.node.as_ref());
-        node.and_then(|n| Some((n.chain.clone()?, n.fetched.clone()?, n.key.clone(), sh?.dir.join("storage-tmp"))))
+        node.and_then(|n| Some((n.chain.clone()?, n.fetched.clone()?, n.key.clone(), sh?.dir.clone())))
     };
-    let Some((chain, fetched, key, tmp)) = parts else { return };
+    let Some((chain, fetched, key, dir)) = parts else { return };
     if !chain.lock().unwrap().start() {
         return;
     }
     std::thread::spawn(move || {
-        sync_once(&HttpRpc::new(&env_or("PUKAAR_LEZ_RPC", LEZ_RPC)), store(tmp), &chain, &fetched, &key);
+        sync_once(&HttpRpc::new(&env_or("PUKAAR_LEZ_RPC", LEZ_RPC)), store(dir), &chain, &fetched, &key);
     });
 }
 
@@ -496,7 +497,7 @@ fn write_tick() {
         let env = queue::Env {
             writer: WRITER.get_or_init(|| wallet::WalletWriter::new(dir.join("wallet"), env_or("PUKAAR_LEZ_RPC", LEZ_RPC))),
             rpc: &rpc,
-            store: store(dir.join("storage-tmp")),
+            store: store(dir.clone()),
             chain: &chain,
             fetched: &fetched,
             key: &key,
