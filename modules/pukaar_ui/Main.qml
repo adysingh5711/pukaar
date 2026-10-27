@@ -2869,6 +2869,18 @@ Item {
                                             onConfirmed: root.run("grant_role", [memberRow.modelData.key, "admin", memberRow.modelData.name])
                                         }
                                         ConfirmButton {
+                                            visible: memberRow.canAddSuper && !!memberRow.modelData.name
+                                            text: "Make steward"; name: text + ": " + memberRow.person; confirmText: "Confirm"
+                                            effect: "They become a steward when you send the batch. Everyone on the site can see the change."
+                                            onConfirmed: root.run("grant_role", [memberRow.modelData.key, "steward", memberRow.modelData.name])
+                                        }
+                                        ConfirmButton {
+                                            visible: memberRow.canAddSuper
+                                            text: "Make resident"; name: text + ": " + memberRow.person; confirmText: "Confirm"
+                                            effect: "They become a resident when you send the batch. Everyone on the site can see the change."
+                                            onConfirmed: root.run("grant_role", [memberRow.modelData.key, "resident", ""])
+                                        }
+                                        ConfirmButton {
                                             visible: memberRow.canAddSuper && root.superCount < 2 && !!memberRow.modelData.name
                                             text: "Add super admin"; name: text + ": " + memberRow.person; confirmText: "Confirm"
                                             effect: "They become the second super admin once the chain accepts it."
