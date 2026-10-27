@@ -10,6 +10,7 @@ use crate::sync::Wire;
 use crate::reducer::Config;
 use crate::rpc::{refresh, Chain, SharedChain};
 use pukaar_sites_rules::MemberStatus;
+use crate::event::Key;
 use pukaar_sites_rules::{check_join_request, Role};
 
 const NOW: u64 = T0;
@@ -450,4 +451,156 @@ fn a_spent_request_is_not_waiting_so_a_removed_member_sees_the_removal() {
     // A new request has a higher nonce and waits again.
     join(&n, &mut q, NOW + 1);
     assert!(request_waits(&n, &q));
+}
+
+fn request_of(n: u8, w: &World, nonce: u64) -> Vec<u8> {
+    joinreq::build(&key(n), &derive_lez_secret(&[n; 32]), w.site_id(), nonce, NOW + REQUEST_VALID_MS).to_vec()
+}
+
+fn decline_of(wire: &[u8]) -> (Key, Key, Key, Vec<u8>) {
+    let Some(Wire::JoinDecline { site, request_id, admin, sig }) = Wire::decode(wire) else { panic!("not a decline") };
+    (site, request_id, admin, sig)
+}
+
+#[test]
+fn reject_hides_a_request_for_good_and_a_new_one_shows_again() {
+    let w = World::new();
+    let admin = node(&w, 1);
+    let site = w.site_id();
+    let mut q = locked(&w);
+    let req = request_of(4, &w, NOW);
+    assert!(q.keep_request(&site, &req, NOW));
+    assert_eq!(pending_rows(&admin, &q, NOW).len(), 1);
+    // Reject writes nothing to the chain and queues nothing.
+    reject(&admin, &mut q, &hexk(4), NOW).unwrap();
+    assert!(q.entries.is_empty() && w.sent().is_empty());
+    assert!(pending_rows(&admin, &q, NOW).is_empty());
+    assert!(grant(&admin, &mut q, &hexk(4), "resident", "", NOW).unwrap_err().contains("no join request"));
+    assert!(reject(&admin, &mut q, &hexk(4), NOW).unwrap_err().contains("no join request"));
+    // Delivery brings the same request again, and an older one: both stay hidden.
+    assert!(!q.keep_request(&site, &req, NOW));
+    assert!(!q.keep_request(&site, &request_of(4, &w, NOW - 5), NOW));
+    // A restart keeps it hidden.
+    let again = Queue::load(&w.dir);
+    assert!(pending_rows(&admin, &again, NOW).is_empty());
+    let mut again = again;
+    assert!(!again.keep_request(&site, &req, NOW));
+    // A new request of the same key (a new nonce) shows, and only it.
+    assert!(again.keep_request(&site, &request_of(4, &w, NOW + 1), NOW));
+    assert_eq!(pending_rows(&admin, &again, NOW).len(), 1);
+    // Only an admin may reject.
+    w.put_member(&w.member(3, Role::Resident));
+    let resident = node(&w, 3);
+    assert!(reject(&resident, &mut again, &hexk(4), NOW).unwrap_err().starts_with("not allowed"));
+    // An approval that waits for the batch is not undone by a reject.
+    let item = ApproveReq { request: request_of(4, &w, NOW + 1), role: 0, name: String::new(), profile: None };
+    again.push(site, Intent::Approve { roster_len: 0, items: vec![item] }, St::Held, vec![], NOW);
+    assert!(reject(&admin, &mut again, &hexk(4), NOW).unwrap_err().contains("waits to be sent"));
+}
+
+#[test]
+fn the_joiner_hears_the_decline_and_can_send_again_also_with_no_admin_online() {
+    let w = World::new();
+    let admin = node(&w, 1);
+    let joiner = node(&w, 4);
+    let site = w.site_id();
+    let mut aq = locked(&w);
+    let mut jq = Queue::load(&w.dir.join("joiner"));
+    let (req, _) = join(&joiner, &mut jq, NOW);
+    assert!(request_waits(&joiner, &jq));
+    assert!(aq.keep_request(&site, &req, NOW));
+    let wire = reject(&admin, &mut aq, &hexk(4), NOW).unwrap();
+    let (s, id, a, sig) = decline_of(&wire);
+    assert_eq!((s, a, id), (site, pk(1), jq.mine_id().unwrap()));
+    // The joiner takes it once. A replay finds no request that it sent.
+    assert!(on_decline(&joiner, &mut jq, &s, &id, &a, &sig));
+    assert!((jq.mine.is_none(), jq.declined) == (true, true) && !request_waits(&joiner, &jq));
+    assert!(!on_decline(&joiner, &mut jq, &s, &id, &a, &sig));
+    // The state survives a restart.
+    assert!(Queue::load(&w.dir.join("joiner")).declined);
+    // Send again: a new request, a new profile file, and the declined state is gone.
+    let (req2, id2) = join_again(&joiner, &mut jq, NOW + 10).unwrap();
+    assert_ne!(req, req2);
+    assert!(request_waits(&joiner, &jq) && !jq.declined);
+    assert!(jq.entries.iter().any(|e| e.id == id2 && matches!(e.intent, Intent::Publish { .. })));
+    assert!(aq.keep_request(&site, &req2, NOW), "the admin sees the new request");
+    assert_eq!(pending_rows(&admin, &aq, NOW).len(), 1);
+    // Cancel and send again while the request waits, with the admin away: it needs nobody.
+    let (req3, _) = join_again(&joiner, &mut jq, NOW + 20).unwrap();
+    assert!(req3 != req2 && jq.mine.as_deref() == Some(&req3[..]));
+    // The old request is still valid on the admin side, and the newest one wins there.
+    assert!(aq.keep_request(&site, &req3, NOW));
+    assert!(!aq.keep_request(&site, &req2, NOW));
+    assert_eq!(pending_rows(&admin, &aq, NOW).len(), 1);
+    // A member with a role cannot use it.
+    assert!(join_again(&admin, &mut jq, NOW).unwrap_err().contains("role"));
+}
+
+#[test]
+fn a_forged_or_unsolicited_decline_is_ignored() {
+    let w = World::new();
+    w.put_member(&w.member(3, Role::Resident));
+    let admin = node(&w, 1);
+    let joiner = node(&w, 4);
+    let mut aq = locked(&w);
+    let mut jq = Queue::load(&w.dir.join("joiner"));
+    let (req, _) = join(&joiner, &mut jq, NOW);
+    let id = jq.mine_id().unwrap();
+    let site = w.site_id();
+    let good = joinreq::sign_decline(&key(1), &site, &id);
+    let mut flipped = good.clone();
+    flipped[5] ^= 1;
+    let others = request_id(&request_of(5, &w, NOW).try_into().unwrap());
+    let cases: Vec<(&str, Key, Key, Key, Vec<u8>)> = vec![
+        ("bad signature", site, id, pk(1), flipped),
+        ("signed by a stranger", site, id, pk(5), joinreq::sign_decline(&key(5), &site, &id)),
+        ("signed by a resident", site, id, pk(3), joinreq::sign_decline(&key(3), &site, &id)),
+        ("a request that we did not send", site, others, pk(1), joinreq::sign_decline(&key(1), &site, &others)),
+        ("another site", [9; 32], id, pk(1), joinreq::sign_decline(&key(1), &[9; 32], &id)),
+        ("signature of another request", site, id, pk(1), joinreq::sign_decline(&key(1), &site, &others)),
+        ("short signature", site, id, pk(1), good[..63].to_vec()),
+    ];
+    for (what, s, i, a, sig) in cases {
+        assert!(!on_decline(&joiner, &mut jq, &s, &i, &a, &sig), "{what}");
+        assert!(jq.mine.is_some() && !jq.declined, "{what}: nothing changed");
+    }
+    assert!(Wire::decode(&Wire::JoinDecline { site, request_id: id, admin: pk(1), sig: good[..63].to_vec() }.encode()).is_none());
+    // The real one works, so the checks above were not too strict.
+    assert!(on_decline(&joiner, &mut jq, &site, &id, &pk(1), &good));
+    // An admin cannot decline a request that is not stored or already spent.
+    assert!(reject(&admin, &mut aq, &hexk(4), NOW).is_err());
+    let _ = req;
+}
+
+#[test]
+fn a_spent_request_does_not_show_as_waiting_and_cannot_be_approved() {
+    let w = World::new();
+    let site = w.site_id();
+    // Member 2 was approved with this request, then removed: the chain keeps its nonce.
+    let req = request_of(2, &w, NOW);
+    let mut m = removed(&w, 2);
+    m.last_req_nonce = NOW;
+    w.put_member(&m);
+    let admin = node(&w, 1);
+    let _ = joiner(&w, 2, 0);
+    let mut q = locked(&w);
+    assert!(q.keep_request(&site, &req, NOW));
+    assert!(pending_rows(&admin, &q, NOW).is_empty(), "the chain used this request");
+    assert!(grant(&admin, &mut q, &hexk(2), "resident", "", NOW).unwrap_err().contains("no new join request"));
+    assert!(q.entries.is_empty());
+    // Their new request has a higher nonce: it shows and can be approved.
+    assert!(q.keep_request(&site, &request_of(2, &w, NOW + 1), NOW));
+    assert_eq!(pending_rows(&admin, &q, NOW).len(), 1);
+}
+
+#[test]
+fn the_new_wire_message_is_appended_and_old_ones_keep_their_bytes() {
+    let tag = |w: Wire| w.encode()[0];
+    assert_eq!(tag(Wire::Event(vec![])), 0);
+    assert_eq!(tag(Wire::Heads(vec![])), 1);
+    assert_eq!(tag(Wire::JoinReq(vec![])), 2);
+    assert_eq!(tag(Wire::BlobReq { cid: "c".into(), sha256: [0; 32] }), 6);
+    assert_eq!(tag(Wire::BlobChunk { cid: "c".into(), sha256: [0; 32], index: 0, total: 1, bytes: vec![1] }), 7);
+    let d = Wire::JoinDecline { site: [1; 32], request_id: [2; 32], admin: [3; 32], sig: vec![4; 64] }.encode();
+    assert_eq!((d[0], d.len()), (8, 1 + 3 * 32 + 1 + 64));
 }

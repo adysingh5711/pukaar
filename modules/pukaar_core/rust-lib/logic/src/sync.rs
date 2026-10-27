@@ -69,6 +69,10 @@ pub enum Wire {
     BlobReq { cid: String, sha256: Key },
     /// Chunk `index` of `total` of the file that `BlobReq` named. The receiver checks the whole file.
     BlobChunk { cid: String, sha256: Key, index: u16, total: u16, bytes: Vec<u8> },
+    /// An admin turned a join request down. `sig` (64 bytes) is the ed25519 signature of `admin` over the
+    /// site and the request id (`joinreq::sign_decline`). The joiner accepts it only for a request that it
+    /// sent, from an active admin.
+    JoinDecline { site: Key, request_id: Key, admin: Key, sig: Vec<u8> },
 }
 
 impl Wire {
@@ -96,6 +100,7 @@ impl Wire {
             Wire::BlobChunk { cid, index, total, bytes, .. } => {
                 !cid.is_empty() && cid.len() <= MAX_CID && index < total && usize::from(*total) <= MAX_CHUNKS && !bytes.is_empty() && bytes.len() <= BLOB_CHUNK
             }
+            Wire::JoinDecline { sig, .. } => sig.len() == 64,
             Wire::Heads(_) | Wire::ChainPending { .. } => true,
         };
         ok.then_some(w)

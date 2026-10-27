@@ -38,6 +38,12 @@ pub trait PukaarCoreModule: Send + 'static {
     /// Signs a join request with both keys and sends it to the site: `{"ok":true,"queued":id,"site":hex}`.
     /// `my_identity.pending` is "requested" until an admin approves.
     fn site_join(&mut self, site_hex: String) -> String;
+    /// Admin only. Hides the join request of this person and sends them a signed decline. It writes
+    /// nothing to the chain and costs no fee. A new request from them shows again. `ok` or `error: …`.
+    fn reject_join(&mut self, subject_hex: String) -> String;
+    /// Cancels our join request (waiting, declined, or used by an earlier approval) and sends a new one
+    /// with a fresh profile file: `{"ok":true,"queued":id}`. Refused for a member that has a role.
+    fn join_again(&mut self) -> String;
     /// Drop this device's copy of the site (no event is published); the key stays, so
     /// rejoining is the same person. `ok` or `error: …`.
     fn leave_site(&mut self) -> String;
@@ -570,6 +576,10 @@ fn on_wire(channel: &str, bytes: &[u8]) {
             node.on_join_req(&req);
             queue.lock().unwrap().keep_request(&node.store.site, &req, now_ms());
         }
+        // An admin turned our request down. Only a request that we sent, from an admin, counts.
+        Some(Wire::JoinDecline { site, request_id, admin, sig }) => {
+            ops::on_decline(node, &mut queue.lock().unwrap(), &site, &request_id, &admin, &sig);
+        }
         // The fetchers read the file of an announce and show the newer name.
         Some(Wire::ProfileAnnounce(a)) => {
             node.on_announce(a);
@@ -821,6 +831,25 @@ impl PukaarCoreModule for Pukaar {
         r.map(|id| serde_json::json!({ "ok": true, "queued": id, "site": hex::encode(site) }).to_string()).unwrap_or_else(err)
     }
 
+    fn reject_join(&mut self, subject_hex: String) -> String {
+        let r = queued(|node, q, outbox| {
+            outbox.push(ops::reject(node, q, &subject_hex, now_ms())?);
+            Ok(())
+        });
+        flush();
+        r.map(|()| "ok".to_string()).unwrap_or_else(err)
+    }
+
+    fn join_again(&mut self) -> String {
+        let r = queued(|node, q, outbox| {
+            let (req, id) = ops::join_again(node, q, now_ms())?;
+            outbox.push(Wire::JoinReq(req).encode());
+            Ok(id)
+        });
+        flush();
+        id_reply(r)
+    }
+
     fn leave_site(&mut self) -> String {
         let r = (|| {
             let mut g = SHARED.lock().unwrap();
@@ -861,6 +890,8 @@ impl PukaarCoreModule for Pukaar {
             // A join request of ours is out, and no admin has approved it yet.
             if v["role"].is_null() && ops::request_waits(n, q) {
                 v["pending"] = "requested".into();
+            } else if v["role"].is_null() && q.declined {
+                v["pending"] = "declined".into(); // an admin turned the request down: the user can send it again
             }
             // The one LEZ account of the user (base58): it pays the fee of every write, so the user funds it.
             v["account"] = pukaar_logic::chain::b58(&n.account).into();

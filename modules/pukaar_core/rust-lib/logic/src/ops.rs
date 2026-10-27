@@ -11,11 +11,12 @@ use crate::joinreq;
 use crate::lezkey::{derive_lez_secret, lez_account_id};
 use crate::node::{fingerprint, parse_id, Node};
 use crate::profile;
+use crate::sync::Wire;
 use crate::queue::{ApproveReq, Blob, Intent, Prof, ProfReq, Queue, RevokeReq, St, REQUEST_VALID_MS};
 use crate::rpc::rank_name;
 use crate::writes::{self, Genesis, PlaceOp};
 use ed25519_dalek::SigningKey;
-use pukaar_sites_rules::{can, seed, Action, Member, MemberStatus, Rank, Role, Site};
+use pukaar_sites_rules::{can, request_id, seed, Action, Member, MemberStatus, Rank, Role, Site};
 use serde_json::{json, Value};
 
 /// The cached chain state that a method checks before it queues a write.
@@ -112,10 +113,30 @@ pub fn create_site(node: &Node, q: &mut Queue, ns: NewSite, admin_name: &str, no
 /// `Wire::JoinReq`. The first profile (no name) is queued: an admin needs a profile file to approve us.
 pub fn join(node: &Node, q: &mut Queue, now: u64) -> (Vec<u8>, u64) {
     let req = joinreq::build(&node.key, &derive_lez_secret(&node.key.to_bytes()), node.store.site, now, now + REQUEST_VALID_MS).to_vec();
-    q.mine = Some(req.clone());
+    (q.mine, q.declined) = (Some(req.clone()), false);
     let version = next_version(node, q);
-    let id = q.push(node.store.site, Intent::Publish { name: String::new(), version, bio: String::new(), experience: String::new() }, St::Preparing, vec![], now);
+    // A first join has no name. A new request keeps the name and the texts that we know of ourselves.
+    let me = node.me();
+    let (bio, experience) = node.about.get(&me).cloned().unwrap_or_default();
+    let name = node.names.get(&me).cloned().unwrap_or_default();
+    let id = q.push(node.store.site, Intent::Publish { name, version, bio, experience }, St::Preparing, vec![], now);
     (req, id)
+}
+
+/// `join_again`: the user cancels the request that waits, or that was declined or spent (a removed member),
+/// and sends a new one with a fresh profile file. The old request stays valid on the admin side, but a
+/// request of the same key with a higher nonce replaces it there.
+pub fn join_again(node: &Node, q: &mut Queue, now: u64) -> Result<(Vec<u8>, u64), String> {
+    if node.role_now(&node.me()).is_some() {
+        return Err("you have a role in this site already".into());
+    }
+    Ok(join(node, q, now))
+}
+
+/// A join request that the chain used already: its nonce is at or below `last_req_nonce` of the member.
+/// The chain refuses it a second time, so it must not show as waiting or be approved.
+fn spent(members: &[Member], b: &pukaar_sites_rules::JoinBody) -> bool {
+    members.iter().any(|m| m.user == b.user_account && m.last_req_nonce >= b.nonce)
 }
 
 /// A bio or an experience text: no control characters except a new line, at most `MAX_TEXT` characters.
@@ -157,7 +178,10 @@ pub fn grant(node: &Node, q: &mut Queue, subject_hex: &str, role: &str, name: &s
         drop_held(q, &site, |i| matches!(i, Intent::SetRole { items } if items[0].0 == user));
         return Ok(q.push(site, Intent::SetRole { items: vec![(user, writes::role_code(role))] }, St::Held, vec![], now));
     }
-    let (_, request) = q.request_for(&subject, now).ok_or("no join request from this person, or it expired: ask them to join again")?;
+    let (body, request) = q.request_for(&subject, now).ok_or("no join request from this person, or it expired: ask them to join again")?;
+    if spent(&v.members, &body) {
+        return Err("no new join request from this person: ask them to join again".into());
+    }
     v.need(Action::Approve(role), None)?;
     // The approval opens the file of the joiner, so we must hold its bytes now (Delivery or the fetcher
     // brought them): the write thread never waits for a remote Storage node.
@@ -313,6 +337,35 @@ pub fn send_batch(node: &Node, q: &mut Queue, now: u64) -> Result<Vec<u64>, Stri
     Ok(ids)
 }
 
+/// `reject_join`: hide the join request of a person and tell them. It writes nothing to the chain and
+/// costs no fee. Returns the `Wire::JoinDecline` bytes for the site channel.
+pub fn reject(node: &Node, q: &mut Queue, subject_hex: &str, now: u64) -> Result<Vec<u8>, String> {
+    let subject = parse_id(subject_hex.trim()).ok_or("bad member key")?;
+    view(node)?.need(Action::Approve(Role::Resident), None)?;
+    let (_, request) = q.request_for(&subject, now).ok_or("no join request from this person, or it expired")?;
+    if q.is_queued_approval(&node.store.site, &subject) {
+        return Err("an approval for this person waits to be sent: it cannot be rejected now".into());
+    }
+    let id = request_id(request.as_slice().try_into().map_err(|_| "bad join request")?);
+    q.reject(id);
+    let sig = joinreq::sign_decline(&node.key, &node.store.site, &id);
+    Ok(Wire::JoinDecline { site: node.store.site, request_id: id, admin: node.me(), sig }.encode())
+}
+
+/// A `Wire::JoinDecline` from Delivery. It counts only for the request that we sent, from an active admin
+/// of this site, with a good signature. Anything else is ignored, so a stranger or a replay changes
+/// nothing, and the check costs one signature at most. True when we accepted it.
+pub fn on_decline(node: &Node, q: &mut Queue, site: &Key, request_id: &Key, admin: &Key, sig: &[u8]) -> bool {
+    let ours = *site == node.store.site && q.mine_id() == Some(*request_id);
+    let by_admin = || node.role_now(admin).is_some_and(|r| r >= Rank::Admin);
+    if !(ours && by_admin() && joinreq::check_decline(admin, site, request_id, sig)) {
+        return false;
+    }
+    (q.mine, q.declined) = (None, true);
+    q.save();
+    true
+}
+
 /// Is our join request still waiting? The chain keeps the nonce of the last request that it used
 /// (`last_req_nonce`): a request at or below it is spent. An approved and later removed member must
 /// see the removal, not "request sent".
@@ -347,9 +400,10 @@ pub fn status(node: &Node, q: &Queue, now_ms: u64) -> Value {
 
 /// `site_info.pending`: the join requests that wait for an admin.
 pub fn pending_rows(node: &Node, q: &Queue, now: u64) -> Vec<Value> {
+    let members = node.chain.as_ref().map_or_else(Vec::new, |c| c.lock().unwrap().snapshot().1);
     q.requests(&node.me(), now)
         .into_iter()
-        .filter(|b| node.role_now(&b.pukaar_ed_pk).is_none())
+        .filter(|b| node.role_now(&b.pukaar_ed_pk).is_none() && !spent(&members, b))
         .map(|b| {
             json!({
                 "key": hex::encode(b.pukaar_ed_pk), "fingerprint": fingerprint(&b.pukaar_ed_pk),

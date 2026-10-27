@@ -44,6 +44,24 @@ pub fn parse(req: &[u8]) -> Result<(JoinBody, [u8; 32]), String> {
     Ok((body, request_id(req)))
 }
 
+const DECLINE_DOMAIN: &[u8] = b"pukaar/joindecline/v1\0";
+
+fn decline_message(site: &[u8; 32], request_id: &[u8; 32]) -> Vec<u8> {
+    [DECLINE_DOMAIN, site, request_id].concat()
+}
+
+/// An admin's signature (64 bytes) that turns the join request `request_id` of `site` down.
+pub fn sign_decline(admin: &SigningKey, site: &[u8; 32], request_id: &[u8; 32]) -> Vec<u8> {
+    admin.sign(&decline_message(site, request_id)).to_bytes().to_vec()
+}
+
+/// Does `sig` come from the Pukaar key `admin` for this site and request? The caller checks that the
+/// key belongs to an admin.
+pub fn check_decline(admin: &[u8; 32], site: &[u8; 32], request_id: &[u8; 32], sig: &[u8]) -> bool {
+    let (Ok(vk), Ok(sig)) = (VerifyingKey::from_bytes(admin), <[u8; 64]>::try_from(sig)) else { return false };
+    vk.verify_strict(&decline_message(site, request_id), &ed25519_dalek::Signature::from_bytes(&sig)).is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

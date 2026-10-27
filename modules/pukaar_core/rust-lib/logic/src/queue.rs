@@ -43,6 +43,7 @@ pub const PREP_WINDOW_MS: u64 = 10 * 60 * 1000;
 pub const TICK_EVERY: Duration = Duration::from_secs(5);
 const KEEP_DONE: usize = 30;
 const MAX_REQUESTS: usize = 256;
+const MAX_REJECTED: usize = 256;
 const UPLOAD_TRIES: u32 = 5;
 /// A join request is valid for a day.
 pub const REQUEST_VALID_MS: u64 = 24 * 60 * 60 * 1000;
@@ -323,6 +324,13 @@ pub struct Queue {
     requests: Vec<Vec<u8>>,
     /// The join request that we sent.
     pub mine: Option<Vec<u8>>,
+    /// The ids of the join requests that this admin rejected: they stay hidden, also when Delivery brings
+    /// them again. At most `MAX_REJECTED`, the oldest go first (a request is valid for a day anyway).
+    #[serde(default)]
+    rejected: Vec<Key>,
+    /// An admin declined our request: the UI says so and offers to send it again.
+    #[serde(default)]
+    pub declined: bool,
     /// The highest profile version that we gave out.
     pub profile_version: u64,
     #[serde(skip)]
@@ -394,6 +402,8 @@ impl Queue {
         self.entries.retain(|e| e.site != *site);
         self.requests.clear();
         self.mine = None;
+        self.rejected.clear();
+        self.declined = false;
     }
 
     /// The worker died in the middle of a tick: let the next one start.
@@ -416,8 +426,8 @@ impl Queue {
     /// Keep a join request from Delivery. It must be for this site, signed twice and not expired. A
     /// newer request of the same Pukaar key replaces the older. True when it was kept.
     pub fn keep_request(&mut self, site: &Key, req: &[u8], now_ms: u64) -> bool {
-        let Ok((body, _)) = joinreq::parse(req) else { return false };
-        if body.site_id != *site || body.valid_until_ms <= now_ms {
+        let Ok((body, id)) = joinreq::parse(req) else { return false };
+        if body.site_id != *site || body.valid_until_ms <= now_ms || self.rejected.contains(&id) {
             return false;
         }
         let same = |r: &Vec<u8>| body_of(r).is_some_and(|b| b.pukaar_ed_pk == body.pukaar_ed_pk);
@@ -448,9 +458,30 @@ impl Queue {
         written.chain(asked).collect()
     }
 
-    /// The newest join request of a Pukaar key that has not expired.
+    /// The newest join request of a Pukaar key that has not expired and was not rejected.
     pub fn request_for(&self, key: &Key, now_ms: u64) -> Option<(JoinBody, Vec<u8>)> {
-        self.requests.iter().find_map(|r| body_of(r).filter(|b| b.pukaar_ed_pk == *key && b.valid_until_ms > now_ms).map(|b| (b, r.clone())))
+        self.requests.iter().find_map(|r| body_of(r).filter(|b| b.pukaar_ed_pk == *key && b.valid_until_ms > now_ms && !self.is_rejected(r)).map(|b| (b, r.clone())))
+    }
+
+    fn is_rejected(&self, req: &[u8]) -> bool {
+        <&[u8; JOIN_REQ_LEN]>::try_from(req).is_ok_and(|r| self.rejected.contains(&request_id(r)))
+    }
+
+    /// Hide a join request by its id. The request itself stays stored, so an older copy that Delivery
+    /// brings again loses to it (the newest nonce of a key wins). A newer request of the key shows again.
+    pub fn reject(&mut self, id: Key) {
+        if !self.rejected.contains(&id) {
+            if self.rejected.len() >= MAX_REJECTED {
+                self.rejected.remove(0);
+            }
+            self.rejected.push(id);
+            self.save();
+        }
+    }
+
+    /// The id of the join request that we sent.
+    pub fn mine_id(&self) -> Option<Key> {
+        <&[u8; JOIN_REQ_LEN]>::try_from(self.mine.as_deref()?).ok().map(request_id)
     }
 
     /// Does an approval of this Pukaar key wait or run?
@@ -458,9 +489,10 @@ impl Queue {
         self.open(site).any(|e| matches!(&e.intent, Intent::Approve { items, .. } if items.iter().any(|i| body_of(&i.request).is_some_and(|b| b.pukaar_ed_pk == *key))))
     }
 
-    /// The requests that wait: not expired, and not ours.
+    /// The requests that wait: not expired, not rejected, and not ours.
     pub fn requests(&self, me: &Key, now_ms: u64) -> Vec<JoinBody> {
-        self.requests.iter().filter_map(|r| body_of(r)).filter(|b| b.valid_until_ms > now_ms && b.pukaar_ed_pk != *me).collect()
+        let waits = |r: &&Vec<u8>| !self.is_rejected(r);
+        self.requests.iter().filter(waits).filter_map(|r| body_of(r)).filter(|b| b.valid_until_ms > now_ms && b.pukaar_ed_pk != *me).collect()
     }
 
     /// Turn the held writes and the refreshes into batches of `BATCH` (10). Returns the new ids. An approval

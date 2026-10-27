@@ -40,7 +40,7 @@ Item {
     readonly property bool removed: inSite && !approved && !!me.revoked && me.pending !== "requested" && !pending.some(function (p) { return p.key === me.key })
     readonly property bool unapproved: !approved && !removed      // no role, and it is ours to ask for: read the fingerprint at the kiosk
     // Joined and not yet granted a role: our request is out (my_identity.pending), or the site data is here.
-    readonly property bool awaitingApproval: inSite && unapproved && (me.pending === "requested" || !!info.name)
+    readonly property bool awaitingApproval: inSite && unapproved && me.pending !== "declined" && (me.pending === "requested" || !!info.name)
     readonly property bool isAdmin: me.role === "Admin"
     readonly property bool isSuper: !!me.super_admin     // changes admins; at most two per site
     readonly property int superCount: (info.super_admins || []).length
@@ -2192,6 +2192,17 @@ Item {
             text: (root.me.pending === "requested" ? "Your request is with the admin. " : "")
                   + "Waiting for the admin to approve you. Your fingerprint: " + (root.me.fingerprint || "")
                   + ". Read it aloud at the kiosk. After approval you can report faults, confirm fixes and comment."
+            buttonText: "Cancel and send again"
+            buttonEffect: "This sends a new request with your profile. The old request stays valid until it expires."
+            onActivated: root.run("join_again", [])
+        }
+        Flash {   // an admin turned the request down: it can be sent again, also when no admin is online
+            visible: root.inSite && root.unapproved && root.me.pending === "declined"
+            icon: "warn"
+            lead: "Request declined."
+            text: "The admin declined this request. You can send it again."
+            buttonText: "Send again"
+            onActivated: root.run("join_again", [])
         }
         Flash {   // the wallet cannot use our key: nothing can be sent to the chain
             visible: root.inSite && root.keyProblem !== ""
@@ -2226,6 +2237,9 @@ Item {
             err: true
             text: root.removed ? "Your role was removed by " + root.who(root.me.revoked.by, root.me.revoked.by_name) + " on " + root.when(root.me.revoked.ts, "d MMM")
                                  + ": " + root.me.revoked.reason + " You can still read the board, and your past reports stay. To take part again, ask the admin to grant you a role." : ""
+            buttonText: "Ask to join again"
+            buttonEffect: "This sends a new request to the admin."
+            onActivated: root.run("join_again", [])
         }
         Flash {
             visible: root.inSite && root.syncing
@@ -2789,12 +2803,17 @@ Item {
                                     Fingerprint { big: true; text: pendingRow.modelData.fingerprint }
                                     Label {
                                         Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
-                                        text: pendingRow.modelData.name || "(no name)"
+                                        text: pendingRow.modelData.name || "Details have not arrived yet."
                                         color: pendingRow.modelData.name ? root.t.fg : root.t.muted
                                         font.weight: pendingRow.modelData.name ? Font.DemiBold : Font.Normal
                                     }
                                 }
                                 WriteMark { account: pendingRow.modelData.account || ""; queued: !!pendingRow.modelData.queued }
+                                ConfirmButton {   // free: nothing goes to the chain
+                                    text: "Reject"; name: "Reject: " + pendingRow.person; confirmText: "Confirm reject"
+                                    effect: "They can send the request again."
+                                    onConfirmed: root.run("reject_join", [pendingRow.modelData.key])
+                                }
                             }
                         }
                     }
