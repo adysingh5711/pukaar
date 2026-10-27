@@ -214,11 +214,6 @@ Item {
         })
     }
     function closeIssue() { selected = null }
-    // The core's Delivery state, in plain words (the raw Down/Listening/Starting/Started/Open are internal).
-    function deliveryLabel(d) {
-        if (failed(d)) return "offline: " + d.substr("error: ".length)
-        return d === "Open" ? "online" : "connecting"
-    }
     function failed(v) {
         return typeof v === "string" && (v.indexOf("error:") === 0 || v.indexOf("rejected:") === 0)
     }
@@ -328,13 +323,53 @@ Item {
             : (w.accounts || []).length === 0 && w.kind !== "profile" && isLive(w))
     }).slice(-3)
     function dismiss(id) { var d = Object.assign({}, dismissed); d[id] = true; dismissed = d }
-    // The sidebar's status lines, from site_info: the chain block, and the files that Storage still owes.
-    readonly property string chainText: !info.chain ? "connecting" : info.chain.ok ? "block " + info.chain.block
-        : info.chain.error ? "offline: " + info.chain.error : "connecting"
-    readonly property bool chainOk: !!info.chain && !!info.chain.ok
-    readonly property string storageText: !info.storage ? "connecting" : info.storage.error ? "problem: " + info.storage.error
-        : info.storage.pending > 0 ? "waiting for storage (" + plural(info.storage.pending, "file") + ")" : "ready"
-    readonly property bool storageOk: !!info.storage && !info.storage.error && !(info.storage.pending > 0)
+    // Delivery, chain and Storage as one status each: {name, site, tone, state, detail}. The tone is "ok" (green),
+    // "conn" (amber: working or not known yet), "idle" (grey: nothing to read yet) or "off" (red: a real problem).
+    // The sidebar shows only the tone, Profile shows every word, so the two always agree.
+    // The chain is red only when a read really failed. A site that is not created yet is grey, never an outage.
+    function agoMs(ms) {
+        var sec = Math.max(0, now - ms / 1000)
+        return (sec < 120 ? "just now" : sec < 3600 ? Math.floor(sec / 60) + " min ago" : dur(Math.floor(sec / 3600)) + " ago") + " (" + when(ms / 1000, "HH:mm") + ")"
+    }
+    readonly property var connRows: {
+        var d = me.delivery, c = info.chain, s = info.storage
+        var gone = failed(d)
+        var chainRow = !c ? ["conn", "Connecting", "Waiting for the first read of the chain."]
+            : c.ok ? ["ok", "Online", "Last read: block " + c.block + (c.read_ms ? ", " + agoMs(c.read_ms) : "") + "."]
+            : c.missing ? ["idle", "Site not created yet", "The site is not on the chain yet."]
+            : c.error ? ["off", "Offline", "The chain read failed: " + c.error + (c.block ? ". Last good read: block " + c.block + (c.read_ms ? ", " + agoMs(c.read_ms) : "") : "") + "."]
+            : ["conn", "Connecting", "Waiting for the first read of the chain."]
+        var files = s && s.pending > 0 ? plural(s.pending, "file") + " waiting." : "No files are waiting."
+        var storageRow = !s ? ["conn", "Connecting", "Waiting for the Storage module."]
+            : s.error ? ["off", s.ready ? "Running, with an error" : "Not running", s.error + (s.pending > 0 ? " " + files : "")]
+            : s.ready ? [s.pending > 0 ? "conn" : "ok", "Running", files]
+            : s.pending > 0 ? ["conn", "Starting", "The Storage node is starting. This can take a minute. " + files]
+            : ["conn", "Not started yet", "Storage starts when the site needs a file."]
+        return [
+            { name: "Delivery", site: false, tone: gone ? "off" : d === "Open" ? "ok" : "conn", state: gone ? "Offline" : d === "Open" ? "Online" : "Connecting",
+              detail: gone ? "Reason: " + d.replace(/^(error|rejected): /, "") : d === "Open" ? "Messages to other members can go out." : "Waiting for the delivery network." },
+            { name: "Chain", site: true, tone: chainRow[0], state: chainRow[1], detail: chainRow[2] },
+            { name: "Storage", site: true, tone: storageRow[0], state: storageRow[1], detail: storageRow[2] }
+        ]
+    }
+    // A status dot colour: the sidebar's tokens, or the page's.
+    function toneColor(tone, side) {
+        return (side ? { ok: t.sbOk, conn: t.sbConn, off: t.sbOff, idle: t.sbCtl } : { ok: t.okDot, conn: t.connDot, off: t.danger, idle: t.ctlBd })[tone]
+    }
+    // The newest queued write, in one line, for the Profile status card.
+    readonly property string latestWrite: {
+        var w = writes.length ? writes[writes.length - 1] : null
+        if (!w) return "No change has been sent to the chain yet."
+        var why = w.reason ? String(w.reason).substr(0, 140) + (String(w.reason).length > 140 ? "…" : "") : ""
+        return "Latest change for the chain: #" + w.id + ", " + (kindText[w.kind] || w.kind) + ", " + (stateText[w.state] || w.state) + (why ? ". Reason: " + why : ".")
+    }
+    // Why the chain refused a write, as a hint: funds only when the reason is about fees or funds.
+    // ponytail: a word match on the reason text. Ceiling: a new wording from the chain is not caught.
+    function rejectHint(reason) {
+        var r = String(reason || "")
+        return /\b(funds?|balance|fees?|insufficient|lepta)\b/i.test(r) ? "Check that your network account has funds."
+             : /\bstorage\b/i.test(r) ? "Storage did not start. See Profile for details." : ""
+    }
     function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") }
     function place(i) {
         var l = placeByCode(i.location)
@@ -1926,7 +1961,6 @@ Item {
         readonly property bool open: root.sidebarOpen
         // the toggle sits on the site-name line: card top + border and padding + half the first line
         readonly property real nameY: siteCard.parent.y + siteCard.y + (open ? 11 : 9) + siteTitle.contentHeight / siteTitle.lineCount / 2
-        readonly property string deliveryText: root.deliveryLabel(root.me.delivery)
         readonly property color on: root.t.sbFg
         readonly property string fp: root.me.fingerprint || ""
         Rectangle { anchors.right: parent.right; width: 1; height: parent.height; color: root.t.sbEdge }
@@ -2000,31 +2034,36 @@ Item {
             ColumnLayout {
                 Layout.fillWidth: true; Layout.topMargin: -4
                 spacing: 12
-                Repeater {   // delivery, chain and storage: a dot and the status, the reason in red when it failed
-                    model: [
-                        { label: "delivery:", text: sidebar.deliveryText, tone: root.failed(root.me.delivery) ? "off" : sidebar.deliveryText === "online" ? "ok" : "conn" },
-                        { label: "chain:", text: root.chainText, tone: root.chainOk ? "ok" : root.info.chain && root.info.chain.error ? "off" : "conn", site: true },
-                        { label: "storage:", text: root.storageText, tone: root.storageOk ? "ok" : root.info.storage && root.info.storage.error ? "off" : "conn", site: true }
-                    ].filter(function (e) { return !e.site || root.inSite })
-                    delegate: GridLayout {
-                        id: status
-                        required property var modelData
-                        readonly property color tone: modelData.tone === "off" ? root.t.sbOff : modelData.tone === "ok" ? root.t.sbOk : root.t.sbConn
-                        Layout.fillWidth: true
-                        columns: sidebar.open ? 3 : 1; columnSpacing: 8; rowSpacing: 4
-                        Accessible.name: modelData.label + " " + modelData.text
-                        Rectangle {
-                            Layout.alignment: Qt.AlignHCenter | Qt.AlignTop; Layout.topMargin: sidebar.open ? 3 : 0
-                            implicitWidth: 10; implicitHeight: 10; radius: 5
-                            color: status.tone
-                        }
-                        Label { Layout.alignment: sidebar.open ? Qt.AlignTop : Qt.AlignHCenter; text: status.modelData.label; color: root.t.sbMuted; font.pointSize: root.smallSize }
-                        Label {
-                            Layout.fillWidth: true; Layout.alignment: Qt.AlignTop
-                            text: status.modelData.text; wrapMode: Text.Wrap
-                            horizontalAlignment: sidebar.open ? Text.AlignLeft : Text.AlignHCenter
-                            color: status.modelData.tone === "off" ? root.t.sbDanger : sidebar.on
-                            font.pointSize: root.smallSize; font.weight: Font.Medium
+                GridLayout {   // delivery, chain and Storage: one dot each, no words. A click opens Profile, which has the details.
+                    Layout.alignment: sidebar.open ? Qt.AlignLeft : Qt.AlignHCenter
+                    Layout.leftMargin: sidebar.open ? 2 : 0
+                    columns: sidebar.open ? 3 : 1; columnSpacing: 0; rowSpacing: 0     // the rail is 67 px wide: three 28 px buttons would not fit in a row
+                    Repeater {
+                        model: root.connRows.filter(function (e) { return !e.site || root.inSite })
+                        delegate: AbstractButton {
+                            id: dot
+                            required property var modelData
+                            implicitWidth: 28; implicitHeight: 28
+                            hoverEnabled: true
+                            focusPolicy: Qt.StrongFocus
+                            objectName: "statusDot-" + modelData.name
+                            Accessible.name: modelData.name + ": " + modelData.state + ". See Profile for details"
+                            HoverHandler { cursorShape: Qt.PointingHandCursor }
+                            SideTip {
+                                objectName: "statusTip-" + dot.modelData.name
+                                x: (dot.width - width) / 2; y: -height - 6; margins: 4     // above the dot: a tip on the right would hide the next dot
+                                text: root.inSite ? "See Profile for details" : dot.modelData.name + ": " + dot.modelData.state.toLowerCase()
+                                visible: dot.hovered || dot.visualFocus
+                            }
+                            onClicked: if (root.inSite) root.openPage("profile")
+                            background: Rectangle {
+                                radius: 6
+                                color: dot.hovered ? root.t.sbHover : "transparent"
+                                border.width: dot.visualFocus ? 2 : 0; border.color: root.t.focus
+                            }
+                            contentItem: Item {
+                                Rectangle { anchors.centerIn: parent; width: 12; height: 12; radius: 6; color: root.toneColor(dot.modelData.tone, true) }
+                            }
                         }
                     }
                 }
@@ -2174,9 +2213,9 @@ Item {
                 lead: site ? (rejected ? "The site was not created." : modelData.state === "included" ? "The site is on the chain."
                                 : "Creating on the chain.")
                            : root.kindText[modelData.kind] + (rejected ? " was rejected." : " is on its way to the chain.")
-                text: (rejected ? "Reason: " + (modelData.reason || "none given") + "."
-                                  + (site ? " Check that your network account has funds, then start again." : " Nothing changed.")
-                                : "Status: " + root.stateText[modelData.state] + ".")
+                text: rejected ? "Reason: " + String(modelData.reason || "none given").replace(/\.$/, "") + "."
+                                 + (root.rejectHint(modelData.reason) ? " " + root.rejectHint(modelData.reason) : "") + (site ? " You can start again." : " Nothing changed.")
+                               : "Status: " + root.stateText[modelData.state] + "."
                 buttonText: site && rejected ? "Start again" : ""
                 buttonIcon: site && rejected ? "" : "x"; buttonName: site && rejected ? "Start again" : "Close this message"
                 onActivated: site && rejected ? root.leave() : root.dismiss(modelData.id)
@@ -3222,6 +3261,49 @@ Item {
                         buttonText: "Back up key"
                         onActivated: exportPassword.forceActiveFocus()
                     }
+                    Heading { text: "Connection status" }
+                    Rectangle {
+                        objectName: "connCard"
+                        Layout.fillWidth: true
+                        implicitHeight: connCol.implicitHeight + 2
+                        radius: 8; color: root.t.card; border.color: root.t.bd
+                        ColumnLayout {
+                            id: connCol
+                            x: 1; y: 1; width: parent.width - 2
+                            spacing: 0
+                            Repeater {
+                                model: root.connRows
+                                delegate: ColumnLayout {
+                                    id: crow
+                                    required property var modelData
+                                    required property int index
+                                    Layout.fillWidth: true
+                                    spacing: 0
+                                    Accessible.role: Accessible.StaticText
+                                    Accessible.name: modelData.name + ": " + modelData.state + ". " + modelData.detail
+                                    Rectangle { visible: crow.index > 0; Layout.fillWidth: true; implicitHeight: 1; color: root.t.bd }
+                                    RowLayout {
+                                        Layout.fillWidth: true; Layout.margins: 12; Layout.leftMargin: 16; Layout.rightMargin: 16
+                                        spacing: 12
+                                        Rectangle {
+                                            Layout.alignment: Qt.AlignTop; Layout.topMargin: 5
+                                            implicitWidth: 12; implicitHeight: 12; radius: 6; color: root.toneColor(crow.modelData.tone, false)
+                                        }
+                                        ColumnLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 2
+                                            Label {
+                                                Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.RichText
+                                                text: "<b>" + root.esc(crow.modelData.name) + "</b> &nbsp;<font color='" + (crow.modelData.tone === "idle" ? root.t.muted : crow.modelData.tone === "off" ? root.t.danger : root.t.fg) + "'>" + root.esc(crow.modelData.state) + "</font>"
+                                            }
+                                            Help { text: crow.modelData.detail }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Help { Layout.bottomMargin: 8; text: root.latestWrite }
                     FormRow {
                         label: "Your code"; sub: root.unapproved ? "(read it aloud at the kiosk)" : ""
                         Fingerprint { text: root.me.fingerprint || ""; big: root.unapproved }
