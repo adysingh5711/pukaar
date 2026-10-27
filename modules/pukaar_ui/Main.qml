@@ -1495,7 +1495,7 @@ Item {
         }
         FlagLine {
             visible: mark.rejected; Layout.fillWidth: true
-            modelData: mark.rejected ? "Rejected" + root.writeWhy(mark.w) + ". The row is back to how it was." : ""
+            modelData: mark.rejected ? "Rejected" + root.writeWhy(mark.w) + "." : ""
         }
     }
 
