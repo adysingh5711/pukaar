@@ -24,7 +24,7 @@
     };
     # Only the typed client wrapper is generated from these two. The .lgx of each is installed into Basecamp on its own.
     storage_module = {
-      url = "github:logos-co/logos-storage-module/v3.0.0";
+      url = "github:logos-co/logos-storage-module/v3.0.2";
       inputs.logos-module-builder.follows = "logos-module-builder";
     };
     nixpkgs.follows = "logos-module-builder/nixpkgs";
