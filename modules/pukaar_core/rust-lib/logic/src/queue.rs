@@ -22,7 +22,7 @@ use crate::fetch::{Details, Places, SharedFetched, Store};
 use crate::joinreq;
 use crate::lezkey::{derive_lez_secret, lez_account_id};
 use crate::profile::{self, Announce, MAX_INLINE_PROFILE};
-use crate::rpc::{clock_ms, get_account, Rpc, SharedChain};
+use crate::rpc::{claim_ms, get_account, Rpc, SharedChain};
 use crate::sync::{Wire, WriteKind};
 use crate::writes::{self, Ctx, PlaceOp, Pointed, SuperOp, Tx};
 use ed25519_dalek::SigningKey;
@@ -861,7 +861,7 @@ fn send(env: &Env, e: &mut Entry, ks: &mut KeyState, commit: &dyn Fn(&Entry)) ->
             return Ok(());
         }
     }
-    let ctx = Ctx { program: env.program, site_id: e.site, signer: me, claimed: claimed(&r, &me), now_ms: clock_ms(env.rpc)? };
+    let ctx = Ctx { program: env.program, site_id: e.site, signer: me, claimed: claimed(&r, &me), now_ms: claim_ms(env.rpc)? };
     let tx = match build(&ctx, e, &r) {
         Ok(t) => t,
         Err(why) => {

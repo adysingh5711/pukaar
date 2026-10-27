@@ -98,11 +98,28 @@ pub fn read_roster(
 }
 
 /// The chain time in ms. The clock account `CLOCK_01` keeps the block id and the timestamp (8 bytes
-/// little endian each) in the shard of the clock program. Every write claims this time.
+/// little endian each) in the shard of the clock program. A write claims `claim_ms`, not this time.
 pub fn clock_ms(rpc: &dyn Rpc) -> Result<u64, String> {
     let data = get_account(rpc, &crate::writes::clock_program(), &crate::writes::CLOCK_ACCOUNT)?;
     let t = data.get(8..16).ok_or("the clock account holds no time")?;
     Ok(u64::from_le_bytes(t.try_into().expect("8 bytes")))
+}
+
+/// How far below the chain clock every write claims its `now_ms`. The program rejects a claim that is
+/// ahead of the clock it sees (`ClockBehind`) and one that is more than 900_000 ms behind (`ClockStale`).
+/// A tx in block N sees the clock of block N-1, and the RPC can show a block that the sequencer later
+/// replaces (it did once: the read was 60_000 ms ahead and a paid write was lost). 120_000 covers that.
+pub const CLAIM_MARGIN_MS: u64 = 120_000;
+
+/// The `now_ms` claim of a write, from the clock that was just read.
+pub fn claim_of(clock: u64) -> u64 {
+    clock.saturating_sub(CLAIM_MARGIN_MS)
+}
+
+/// The `now_ms` claim of every write. It reads the clock again each time (never reuse an older read, and
+/// never use the wall clock), so a clock that went backwards gives a lower claim.
+pub fn claim_ms(rpc: &dyn Rpc) -> Result<u64, String> {
+    clock_ms(rpc).map(claim_of)
 }
 
 fn now_ms() -> u64 {

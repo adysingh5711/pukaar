@@ -56,7 +56,7 @@ pub struct Ctx {
     pub signer: AccountId,
     /// The rank we hold on the chain: a super admin claims `SuperAdmin`.
     pub claimed: Rank,
-    /// The chain clock (`rpc::clock_ms`), the `now_ms` claim.
+    /// The `now_ms` claim (`rpc::claim_ms`): the chain clock minus a margin.
     pub now_ms: u64,
 }
 

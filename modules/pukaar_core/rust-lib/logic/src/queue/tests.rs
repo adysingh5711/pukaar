@@ -3,7 +3,7 @@
 use super::*;
 use crate::chain::{b58, AccountId};
 use crate::fetch::Fetched;
-use crate::rpc::Chain;
+use crate::rpc::{claim_of, Chain, CLAIM_MARGIN_MS};
 use pukaar_sites_rules::{apply_create, CreateSite, GateConfig, Instruction};
 use serde_json::{json, Value};
 use std::collections::VecDeque;
@@ -274,7 +274,7 @@ fn a_role_change_goes_sent_landed_done() {
     let e = w.entry(id);
     assert_eq!((e.state, e.tx.as_deref()), (St::Sent, Some(&*hex::encode([1u8; 32]))));
     // The instruction is the builder's, with the chain clock and the rank we hold (super admin).
-    let ctx = Ctx { program: PROGRAM, site_id: w.site_id(), signer: acct(1), claimed: Rank::SuperAdmin, now_ms: CLOCK_NOW };
+    let ctx = Ctx { program: PROGRAM, site_id: w.site_id(), signer: acct(1), claimed: Rank::SuperAdmin, now_ms: claim_of(CLOCK_NOW) };
     assert_eq!(w.sent()[0], writes::set_role_batch(&ctx, vec![(acct(2), Role::Steward)]));
     assert!(matches!(&w.out.lock().unwrap()[..], [Wire::ChainPending { tx, kind: WriteKind::SetRole }] if *tx == [1u8; 32]));
 
@@ -476,6 +476,7 @@ fn a_revoke_writes_the_reason_text_then_rotates_the_keyring() {
     assert_eq!(d.revoke_reasons[&hex::encode(sha256(b"spam"))], "spam");
     assert_eq!(d.reasons().len(), 2, "both texts match their hashes");
     assert_eq!(sha256(&w.store.get(&p.cid)), p.sha256);
+    assert_eq!(p.auth.now_ms, claim_of(CLOCK_NOW));
     w.tick(T0 + 2);
     assert_eq!(w.entry(ids[0]).state, St::Done, "the pointer is on the chain");
 
@@ -490,6 +491,7 @@ fn a_revoke_writes_the_reason_text_then_rotates_the_keyring() {
     assert_eq!(profile::open_keyring(&next, &key(1)).unwrap().len(), 2, "the admin reads both epochs");
     w.tick(T0 + 4);
     let Instruction::RevokeBatch(rv) = decode(&w.sent()[1]) else { panic!("not revoke_batch") };
+    assert_eq!(rv.auth.now_ms, claim_of(CLOCK_NOW));
     assert_eq!(rv.keyring_cid, b.cid.unwrap());
     assert_eq!(rv.items.iter().map(|i| i.reason_sha256).collect::<Vec<_>>(), vec![sha256(b"spam"), sha256(b"abuse")]);
 }
@@ -540,7 +542,7 @@ fn an_approval_adds_the_seat_and_the_site_wrap() {
     assert_eq!(ix.keyring_sha256, sha256(&e.blobs[0].bytes));
     assert_eq!(ix.items[0].item.profile_cid, p.cid);
     assert_eq!(ix.auth.claimed, Rank::SuperAdmin);
-    assert_eq!(ix.auth.now_ms, CLOCK_NOW);
+    assert_eq!(ix.auth.now_ms, claim_of(CLOCK_NOW));
 }
 
 #[test]
@@ -788,7 +790,7 @@ fn create_site_waits_for_nothing_and_ends_when_the_site_shows() {
     assert!(w.entry(id).blobs.iter().all(|b| b.cid.is_some()));
     w.tick(T0 + 1);
     let Instruction::CreateSite(ix) = decode(&w.sent()[0]) else { panic!("not create_site") };
-    assert_eq!((ix.args.site_id, ix.args.creator, ix.now_ms), (site_id, acct(1), CLOCK_NOW));
+    assert_eq!((ix.args.site_id, ix.args.creator, ix.now_ms), (site_id, acct(1), claim_of(CLOCK_NOW)));
     assert_eq!(ix.args.keyring_sha256, sha256(b"keyring"));
     assert_eq!(w.entry(id).state, St::Sent);
 }
@@ -799,4 +801,82 @@ fn a_saved_profile_job_without_bio_still_loads() {
     let old = r#"{"Publish":{"name":"Asha","version":3}}"#;
     let i: Intent = serde_json::from_str(old).unwrap();
     assert_eq!(i, Intent::Publish { name: "Asha".into(), version: 3, bio: String::new(), experience: String::new() });
+}
+
+// ---- the now_ms claim ----
+
+fn claim_in(tx: &Tx) -> u64 {
+    match decode(tx) {
+        Instruction::CreateSite(i) => i.now_ms,
+        Instruction::SetDetails(i) | Instruction::SetPlaces(i) | Instruction::SetKeyring(i) => i.auth.now_ms,
+        Instruction::ApproveBatch(i) => i.auth.now_ms,
+        Instruction::SetRoleBatch(i) => i.auth.now_ms,
+        Instruction::RevokeBatch(i) => i.auth.now_ms,
+        Instruction::SetProfileBatch(i) => i.auth.now_ms,
+        Instruction::SuperAdminAdd(i) | Instruction::SuperAdminRemove(i) | Instruction::SuperAdminTransfer(i) => i.auth.now_ms,
+        _ => panic!("no claim"),
+    }
+}
+
+fn set_clock(w: &World, ts: u64) {
+    w.rpc.put(&writes::CLOCK_ACCOUNT, &writes::clock_program(), [&[0u8; 8][..], &ts.to_le_bytes()].concat());
+}
+
+/// Send one write of each kind that needs no file work, against a clock at `ts`, at wall time `wall`.
+fn claims_at(ts: u64, wall: u64) -> Vec<u64> {
+    use pukaar_sites_rules::Role;
+    let w = World::new();
+    w.put_member(&w.member(2, Role::Admin));
+    w.put_member(&w.member(3, Role::Resident));
+    set_clock(&w, ts);
+    let l = crate::event::Location { code: "B-01".into(), label: "Bin".into(), group: "Bins".into() };
+    w.push(role_item(3, Role::Steward), St::Queued, vec![]);
+    w.push(Intent::SuperAdd(acct(2)), St::Queued, vec![]);
+    w.push(Intent::Places { ops: vec![PlaceOp::Add(l)] }, St::Preparing, vec![]);
+    for i in 0..6 {
+        w.poll_next(Poll::Included);
+        w.tick(wall + i);
+        let mut q = w.q.lock().unwrap();
+        for e in q.entries.iter_mut().filter(|e| e.state == St::Sent) {
+            e.state = St::Done; // the next entry goes
+        }
+    }
+    w.sent().iter().map(claim_in).collect()
+}
+
+#[test]
+fn every_claim_is_at_or_below_the_clock_minus_the_margin() {
+    let c = claims_at(CLOCK_NOW, T0);
+    assert!(c.len() >= 3, "set_role, super_admin_add and set_places all went: {c:?}");
+    assert!(c.iter().all(|&n| n == CLOCK_NOW - 120_000), "{c:?}");
+}
+
+#[test]
+fn a_clock_that_goes_backwards_gives_a_lower_claim_and_the_wall_clock_does_not_count() {
+    let back = claims_at(CLOCK_NOW - 300_000, T0);
+    assert!(back.iter().all(|&n| n == CLOCK_NOW - 300_000 - CLAIM_MARGIN_MS), "{back:?}");
+    assert_eq!(claims_at(CLOCK_NOW, T0), claims_at(CLOCK_NOW, T0 + 300_000), "a wall-clock jump changes nothing");
+}
+
+#[test]
+fn the_margin_claim_passes_the_rules_and_the_old_claim_does_not() {
+    use pukaar_sites_rules::{apply_effect, Actor, CLOCK_TOLERANCE_MS, Effect, MemberStatus, Role, RuleError};
+    let w = World::new();
+    let shard = |ts: u64| [&[0u8; 8][..], &ts.to_le_bytes()].concat();
+    // The chain clock that the program sees is `block`. The RPC showed a block 60_000 ms ahead of it
+    // (the lost write): the old claim was that read, the new claim is that read minus the margin.
+    let block = CLOCK_NOW;
+    let read = block + 60_000;
+    assert_eq!(apply_effect(&Effect::ClockIs(read), &shard(block)), Err(RuleError::ClockBehind), "the old claim");
+    assert_eq!(apply_effect(&Effect::ClockIs(claim_of(read)), &shard(block)), Ok(None));
+    assert!(CLAIM_MARGIN_MS + 60_000 < CLOCK_TOLERANCE_MS, "the claim is never stale for a fresh read");
+    // A revoke of an Admin by a super admin, where the Admin was granted after the claim: no rule compares
+    // the claim to the grant time, so the lower claim is accepted.
+    let mut admin = w.member(2, Role::Admin);
+    admin.granted_at_ms = block;
+    let actor = Actor { account: acct(1), claimed: Rank::SuperAdmin };
+    let rv = |now_ms| Effect::Revoke { actor: actor.clone(), reason_sha256: sha256(b"spam"), now_ms };
+    let out = apply_effect(&rv(claim_of(read)), &admin.encode()).unwrap().unwrap();
+    let m = pukaar_sites_rules::Member::decode(&out).unwrap();
+    assert_eq!((m.status, m.revoked.unwrap().at_ms), (MemberStatus::Removed, claim_of(read)));
 }
