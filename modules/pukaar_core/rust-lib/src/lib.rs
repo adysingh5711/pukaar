@@ -428,14 +428,16 @@ fn program_id() -> Option<[u8; 32]> {
 }
 
 /// Back the roles of `node` with chain reads. The reads run on a thread (see `chain_tick`).
-fn wire_chain(node: &mut Node) {
+fn wire_chain(node: &mut Node, dir: &Path) {
     let program = program_id();
     let Some(program) = program else {
         eprintln!("pukaar: PUKAAR_PROGRAM_ID is not a base58 account id: no chain reads");
         return;
     };
     let me = lez_account_id(&derive_lez_secret(&node.key.to_bytes()));
-    node.attach_chain(Chain::shared(program, node.store.site, me));
+    let chain = Chain::shared(program, node.store.site, me);
+    chain.lock().unwrap().persist_in(dir); // the accounts that earlier runs read, a removed member too
+    node.attach_chain(chain);
     node.attach_fetched(Fetched::shared());
 }
 
@@ -733,7 +735,7 @@ fn start_site(make: impl FnOnce(SigningKey, &Path) -> Result<Node, String>) -> S
             Ok(n) => n,
             Err(e) => return err(e),
         };
-        wire_chain(&mut node);
+        wire_chain(&mut node, &sh.dir);
         if let Err(e) = persist::save(&node, &sh.dir) {
             return err(e);
         }
@@ -857,7 +859,7 @@ impl PukaarCoreModule for Pukaar {
         let mut v = read_with_queue(|n, q| {
             let mut v: serde_json::Value = serde_json::from_str(&n.identity_json()).ok()?;
             // A join request of ours is out, and no admin has approved it yet.
-            if v["role"].is_null() && q.mine.is_some() {
+            if v["role"].is_null() && ops::request_waits(n, q) {
                 v["pending"] = "requested".into();
             }
             // The one LEZ account of the user (base58): it pays the fee of every write, so the user funds it.
@@ -886,7 +888,7 @@ impl PukaarCoreModule for Pukaar {
             let mut g = SHARED.lock().unwrap();
             let sh = g.as_mut().ok_or("module not ready")?;
             let mut node = identity::import_into(&sh.dir, &blob, &password, now())?;
-            wire_chain(&mut node);
+            wire_chain(&mut node, &sh.dir);
             sh.node = Some(node);
             Ok::<_, String>("ok".to_string())
         })();
@@ -1053,8 +1055,10 @@ impl PukaarCoreModule for Pukaar {
             eprintln!("pukaar: could not load replica: {e}");
             None
         });
+        let queue = Queue::shared(&dir_for_queue);
         if let Some(n) = node.as_mut() {
-            wire_chain(n);
+            wire_chain(n, &dir);
+            ops::remember_known(n, &queue.lock().unwrap());
         }
         // No Delivery calls here (see Link): flush() brings the node up on the first poll.
         *SHARED.lock().unwrap() = Some(Shared {
@@ -1069,7 +1073,7 @@ impl PukaarCoreModule for Pukaar {
             retry_at: None,
             dirty: false,
             last_save: Instant::now(),
-            queue: Queue::shared(&dir_for_queue),
+            queue,
             peers: vec![],
         });
     }

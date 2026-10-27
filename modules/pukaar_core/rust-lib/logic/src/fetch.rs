@@ -495,8 +495,11 @@ fn cycle(store: &dyn Store, chain: &SharedChain, fx: &SharedFetched, me: &Signin
                     Ok(entries) => grew |= chain.lock().unwrap().set_keyring(&entries),
                     Err(e) => errors.push(format!("keyring: {e}")),
                 }
+                // Not in the keyring (waiting for approval, or removed): no site key, and no storage fault.
                 site_keys = profile::open_keyring(&r, me).unwrap_or_else(|e| {
-                    errors.push(format!("keyring: {e}"));
+                    if !profile::is_no_access(&e) {
+                        errors.push(format!("keyring: {e}"));
+                    }
                     BTreeMap::new()
                 });
             }
@@ -529,6 +532,7 @@ fn cycle(store: &dyn Store, chain: &SharedChain, fx: &SharedFetched, me: &Signin
                 names.insert(m.pukaar_key, clean(&b.display_name));
                 about.insert(m.pukaar_key, about_of(&b));
             }
+            Err(e) if site_keys.is_empty() && profile::is_no_access(&e) => {} // we hold no site key: expected
             Err(e) => errors.push(format!("profile {}: {e}", crate::node::fingerprint(&m.pukaar_key))),
         }
     }

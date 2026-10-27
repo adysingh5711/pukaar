@@ -313,10 +313,35 @@ pub fn send_batch(node: &Node, q: &mut Queue, now: u64) -> Result<Vec<u64>, Stri
     Ok(ids)
 }
 
-/// `chain_status`.
+/// Is our join request still waiting? The chain keeps the nonce of the last request that it used
+/// (`last_req_nonce`): a request at or below it is spent. An approved and later removed member must
+/// see the removal, not "request sent".
+pub fn request_waits(node: &Node, q: &Queue) -> bool {
+    let Some(nonce) = q.mine_nonce() else { return false };
+    let used = node.chain.as_ref().and_then(|c| c.lock().unwrap().snapshot().1.into_iter().find(|m| m.user == node.account)).map_or(0, |m| m.last_req_nonce);
+    nonce > used
+}
+
+/// Tell the chain cache about the accounts that the queue knows, so it reads them again after a restart.
+pub fn remember_known(node: &Node, q: &Queue) {
+    let Some(c) = &node.chain else { return };
+    let mut c = c.lock().unwrap();
+    for a in q.accounts(&node.store.site) {
+        c.hint(a, None);
+    }
+}
+
+/// `chain_status`. `reason` is plain text, not an error: why we hold no site key, or null.
 pub fn status(node: &Node, q: &Queue, now_ms: u64) -> Value {
     let mut v = q.status_json(&node.store.site, now_ms);
     v["refresh_waiting"] = refresh_items(node, q).len().into();
+    let me = node.me();
+    let removed = node.chain.as_ref().is_some_and(|c| c.lock().unwrap().revocation_of(&me, &node.names).is_some());
+    v["reason"] = match (node.role_now(&me), removed) {
+        (Some(_), _) => Value::Null,
+        (None, true) => "Your role was removed. You can read the board, but not the names and profiles of members.".into(),
+        (None, false) => "An admin has not approved you yet. Names and profiles of members stay hidden until then.".into(),
+    };
     v
 }
 

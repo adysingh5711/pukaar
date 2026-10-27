@@ -435,6 +435,19 @@ impl Queue {
         true
     }
 
+    /// The nonce of the join request that we sent.
+    pub fn mine_nonce(&self) -> Option<u64> {
+        self.mine.as_deref().and_then(body_of).map(|b| b.nonce)
+    }
+
+    /// The accounts that this node wrote about (any entry) or got a join request from. After a restart
+    /// they bring back a member that no keyring lists any more, for example a removed one.
+    pub fn accounts(&self, site: &Key) -> Vec<AccountId> {
+        let written = self.entries.iter().filter(|e| e.site == *site).flat_map(|e| e.intent.users());
+        let asked = self.requests.iter().filter_map(|r| body_of(r)).filter(|b| b.site_id == *site).map(|b| b.user_account);
+        written.chain(asked).collect()
+    }
+
     /// The newest join request of a Pukaar key that has not expired.
     pub fn request_for(&self, key: &Key, now_ms: u64) -> Option<(JoinBody, Vec<u8>)> {
         self.requests.iter().find_map(|r| body_of(r).filter(|b| b.pukaar_ed_pk == *key && b.valid_until_ms > now_ms).map(|b| (b, r.clone())))

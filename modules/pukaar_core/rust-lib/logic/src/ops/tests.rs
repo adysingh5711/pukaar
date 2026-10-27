@@ -8,7 +8,8 @@ use crate::profile::Announce;
 use crate::queue::tests::{acct, joiner_with, key, joiner, pk, World, PROGRAM, T0};
 use crate::sync::Wire;
 use crate::reducer::Config;
-use crate::rpc::refresh;
+use crate::rpc::{refresh, Chain, SharedChain};
+use pukaar_sites_rules::MemberStatus;
 use pukaar_sites_rules::{check_join_request, Role};
 
 const NOW: u64 = T0;
@@ -350,4 +351,103 @@ fn status_has_the_shape_of_chain_status() {
     assert_eq!((w0["kind"].as_str(), w0["state"].as_str()), (Some("set_role"), Some("waiting")));
     assert_eq!(w0["accounts"], serde_json::json!([crate::chain::b58(&acct(2))]), "the row of the member is found by its account");
     let _ = PROGRAM;
+}
+
+/// Member `n` that the chain shows as removed by member 1.
+fn removed(w: &World, n: u8) -> Member {
+    let mut m = w.member(n, Role::Admin);
+    m.status = MemberStatus::Removed;
+    m.revoked = Some(pukaar_sites_rules::Revocation { by: acct(1), at_ms: 5_000, reason_sha256: [8; 32] });
+    m
+}
+
+/// The keyring entries of members 1 and 2, then the next epoch that leaves 2 out (what a revoke makes).
+fn rotate_keyring(w: &World, chain: &SharedChain, keep: &[u8]) {
+    let ents: Vec<_> = keep.iter().map(|n| (acct(*n), pk(*n))).collect();
+    chain.lock().unwrap().set_keyring(&ents);
+    refresh(chain, &*w.rpc);
+}
+
+fn removed_keys(c: &SharedChain) -> Vec<Value> {
+    c.lock().unwrap().people_json(&Default::default())["revoked"].as_array().unwrap().iter().map(|r| r["key"].clone()).collect()
+}
+
+#[test]
+fn a_removed_member_stays_in_the_removed_list_after_the_keyring_rotates() {
+    let w = World::new();
+    w.put_member(&removed(&w, 2));
+    let c = Chain::shared(PROGRAM, w.site_id(), acct(1));
+    c.lock().unwrap().persist_in(&w.dir);
+    rotate_keyring(&w, &c, &[1, 2]);
+    assert_eq!(removed_keys(&c), vec![json!(hexk(2))]);
+    // The revoke made a new keyring without member 2: the list keeps them.
+    rotate_keyring(&w, &c, &[1]);
+    assert_eq!(removed_keys(&c), vec![json!(hexk(2))], "left out of the keyring, still listed");
+    // A restart: the accounts come back from the file, with no keyring of the old epoch.
+    let again = Chain::shared(PROGRAM, w.site_id(), acct(1));
+    again.lock().unwrap().persist_in(&w.dir);
+    rotate_keyring(&w, &again, &[1]);
+    assert_eq!(removed_keys(&again), vec![json!(hexk(2))], "after a restart");
+}
+
+#[test]
+fn the_queue_brings_back_a_removed_member_that_no_keyring_lists() {
+    let w = World::new();
+    w.put_member(&removed(&w, 2));
+    w.push(Intent::Revoke { items: vec![RevokeReq { user: acct(2), key: pk(2), reason: "spam".into() }] }, St::Done, vec![]);
+    let c = Chain::shared(PROGRAM, w.site_id(), acct(1));
+    let mut n = Node::join(key(1), w.site_id());
+    n.attach_chain(c.clone());
+    rotate_keyring(&w, &c, &[1]);
+    assert!(removed_keys(&c).is_empty(), "nothing knows member 2 yet");
+    remember_known(&n, &locked(&w));
+    refresh(&c, &*w.rpc);
+    assert_eq!(removed_keys(&c), vec![json!(hexk(2))]);
+}
+
+#[test]
+fn a_removed_member_gets_a_reason_and_no_storage_error() {
+    let w = World::new();
+    w.put_member(&removed(&w, 2));
+    // Epoch 2 of the keyring leaves member 2 out.
+    let ring = profile::rotate(&w.site_id(), &mut std::collections::BTreeMap::from([(1, [9; 32])]), &[(acct(1), pk(1))]).unwrap();
+    let bytes = profile::keyring_to_bytes(&ring);
+    let mut s = w.site.clone();
+    (s.key_epoch, s.keyring_cid, s.keyring_sha256) = (2, w.store.put(&bytes), crate::event::sha256(&bytes));
+    w.put_site(&s);
+    let c = Chain::shared(PROGRAM, w.site_id(), acct(2));
+    refresh(&c, &*w.rpc);
+    let fx = crate::fetch::Fetched::shared();
+    crate::fetch::fetch_cycle(&*w.store, &c, &fx, &key(2));
+    assert!(fx.lock().unwrap().status_json()["error"].is_null(), "not in the keyring is not a storage fault");
+    let mut n = Node::join(key(2), w.site_id());
+    n.attach_chain(c);
+    let v = status(&n, &locked(&w), NOW);
+    assert!(v["reason"].as_str().unwrap().contains("role was removed"));
+    // A member with a role has no reason.
+    w.put_member(&w.member(3, Role::Resident));
+    let mut ok = Node::join(key(3), w.site_id());
+    let c3 = Chain::shared(PROGRAM, w.site_id(), acct(3));
+    refresh(&c3, &*w.rpc);
+    ok.attach_chain(c3);
+    assert!(status(&ok, &locked(&w), NOW)["reason"].is_null());
+}
+
+#[test]
+fn a_spent_request_is_not_waiting_so_a_removed_member_sees_the_removal() {
+    let w = World::new();
+    let mut q = locked(&w);
+    let n = node(&w, 2);
+    assert!(!request_waits(&n, &q), "no request sent");
+    let (req, _) = join(&n, &mut q, NOW);
+    assert!(request_waits(&n, &q), "sent, the chain has no record");
+    // The chain used it (the member was approved, then removed): the record keeps its nonce.
+    let mut m = removed(&w, 2);
+    m.last_req_nonce = crate::joinreq::parse(&req).unwrap().0.nonce;
+    w.put_member(&m);
+    refresh(&w.chain, &*w.rpc);
+    assert!(!request_waits(&n, &q));
+    // A new request has a higher nonce and waits again.
+    join(&n, &mut q, NOW + 1);
+    assert!(request_waits(&n, &q));
 }

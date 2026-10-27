@@ -263,10 +263,19 @@ pub fn entries(k: &Keyring) -> Result<Vec<(Key, Key)>, String> {
     k.members.iter().map(|s| Ok((unhex(&s.user)?, unhex(&s.to)?))).collect()
 }
 
+/// The error of a reader that holds no site key: not in the newest keyring (a joiner that waits, or a
+/// member that was removed), or a profile that needs a key it lacks. The chain role explains it, so
+/// it is not a storage fault.
+pub const NOT_IN_KEYRING: &str = "not in this keyring";
+
+pub fn is_no_access(e: &str) -> bool {
+    e == NOT_IN_KEYRING || e.starts_with("no site key for epoch") || e == "no wrap for this reader"
+}
+
 /// Every site key this member can read, by epoch. A member who is not in `members` gets an error.
 pub fn open_keyring(k: &Keyring, me: &SigningKey) -> Result<BTreeMap<u64, Key>, String> {
     let mine = hex::encode(me.verifying_key().to_bytes());
-    let w = k.members.iter().find(|w| w.to == mine).ok_or("not in this keyring")?;
+    let w = k.members.iter().find(|w| w.to == mine).ok_or(NOT_IN_KEYRING)?;
     let newest: Key = unseal(me, &hex::decode(&w.ct).map_err(|_| "bad wrap hex")?)
         .ok_or("keyring wrap does not open")?
         .try_into()

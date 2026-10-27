@@ -148,8 +148,11 @@ pub struct Chain {
     pub missing: bool,
     /// When the newest good read ended (ms since 1970). 0 until the first one.
     pub read_ms: u64,
-    /// Accounts we trust enough to keep: our own and the ones `track` got.
+    /// Accounts we trust enough to keep: our own, the ones `track` got, every account of a keyring that we
+    /// saw (so a member that a revoke left out of the next keyring is still read, and listed as removed),
+    /// and the hints that had a record. Saved in `file`, so a restart keeps them.
     users: BTreeSet<AccountId>,
+    file: Option<std::path::PathBuf>,
     /// The (account, Pukaar key) pairs of the keyring. The chain record at an account must hold
     /// the key listed here, or the record is ignored.
     expect: BTreeMap<AccountId, Key>,
@@ -178,6 +181,7 @@ impl Chain {
             missing: false,
             read_ms: 0,
             users: BTreeSet::from([me]),
+            file: None,
             expect: BTreeMap::new(),
             hints: BTreeSet::new(),
             last_try: None,
@@ -190,6 +194,24 @@ impl Chain {
         self.users.insert(user);
     }
 
+    /// Keep `users` in `dir` (32 bytes per account, one file per site) and load what an earlier run kept.
+    pub fn persist_in(&mut self, dir: &std::path::Path) {
+        let file = dir.join(format!("accounts-{}", hex::encode(self.site_id)));
+        let kept = std::fs::read(&file).unwrap_or_default();
+        self.users.extend(kept.chunks_exact(32).map(|c| <AccountId>::try_from(c).expect("32 bytes")));
+        self.file = Some(file);
+    }
+
+    fn save_users(&self) {
+        let Some(file) = &self.file else { return };
+        let bytes: Vec<u8> = self.users.iter().flatten().copied().collect();
+        let tmp = file.with_extension("tmp");
+        let dir = file.parent().map_or(Ok(()), std::fs::create_dir_all);
+        if let Err(e) = dir.and_then(|()| std::fs::write(&tmp, bytes)).and_then(|()| std::fs::rename(&tmp, file)) {
+            eprintln!("pukaar: could not save the known accounts: {e}");
+        }
+    }
+
     /// The keyring of the site: read every account in it. `entries` are (account, Pukaar key). Call
     /// it only with a keyring whose SHA-256 matched `Site.keyring_sha256`. A `Member` record whose
     /// key differs from the entry is ignored at the next read. A newer keyring replaces the older.
@@ -197,6 +219,12 @@ impl Chain {
     pub fn set_keyring(&mut self, entries: &[(AccountId, Key)]) -> bool {
         let new: BTreeMap<AccountId, Key> = entries.iter().copied().collect();
         let grew = new.keys().any(|a| !self.expect.contains_key(a));
+        // ponytail: users only grow (a removed member stays), one account per member that ever had a seat.
+        let before = self.users.len();
+        self.users.extend(new.keys());
+        if self.users.len() != before {
+            self.save_users();
+        }
         self.expect = new;
         grew
     }
@@ -328,7 +356,11 @@ pub fn refresh(chain: &Mutex<Chain>, rpc: &dyn Rpc) {
             // that names it adds it again.
             let found: Vec<AccountId> = c.hints.iter().copied().filter(|a| roster.member(a).is_some()).collect();
             c.hints.clear();
+            let before = c.users.len();
             c.users.extend(found);
+            if c.users.len() != before {
+                c.save_users();
+            }
             (c.roster, c.block, c.ok, c.error, c.missing, c.read_ms) = (roster, block, true, None, false, now_ms());
         }
         Err(e) => (c.ok, c.missing, c.error) = (false, e == NOT_ON_CHAIN, Some(e)),
