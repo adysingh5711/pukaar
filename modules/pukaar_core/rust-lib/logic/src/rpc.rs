@@ -61,6 +61,9 @@ pub fn last_block(rpc: &dyn Rpc) -> Result<u64, String> {
     v.get("result").and_then(Value::as_u64).ok_or_else(|| "no block id in the response".to_string())
 }
 
+/// The error of a read when the Site record does not exist (a site not created yet, or a wrong id).
+pub const NOT_ON_CHAIN: &str = "the site is not on the chain";
+
 /// The bytes of this program's shard in account `id`. Empty when the account holds no record.
 pub fn get_account(rpc: &dyn Rpc, program: &AccountId, id: &AccountId) -> Result<Vec<u8>, String> {
     shard_of(&rpc.call("getAccount", json!([b58(id)]))?, program)
@@ -80,7 +83,7 @@ pub fn read_roster(
     let site_at = site_pda(program, site_id);
     let data = get_account(rpc, program, &site_at)?;
     if data.is_empty() {
-        return Err("the site is not on the chain".into());
+        return Err(NOT_ON_CHAIN.into());
     }
     roster.apply(&site_at, &data)?;
     let site = roster.site.clone().ok_or("no Site record")?;
@@ -124,6 +127,10 @@ pub struct Chain {
     pub block: u64,
     pub ok: bool,
     pub error: Option<String>,
+    /// The last read found no Site record: not an outage, the site does not exist (yet).
+    pub missing: bool,
+    /// When the newest good read ended (ms since 1970). 0 until the first one.
+    pub read_ms: u64,
     /// Accounts we trust enough to keep: our own and the ones `track` got.
     users: BTreeSet<AccountId>,
     /// The (account, Pukaar key) pairs of the keyring. The chain record at an account must hold
@@ -151,6 +158,8 @@ impl Chain {
             block: 0,
             ok: false,
             error: None,
+            missing: false,
+            read_ms: 0,
             users: BTreeSet::from([me]),
             expect: BTreeMap::new(),
             hints: BTreeSet::new(),
@@ -227,7 +236,7 @@ impl Chain {
     pub fn status_json(&self) -> Value {
         let site = self.roster.site.as_ref();
         json!({
-            "block": self.block, "ok": self.ok, "error": self.error,
+            "block": self.block, "ok": self.ok, "error": self.error, "missing": self.missing, "read_ms": self.read_ms,
             "roster_len": site.map(|s| s.roster_len), "known": self.roster.members().count(),
             "details_cid": site.map(|s| &s.details_cid), "places_cid": site.map(|s| &s.places_cid),
         })
@@ -303,9 +312,9 @@ pub fn refresh(chain: &Mutex<Chain>, rpc: &dyn Rpc) {
             let found: Vec<AccountId> = c.hints.iter().copied().filter(|a| roster.member(a).is_some()).collect();
             c.hints.clear();
             c.users.extend(found);
-            (c.roster, c.block, c.ok, c.error) = (roster, block, true, None);
+            (c.roster, c.block, c.ok, c.error, c.missing, c.read_ms) = (roster, block, true, None, false, now_ms());
         }
-        Err(e) => (c.ok, c.error) = (false, Some(e)),
+        Err(e) => (c.ok, c.missing, c.error) = (false, e == NOT_ON_CHAIN, Some(e)),
     }
 }
 
@@ -384,6 +393,7 @@ mod tests {
         let c = c.lock().unwrap();
         assert!(c.ok && c.error.is_none());
         assert_eq!(c.block, 100);
+        assert!(c.read_ms > 0 && !c.missing, "a good read is stamped");
         assert_eq!(c.role_at(&key(2), 100), Some(Rank::Admin));
         assert_eq!(c.role_at(&key(3), 100), None, "t3 was revoked");
         assert_eq!(c.role_at(&[9; 32], 100), None, "a stranger");
@@ -431,6 +441,7 @@ mod tests {
         refresh(&c, &fake());
         let g = c.lock().unwrap();
         assert!(!g.ok && g.error.as_deref().is_some_and(|e| e.contains("not on the chain")));
+        assert_eq!(g.status_json()["missing"], true);
     }
 
     #[test]

@@ -171,6 +171,28 @@ struct Client {
     wait: Option<Duration>,
 }
 
+/// What the UI shows as the Storage state: true once `init` and `start` worked (a call to the Storage
+/// client went through), else the text of the last failed bring-up. One static: the node is one per module.
+static STATUS: Mutex<(bool, Option<String>)> = Mutex::new((false, None));
+
+/// `(ready, error)` of the Storage node. `ready` is false until the first bring-up works.
+pub fn status() -> (bool, Option<String>) {
+    STATUS.lock().unwrap().clone()
+}
+
+fn note_bring_up(r: &Result<(), String>) {
+    *STATUS.lock().unwrap() = (r.is_ok(), r.as_ref().err().cloned());
+}
+
+/// `site_info.storage`: the fetch result (`pending`, `error`) plus `ready`. A fetch error wins over
+/// the bring-up error, because it came later.
+pub fn merge_status(storage: &mut Value, ready: bool, error: Option<String>) {
+    storage["ready"] = json!(ready);
+    if storage["error"].is_null() {
+        storage["error"] = json!(error);
+    }
+}
+
 pub struct LogosStore {
     /// The module data dir of this profile: `storage-tmp` holds the temp files of the transfers and
     /// `storage` the data of the Storage node.
@@ -256,11 +278,14 @@ impl LogosStore {
                     return Err(err.clone());
                 }
             }
-            if let Err(e) = node.bring_up(&self.dir) {
+            let up = node.bring_up(&self.dir);
+            note_bring_up(&up);
+            if let Err(e) = up {
                 let wait = next_wait(node.wait);
                 node.wait = Some(wait);
                 let e = format!("{e} (next try in {} s)", wait.as_secs());
                 node.hold = Some((Instant::now() + wait, e.clone()));
+                note_bring_up(&Err(e.clone()));
                 return Err(e);
             }
             node.wait = None;
@@ -333,6 +358,24 @@ mod tests {
         assert_eq!((c["data-dir"].as_str(), c["nat"].as_str()), (Some("/t"), Some("extip:1.2.3.4")));
         assert!(node_config(base(), Path::new("/m/s"), Some("{")).unwrap_err().starts_with("PUKAAR_STORAGE_CFG"));
         assert!(node_config(json!("x"), Path::new("/m/s"), None).is_err());
+    }
+
+    #[test]
+    fn ready_only_after_a_good_bring_up() {
+        assert_eq!(status(), (false, None), "nothing tried yet");
+        note_bring_up(&Err("storage start was refused (next try in 5 s)".into()));
+        let (ready, error) = status();
+        let mut s = json!({ "pending": 0, "error": null });
+        merge_status(&mut s, ready, error);
+        assert_eq!((s["ready"].as_bool(), s["error"].as_str()), (Some(false), Some("storage start was refused (next try in 5 s)")));
+        note_bring_up(&Ok(()));
+        let (ready, error) = status();
+        let mut s = json!({ "pending": 2, "error": null });
+        merge_status(&mut s, ready, error);
+        assert_eq!((s["ready"].as_bool(), s["pending"].as_u64(), s["error"].is_null()), (Some(true), Some(2), true));
+        let mut s = json!({ "pending": 1, "error": "storage: download failed" });
+        merge_status(&mut s, false, Some("old".into()));
+        assert_eq!(s["error"], "storage: download failed");
     }
 
     #[test]

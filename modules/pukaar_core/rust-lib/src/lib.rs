@@ -1015,6 +1015,8 @@ impl PukaarCoreModule for Pukaar {
             let node = sh.node.as_mut().ok_or(NO_SITE)?;
             node.apply_fetched();
             let mut v: serde_json::Value = serde_json::from_str(&node.site_info_json()).map_err(|e| e.to_string())?;
+            let (ready, error) = storage::status();
+            storage::merge_status(&mut v["storage"], ready, error);
             v["pending"] = ops::pending_rows(node, &sh.queue.lock().unwrap(), now_ms()).into();
             let peers = sh.peers.iter().filter(|(_, _, at)| at.elapsed() < PEER_PENDING_FOR);
             v["chain"]["pending_peers"] = peers.map(|(t, k, _)| serde_json::json!({ "tx": hex::encode(&t[..5]), "kind": format!("{k:?}") })).collect::<Vec<_>>().into();
