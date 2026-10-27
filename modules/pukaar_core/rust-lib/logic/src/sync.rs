@@ -2,7 +2,7 @@
 //! events re-sends them. This is the catch-up path; Delivery's storeQuery is best-effort only.
 
 use crate::event::{sha256, Key, MAX_EVENT_BYTES};
-use crate::profile;
+use crate::profile::{self, MAX_INLINE_PROFILE};
 use crate::store::Store;
 use pukaar_sites_rules::JOIN_REQ_LEN;
 use serde::{Deserialize, Serialize};
@@ -35,8 +35,10 @@ pub enum WriteKind {
     SetSite,
 }
 
-/// A wire message is an event (at most `MAX_EVENT_BYTES`) plus a few bytes of framing.
-pub const MAX_WIRE_BYTES: usize = MAX_EVENT_BYTES + 16;
+/// A wire message is an event (at most `MAX_EVENT_BYTES`) or a `ProfileBlob` (an announce of at most
+/// about 300 bytes and a file of at most `MAX_INLINE_PROFILE`) plus a few bytes of framing.
+pub const MAX_WIRE_BYTES: usize = MAX_INLINE_PROFILE + 512;
+const _: () = assert!(MAX_EVENT_BYTES + 16 <= MAX_WIRE_BYTES);
 
 /// What goes on the site channel. Only `Event` is signed as a log entry. `Heads` is unsigned:
 /// lying about heads only changes what gets re-sent, and re-sends are capped. APPEND-ONLY: postcard
@@ -51,6 +53,10 @@ pub enum Wire {
     ProfileAnnounce(profile::Announce),
     /// A chain write is on its way: peers show a pending chip. `tx` is the transaction hash.
     ChainPending { tx: Key, kind: WriteKind },
+    /// The announce and the signed profile file itself (at most `MAX_INLINE_PROFILE` bytes), so that an
+    /// admin can approve without a download from the Storage node of the author. A file over the cap
+    /// is not sent this way: the author sends `ProfileAnnounce` and readers download by CID.
+    ProfileBlob { announce: profile::Announce, file: Vec<u8> },
 }
 
 impl Wire {
@@ -73,6 +79,7 @@ impl Wire {
             Wire::Event(e) => e.len() <= MAX_EVENT_BYTES,
             Wire::JoinReq(r) => r.len() == JOIN_REQ_LEN,
             Wire::ProfileAnnounce(a) => a.well_formed(),
+            Wire::ProfileBlob { announce, file } => announce.well_formed() && !file.is_empty() && file.len() <= MAX_INLINE_PROFILE,
             Wire::Heads(_) | Wire::ChainPending { .. } => true,
         };
         ok.then_some(w)

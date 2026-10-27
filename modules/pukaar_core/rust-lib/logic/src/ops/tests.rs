@@ -5,7 +5,8 @@ use crate::event::Body;
 use crate::fetch::{Details, Places, DETAILS_SCHEMA};
 use crate::node::Node;
 use crate::profile::Announce;
-use crate::queue::tests::{acct, key, joiner, pk, World, PROGRAM, T0};
+use crate::queue::tests::{acct, joiner_with, key, joiner, pk, World, PROGRAM, T0};
+use crate::sync::Wire;
 use crate::reducer::Config;
 use crate::rpc::refresh;
 use pukaar_sites_rules::{check_join_request, Role};
@@ -103,6 +104,77 @@ fn an_approval_needs_the_request_and_the_profile() {
 }
 
 #[test]
+fn an_approval_waits_for_the_profile_bytes_and_queues_nothing_before() {
+    let w = World::new();
+    let n = node(&w, 1);
+    let site = w.site_id();
+    // The announce is here, the file is not (Delivery brought only the pointer).
+    let req = joiner_with(&w, 4, 0, false);
+    let mut q = locked(&w);
+    assert!(q.keep_request(&site, &req.request, NOW));
+    assert_eq!(grant(&n, &mut q, &hexk(4), "resident", "", NOW).unwrap_err(), "This person's profile has not arrived yet. Try again in a minute.");
+    assert!(q.entries.is_empty(), "nothing is queued, so nothing waits in the write thread");
+    // The file comes in a ProfileBlob message: the same click now works.
+    let a = w.fetched.lock().unwrap().announce_of(&pk(4)).unwrap();
+    let msg = Wire::ProfileBlob { announce: a.clone(), file: w.store.get(&a.cid) }.encode();
+    let Some(Wire::ProfileBlob { announce, file }) = Wire::decode(&msg) else { panic!() };
+    assert!(n.on_profile_blob(announce, file));
+    grant(&n, &mut q, &hexk(4), "resident", "", NOW).unwrap();
+    assert_eq!(q.held(&site).count(), 1);
+}
+
+#[test]
+fn a_join_and_an_inline_profile_reach_an_admin_who_approves_with_no_download() {
+    use pukaar_sites_rules::Instruction;
+    let w = World::new();
+    let n = node(&w, 1);
+    let site = w.site_id();
+    // The joiner (key 4) sends a signed request and its profile file. Its Storage CID is in no store.
+    let request = joinreq::build(&key(4), &derive_lez_secret(&[4; 32]), site, NOW, NOW + REQUEST_VALID_MS).to_vec();
+    let body = profile::Body { display_name: "Ravi".into(), bio: "nurse".into(), experience: "10 years".into() };
+    let file = profile::build(&key(4), &site, &acct(4), 1, 1, &body, None, &[pk(1)]).unwrap();
+    let bytes = profile::to_bytes(&file);
+    let announce = Announce::sign(&key(4), site, 1, "zNotInAnyStore", crate::event::sha256(&bytes));
+    let wire = [Wire::JoinReq(request.clone()).encode(), Wire::ProfileBlob { announce, file: bytes }.encode()];
+    // The admin node handles them as the module does.
+    for m in &wire {
+        match Wire::decode(m) {
+            Some(Wire::JoinReq(r)) => {
+                n.on_join_req(&r);
+                assert!(locked(&w).keep_request(&site, &r, NOW));
+            }
+            Some(Wire::ProfileBlob { announce, file }) => assert!(n.on_profile_blob(announce, file)),
+            _ => panic!("unexpected message"),
+        }
+    }
+    // The fetcher runs once with a working Storage (it reads the keyring of the admin's own node). Then
+    // every download fails: no remote node can be reached.
+    crate::fetch::fetch_cycle(&*w.store, &w.chain, &w.fetched, &w.key);
+    w.store.no_download.store(true, std::sync::atomic::Ordering::Relaxed);
+
+    let mut q = locked(&w);
+    grant(&n, &mut q, &hexk(4), "resident", "", NOW).unwrap();
+    assert_eq!(send_batch(&n, &mut q, NOW).unwrap().len(), 1);
+    drop(q);
+    w.tick(T0);
+    let e = w.q.lock().unwrap().entries[0].clone();
+    assert_eq!((e.state, e.reason), (St::Queued, None));
+    assert_eq!(w.store.refused.load(std::sync::atomic::Ordering::Relaxed), 0, "no download was tried");
+    let Intent::Approve { items, .. } = &e.intent else { panic!() };
+    let p = items[0].profile.clone().unwrap();
+    // The file in Storage has the site wrap and the joiner opens it with the new keyring.
+    let ring = profile::keyring_from_bytes(&e.blobs[0].bytes).unwrap();
+    let keys = profile::open_keyring(&ring, &key(4)).unwrap();
+    let out = profile::from_bytes(&w.store.get(&p.cid)).unwrap();
+    assert_eq!(profile::open(&out, &key(4), &keys).unwrap().display_name, "Ravi");
+    // The approval instruction is built.
+    w.tick(T0 + 1);
+    let Instruction::ApproveBatch(ix) = crate::queue::tests::decode(&w.sent()[0]) else { panic!("not approve_batch") };
+    assert_eq!((ix.items.len(), ix.items[0].item.profile_cid.as_str()), (1, p.cid.as_str()));
+    assert_eq!(w.store.refused.load(std::sync::atomic::Ordering::Relaxed), 0);
+}
+
+#[test]
 fn a_revoke_needs_a_reason_and_never_hits_a_super_admin() {
     let w = World::new();
     w.put_member(&w.member(2, Role::Resident));
@@ -182,7 +254,7 @@ fn send_batch_takes_the_held_writes_and_the_member_refreshes() {
     let bytes = profile::to_bytes(&file);
     let cid = w.store.put(&bytes);
     assert!(w.fetched.lock().unwrap().note_announce(Announce::sign(&key(2), w.site_id(), 2, &cid, crate::event::sha256(&bytes))));
-    assert_eq!(status(&n, &q)["refresh_waiting"], 1);
+    assert_eq!(status(&n, &q, NOW)["refresh_waiting"], 1);
     grant(&n, &mut q, &hexk(2), "steward", "Ravi", NOW).unwrap();
     let ids = send_batch(&n, &mut q, NOW).unwrap();
     let names: Vec<_> = ids.iter().map(|i| q.entries.iter().find(|e| e.id == *i).unwrap().intent.name()).collect();
@@ -195,7 +267,7 @@ fn send_batch_takes_the_held_writes_and_the_member_refreshes() {
     assert_eq!((p.user, p.prof.cid, p.prof.version), (acct(2), cid, 2));
     // Asked again: the refresh is on its way, nothing new.
     assert_eq!(send_batch(&n, &mut q, NOW).unwrap_err(), "nothing waits for a batch");
-    assert_eq!(status(&n, &q)["refresh_waiting"], 0);
+    assert_eq!(status(&n, &q, NOW)["refresh_waiting"], 0);
 }
 
 #[test]
@@ -269,10 +341,10 @@ fn status_has_the_shape_of_chain_status() {
     let n = node(&w, 1);
     let mut q = locked(&w);
     grant(&n, &mut q, &hexk(2), "steward", "R", NOW).unwrap();
-    let s = status(&n, &q);
+    let s = status(&n, &q, NOW);
     assert_eq!((s["key"].as_str(), s["waiting"].as_u64(), s["refresh_waiting"].as_u64()), (Some("not imported yet"), Some(1), Some(0)));
     let w0 = &s["writes"][0];
-    for f in ["id", "kind", "state", "tx", "reason", "items", "accounts"] {
+    for f in ["id", "kind", "state", "tx", "reason", "items", "accounts", "waited_s"] {
         assert!(w0.get(f).is_some(), "writes[0] has {f}");
     }
     assert_eq!((w0["kind"].as_str(), w0["state"].as_str()), (Some("set_role"), Some("waiting")));

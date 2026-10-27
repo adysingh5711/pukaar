@@ -159,8 +159,14 @@ pub fn grant(node: &Node, q: &mut Queue, subject_hex: &str, role: &str, name: &s
     }
     let (_, request) = q.request_for(&subject, now).ok_or("no join request from this person, or it expired: ask them to join again")?;
     v.need(Action::Approve(role), None)?;
-    if node.fetched.as_ref().is_none_or(|f| f.lock().unwrap().announce_of(&subject).is_none()) {
-        return Err("their profile has not arrived yet, try again shortly".into());
+    // The approval opens the file of the joiner, so we must hold its bytes now (Delivery or the fetcher
+    // brought them): the write thread never waits for a remote Storage node.
+    let arrived = node.fetched.as_ref().is_some_and(|f| {
+        let f = f.lock().unwrap();
+        f.announce_of(&subject).is_some_and(|a| f.cached(&a.cid, &a.sha256).is_some())
+    });
+    if !arrived {
+        return Err("This person's profile has not arrived yet. Try again in a minute.".into());
     }
     drop_held(q, &site, |i| matches!(i, Intent::Approve { items, .. } if items[0].request == request));
     // ponytail: a steward or admin name that an admin signs (O5) is not built: readers do not accept
@@ -308,8 +314,8 @@ pub fn send_batch(node: &Node, q: &mut Queue, now: u64) -> Result<Vec<u64>, Stri
 }
 
 /// `chain_status`.
-pub fn status(node: &Node, q: &Queue) -> Value {
-    let mut v = q.status_json(&node.store.site);
+pub fn status(node: &Node, q: &Queue, now_ms: u64) -> Value {
+    let mut v = q.status_json(&node.store.site, now_ms);
     v["refresh_waiting"] = refresh_items(node, q).len().into();
     v
 }

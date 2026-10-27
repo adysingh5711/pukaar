@@ -1,7 +1,9 @@
 mod common;
 mod util;
 use pukaar_logic::event::new_key;
-use pukaar_logic::profile::{Announce, MAX_CID};
+use pukaar_logic::event::sha256;
+use pukaar_logic::fetch::Fetched;
+use pukaar_logic::profile::{Announce, MAX_CID, MAX_INLINE_PROFILE};
 use pukaar_logic::store::{Accept, Store};
 use pukaar_logic::sync::{
     heads_msg, lost_node, send_queue, should_answer, to_resend, to_resend_own, SendError, Wire,
@@ -221,6 +223,7 @@ fn every_message_kind_round_trips() {
         Wire::JoinReq(vec![9; JOIN_REQ_LEN]),
         Wire::ProfileAnnounce(announce()),
         Wire::ChainPending { tx: [3; 32], kind: WriteKind::Approve },
+        Wire::ProfileBlob { announce: announce(), file: vec![7; 900] },
     ];
     for m in msgs {
         assert_eq!(Wire::decode(&m.encode()), Some(m));
@@ -256,10 +259,56 @@ fn size_limits_hold() {
 }
 
 #[test]
+fn an_inline_profile_has_a_cap_and_a_bigger_file_is_not_a_blob() {
+    let blob = |n: usize| Wire::ProfileBlob { announce: announce(), file: vec![1; n] }.encode();
+    assert!(blob(MAX_INLINE_PROFILE).len() <= MAX_WIRE_BYTES && Wire::decode(&blob(MAX_INLINE_PROFILE)).is_some(), "at the cap");
+    assert!(Wire::decode(&blob(MAX_INLINE_PROFILE + 1)).is_none(), "over the cap: the sender uses ProfileAnnounce");
+    assert!(Wire::decode(&blob(0)).is_none(), "no file");
+    let bad = Announce { cid: String::new(), ..announce() };
+    assert!(Wire::decode(&Wire::ProfileBlob { announce: bad, file: vec![1; 9] }.encode()).is_none(), "the announce is checked too");
+}
+
+/// An announce of `file` by a fresh author (version 1, CID "zCid").
+fn blob_of(file: &[u8]) -> Announce {
+    Announce::sign(&new_key(), SITE, 1, "zCid", sha256(file))
+}
+
+#[test]
+fn a_blob_is_kept_only_when_hash_and_signature_hold() {
+    let file = vec![5u8; 800];
+    let mut f = Fetched::default();
+    let a = blob_of(&file);
+    // A file that does not hash to the announced SHA-256: rejected, and nothing is kept.
+    let mut other = file.clone();
+    other[0] ^= 1;
+    assert!(!f.note_blob(a.clone(), other));
+    assert!(f.cached("zCid", &a.sha256).is_none() && f.announce_of(&a.author).is_none());
+    // A bad signature (the hash matches the file): rejected.
+    let forged = Announce { version: 2, ..a.clone() };
+    assert!(!f.note_blob(forged, file.clone()));
+    assert!(f.announce_of(&a.author).is_none());
+    // Over the cap: rejected, the reader must download by CID.
+    let big = vec![5u8; MAX_INLINE_PROFILE + 1];
+    assert!(!f.note_blob(blob_of(&big), big));
+    // The good one is kept, with its announce. A repeat is ignored.
+    assert!(f.note_blob(a.clone(), file.clone()));
+    assert_eq!(f.cached("zCid", &a.sha256), Some(file.clone()));
+    assert_eq!(f.announce_of(&a.author), Some(a.clone()));
+    assert!(!f.note_blob(a.clone(), file.clone()));
+    // `cached` checks the hash that the caller expects: a lying pointer cannot reuse the blob.
+    assert!(f.cached("zCid", &[0; 32]).is_none());
+    // The announce came first and the file later (a fetcher had only the pointer): the file is kept.
+    let mut late = Fetched::default();
+    assert!(late.note_announce(a.clone()));
+    assert!(late.note_blob(a, file));
+}
+
+#[test]
 fn garbage_is_rejected() {
     assert!(Wire::decode(&[]).is_none());
     assert!(Wire::decode(&[0xff; 40]).is_none(), "bad variant");
     assert!(Wire::decode(&[9]).is_none(), "variant past the last one");
+    assert!(Wire::decode(&[5, 1, 2, 3]).is_none(), "a ProfileBlob that is cut off");
     let mut trailing = Wire::ChainPending { tx: [3; 32], kind: WriteKind::Revoke }.encode();
     trailing.push(0);
     assert!(Wire::decode(&trailing).is_none(), "trailing byte");

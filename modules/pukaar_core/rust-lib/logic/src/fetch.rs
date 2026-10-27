@@ -12,7 +12,7 @@
 //! gives the truth. An event, a join request and a profile announce also name accounts (`hint`).
 
 use crate::event::{sha256, Key, Location};
-use crate::profile::{self, Announce};
+use crate::profile::{self, Announce, MAX_INLINE_PROFILE};
 use crate::reducer::Config;
 use crate::rpc::{refresh, Rpc, SharedChain};
 use ed25519_dalek::SigningKey;
@@ -27,6 +27,11 @@ pub trait Store: Send + Sync {
     /// Put the bytes in Storage and give back their CID.
     fn upload(&self, bytes: &[u8]) -> Result<String, String>;
     fn download(&self, cid: &str) -> Result<Vec<u8>, String>;
+    /// `download` for the write thread: it must not queue behind a transfer of another thread and must
+    /// not wait long. The default is `download`, for a store with no such queue.
+    fn try_download(&self, cid: &str) -> Result<Vec<u8>, String> {
+        self.download(cid)
+    }
 }
 
 pub const DETAILS_SCHEMA: &str = "pukaar.site.details/1";
@@ -164,6 +169,28 @@ impl Fetched {
                 true
             }
         }
+    }
+
+    /// Keep an announce together with the profile file that came with it (`Wire::ProfileBlob`), so no
+    /// download is needed. The file must hash to the announced SHA-256 and the announce must verify and
+    /// be kept (the newest version of its author), or already be the one that we hold. True when the
+    /// file was new. A repeat is ignored.
+    pub fn note_blob(&mut self, a: Announce, file: Vec<u8>) -> bool {
+        if file.len() > MAX_INLINE_PROFILE || sha256(&file) != a.sha256 || self.cache.contains_key(&a.cid) {
+            return false;
+        }
+        let known = self.announces.get(&a.author).is_some_and(|k| k.cid == a.cid && k.sha256 == a.sha256);
+        if !known && !self.note_announce(a.clone()) {
+            return false;
+        }
+        self.cache.insert(a.cid, file);
+        true
+    }
+
+    /// A blob that we hold already, when its SHA-256 is `sha`. It never touches the network: the
+    /// write thread reads here before it asks Storage.
+    pub fn cached(&self, cid: &str, sha: &[u8; 32]) -> Option<Vec<u8>> {
+        self.cache.get(cid).filter(|b| b.len() <= MAX_BLOB && sha256(b) == *sha).cloned()
     }
 
     /// The newest announce that we kept for this Pukaar key.

@@ -33,7 +33,7 @@ use pukaar_logic::fetch::Store;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, TryLockError};
 use std::time::{Duration, Instant};
 
 const MODULE: &str = "storage_module";
@@ -43,6 +43,8 @@ const CALL: Duration = Duration::from_secs(10);
 const START: Duration = Duration::from_secs(120);
 /// From the call to the `...Done` event.
 const TRANSFER: Duration = Duration::from_secs(30);
+/// The same for a download of the write thread (`try_download`): it holds the node lock meanwhile.
+const QUICK: Duration = Duration::from_secs(10);
 const CHUNK: u64 = 65536;
 /// Events waiting for a transfer. A shared module may emit the events of other callers too.
 const MAX_EVENTS: usize = 64;
@@ -266,8 +268,18 @@ impl LogosStore {
         LogosStore { dir, seq: AtomicU64::new(0), node: Mutex::new(None) }
     }
 
-    fn with_node<T>(&self, f: impl FnOnce(&PluginProxy, &Events) -> Result<T, String>) -> Result<T, String> {
-        let mut guard = self.node.lock().unwrap();
+    /// `patient` false: do not queue behind a transfer or a start of another thread. The write thread
+    /// then answers "busy" at once, and the queue tries again at its next tick.
+    fn with_node<T>(&self, patient: bool, f: impl FnOnce(&PluginProxy, &Events) -> Result<T, String>) -> Result<T, String> {
+        let mut guard = if patient {
+            self.node.lock().unwrap()
+        } else {
+            match self.node.try_lock() {
+                Ok(g) => g,
+                Err(TryLockError::WouldBlock) => return Err("Storage is busy with another transfer, will try again".into()),
+                Err(TryLockError::Poisoned(p)) => p.into_inner(),
+            }
+        };
         if guard.is_none() {
             *guard = Some(Client::subscribe()?);
         }
@@ -304,7 +316,7 @@ impl Store for LogosStore {
     fn upload(&self, bytes: &[u8]) -> Result<String, String> {
         let path = self.temp("up")?;
         std::fs::write(&path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
-        let r = self.with_node(|p, ev| {
+        let r = self.with_node(true, |p, ev| {
             ev.clear("upload");
             let sid = call(p, "uploadUrl", json!([path.to_string_lossy(), CHUNK, true]), CALL)?;
             let done = ev.wait("upload", sid.as_str().unwrap_or(""), TRANSFER)?;
@@ -318,11 +330,21 @@ impl Store for LogosStore {
     }
 
     fn download(&self, cid: &str) -> Result<Vec<u8>, String> {
+        self.fetch(cid, true)
+    }
+
+    fn try_download(&self, cid: &str) -> Result<Vec<u8>, String> {
+        self.fetch(cid, false)
+    }
+}
+
+impl LogosStore {
+    fn fetch(&self, cid: &str, patient: bool) -> Result<Vec<u8>, String> {
         let path = self.temp("down")?;
-        let r = self.with_node(|p, ev| {
+        let r = self.with_node(patient, |p, ev| {
             ev.clear("download");
             let sid = call(p, "downloadToUrl", json!([cid, path.to_string_lossy(), false, CHUNK, false, true]), CALL)?;
-            let done = ev.wait("download", sid.as_str().unwrap_or(""), TRANSFER)?;
+            let done = ev.wait("download", sid.as_str().unwrap_or(""), if patient { TRANSFER } else { QUICK })?;
             if done["success"].as_bool() == Some(false) {
                 return Err(format!("download {cid}: {}", done["error"].as_str().unwrap_or("failed")));
             }

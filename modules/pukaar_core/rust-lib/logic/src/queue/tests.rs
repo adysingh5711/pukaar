@@ -58,6 +58,9 @@ impl Rpc for FakeRpc {
 pub(crate) struct FakeStore {
     blobs: Mutex<HashMap<String, Vec<u8>>>,
     down: std::sync::atomic::AtomicBool,
+    /// Every download fails, and is counted in `refused`: a remote node that cannot be reached.
+    pub(crate) no_download: std::sync::atomic::AtomicBool,
+    pub(crate) refused: AtomicUsize,
 }
 
 impl FakeStore {
@@ -66,7 +69,7 @@ impl FakeStore {
         self.blobs.lock().unwrap().insert(cid.clone(), bytes.to_vec());
         cid
     }
-    fn get(&self, cid: &str) -> Vec<u8> {
+    pub(crate) fn get(&self, cid: &str) -> Vec<u8> {
         self.blobs.lock().unwrap()[cid].clone()
     }
 }
@@ -79,6 +82,10 @@ impl Store for FakeStore {
         Ok(self.put(bytes))
     }
     fn download(&self, cid: &str) -> Result<Vec<u8>, String> {
+        if self.no_download.load(Ordering::Relaxed) {
+            self.refused.fetch_add(1, Ordering::Relaxed);
+            return Err("timed out waiting for Storage".into());
+        }
         self.blobs.lock().unwrap().get(cid).cloned().ok_or_else(|| "not found".into())
     }
 }
@@ -304,7 +311,7 @@ fn a_rejected_write_keeps_its_reason_and_the_next_one_goes() {
     w.tick(T0 + 10_000);
     assert_eq!(w.entry(b).state, St::Sent);
     assert_eq!(w.sent().len(), 2);
-    let s = w.q.lock().unwrap().status_json(&w.site_id());
+    let s = w.q.lock().unwrap().status_json(&w.site_id(), T0);
     assert_eq!(s["writes"][0]["state"], "rejected");
     assert_eq!(s["writes"][0]["reason"], "balance too low");
     assert_eq!(s["writes"][1]["state"], "sent");
@@ -408,7 +415,7 @@ fn without_key_import_every_write_fails_cleanly() {
     w.tick(T0);
     w.tick(T0 + 1);
     assert_eq!(w.writer.imports.load(Ordering::Relaxed), 1, "one import at start");
-    assert!(w.q.lock().unwrap().status_json(&w.site_id())["key"].as_str().unwrap().starts_with("key import not available"));
+    assert!(w.q.lock().unwrap().status_json(&w.site_id(), T0)["key"].as_str().unwrap().starts_with("key import not available"));
 
     let id = w.push(role_item(2, Role::Steward), St::Queued, vec![]);
     w.tick(T0 + 2);
@@ -421,10 +428,10 @@ fn without_key_import_every_write_fails_cleanly() {
     w.push(role_item(2, Role::Steward), St::Queued, vec![]);
     w.tick(T0 + 3);
     assert_eq!(w.sent().len(), 1);
-    assert_eq!(w.q.lock().unwrap().status_json(&w.site_id())["key"], "ok");
+    assert_eq!(w.q.lock().unwrap().status_json(&w.site_id(), T0)["key"], "ok");
 }
 
-fn decode(tx: &Tx) -> Instruction {
+pub(crate) fn decode(tx: &Tx) -> Instruction {
     borsh::from_slice(&tx.ix).unwrap()
 }
 
@@ -489,13 +496,19 @@ fn a_revoke_writes_the_reason_text_then_rotates_the_keyring() {
 
 /// A joiner (key 4) with a profile sealed to the admins, announced to us.
 pub(crate) fn joiner(w: &World, n: u8, role: u8) -> ApproveReq {
+    joiner_with(w, n, role, true)
+}
+
+/// `cached` false: only the announce arrived, so an approval must download the file from Storage.
+pub(crate) fn joiner_with(w: &World, n: u8, role: u8, cached: bool) -> ApproveReq {
     let request = joinreq::build(&key(n), &derive_lez_secret(&[n; 32]), w.site_id(), 1, T0 + REQUEST_VALID_MS).to_vec();
     let body = profile::Body { display_name: "Ravi".into(), bio: String::new(), experience: String::new() };
     let file = profile::build(&key(n), &w.site_id(), &acct(n), 1, 1, &body, None, &[pk(1)]).unwrap();
     let bytes = profile::to_bytes(&file);
     let cid = w.store.put(&bytes);
     let a = Announce::sign(&key(n), w.site_id(), 1, &cid, sha256(&bytes));
-    assert!(w.fetched.lock().unwrap().note_announce(a));
+    let mut f = w.fetched.lock().unwrap();
+    assert!(if cached { f.note_blob(a, bytes) } else { f.note_announce(a) });
     ApproveReq { request, role, name: String::new(), profile: None }
 }
 
@@ -609,8 +622,9 @@ fn a_profile_is_sealed_uploaded_and_announced() {
     w.tick(T0 + 61_000);
     assert_eq!(w.entry(id).state, St::Done);
     let out = w.out.lock().unwrap();
-    let [Wire::ProfileAnnounce(a)] = &out[..] else { panic!("one announce") };
+    let [Wire::ProfileBlob { announce: a, file }] = &out[..] else { panic!("one announce with its file") };
     assert!(a.verify().is_ok());
+    assert_eq!(sha256(file), a.sha256, "the file that goes inline is the one that was uploaded");
     assert_eq!((a.version, a.site, a.author), (3, w.site_id(), pk(1)));
     let bytes = w.store.get(&a.cid);
     assert_eq!(sha256(&bytes), a.sha256);
@@ -619,6 +633,40 @@ fn a_profile_is_sealed_uploaded_and_announced() {
     assert_eq!((body.display_name.as_str(), body.bio.as_str(), body.experience.as_str()), ("Asha", "nurse", "10 years"));
     assert!(w.fetched.lock().unwrap().announce_of(&pk(1)).is_some(), "we keep our own announce");
     assert!(w.sent().is_empty(), "a profile is no chain write");
+}
+
+#[test]
+fn a_big_profile_goes_by_cid_only() {
+    let w = World::new();
+    crate::rpc::refresh(&w.chain, &*w.rpc);
+    // 3-byte characters: 500 + 500 of them, hex-encoded and sealed, are far over the inline cap.
+    let (bio, experience) = ("ह".repeat(500), "ह".repeat(500));
+    let id = w.push(Intent::Publish { name: "Asha".into(), version: 3, bio, experience }, St::Preparing, vec![]);
+    w.tick(T0 + 61_000);
+    assert_eq!(w.entry(id).state, St::Done);
+    let out = w.out.lock().unwrap();
+    let [Wire::ProfileAnnounce(a)] = &out[..] else { panic!("the announce alone") };
+    assert!(w.store.get(&a.cid).len() > MAX_INLINE_PROFILE);
+}
+
+#[test]
+fn a_failed_download_keeps_the_entry_preparing_with_its_reason_and_wait() {
+    let w = World::new();
+    let req = joiner_with(&w, 4, 0, false); // only the announce came: the file must be downloaded
+    let id = w.push(Intent::Approve { roster_len: 0, items: vec![req] }, St::Preparing, vec![]);
+    w.store.no_download.store(true, Ordering::Relaxed);
+    w.tick(T0 + 7_000);
+    let e = w.entry(id);
+    assert_eq!(e.state, St::Preparing);
+    assert_eq!(e.reason.as_deref(), Some("storage: timed out waiting for Storage"));
+    let s = w.q.lock().unwrap().status_json(&w.site_id(), T0 + 7_500);
+    assert_eq!((s["writes"][0]["state"].as_str(), s["writes"][0]["waited_s"].as_u64()), (Some("preparing"), Some(7)));
+    assert_eq!(s["writes"][0]["reason"], "storage: timed out waiting for Storage");
+    // The node answers again: the same entry goes on to Queued with no new click, and the wait is null.
+    w.store.no_download.store(false, Ordering::Relaxed);
+    w.tick(T0 + 12_000);
+    assert_eq!(w.entry(id).state, St::Queued);
+    assert!(w.q.lock().unwrap().status_json(&w.site_id(), T0 + 13_000)["writes"][0]["waited_s"].is_null());
 }
 
 #[test]

@@ -152,6 +152,12 @@ impl Node {
         a.site == self.store.site && self.fetched.as_ref().is_some_and(|f| f.lock().unwrap().note_announce(a))
     }
 
+    /// A profile announce with its file (`Wire::ProfileBlob`): keep both for the fetchers and for an
+    /// approval. True when the file was new and genuine.
+    pub fn on_profile_blob(&self, a: Announce, file: Vec<u8>) -> bool {
+        a.site == self.store.site && self.fetched.as_ref().is_some_and(|f| f.lock().unwrap().note_blob(a, file))
+    }
+
     /// The sorted keys of the approved members. They elect who answers Heads.
     #[must_use]
     pub fn approved_keys(&self) -> Vec<Key> {

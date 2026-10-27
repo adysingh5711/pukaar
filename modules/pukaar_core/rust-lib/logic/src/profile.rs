@@ -297,6 +297,9 @@ pub struct Announce {
 
 pub const ANNOUNCE_DOMAIN: &[u8] = b"pukaar.profile.announce/1\0";
 pub const MAX_CID: usize = 128;
+/// The largest profile file that travels inside `Wire::ProfileBlob`. A bigger file goes by its CID
+/// only (`Wire::ProfileAnnounce`) and the readers download it from Storage.
+pub const MAX_INLINE_PROFILE: usize = 4096;
 
 impl Announce {
     fn message(&self) -> Vec<u8> {
@@ -484,6 +487,16 @@ mod tests {
         assert_eq!(e.pukaar_key, hex::encode(pk(2)));
         assert_eq!((e.version, e.key_epoch), (1, 1));
         assert_eq!(open(&e, &sk(1), &BTreeMap::new()).unwrap(), body());
+    }
+
+    #[test]
+    fn a_full_profile_fits_the_inline_cap() {
+        // The most that the UI allows: 64 name, 500 bio and 500 experience characters, 3 admin wraps.
+        let long = Body { display_name: "n".repeat(64), bio: "b".repeat(500), experience: "e".repeat(500) };
+        let admins = [pk(1), pk(2), pk(3)];
+        let e = build(&sk(4), &SITE_ID, &USER, 1, 1, &long, Some(&[7; 32]), &admins).unwrap();
+        let n = to_bytes(&e).len();
+        assert!(n <= MAX_INLINE_PROFILE, "{n} bytes: measured 3658 on 2026-10-27");
     }
 
     #[test]

@@ -567,6 +567,10 @@ fn on_wire(channel: &str, bytes: &[u8]) {
         Some(Wire::ProfileAnnounce(a)) => {
             node.on_announce(a);
         }
+        // The same with the file inside: an admin can approve without a download from the author.
+        Some(Wire::ProfileBlob { announce, file }) => {
+            node.on_profile_blob(announce, file);
+        }
         // Only recorded: `site_info.chain.pending_peers` shows it for a while.
         Some(Wire::ChainPending { tx, kind }) => {
             peers.retain(|(t, _, at)| *t != tx && at.elapsed() < PEER_PENDING_FOR);
@@ -953,7 +957,7 @@ impl PukaarCoreModule for Pukaar {
 
     fn chain_status(&mut self) -> String {
         flush();
-        queued(|node, q, _| Ok(ops::status(node, q).to_string())).unwrap_or_else(err)
+        queued(|node, q, _| Ok(ops::status(node, q, now_ms()).to_string())).unwrap_or_else(err)
     }
 
     fn send_batch(&mut self) -> String {

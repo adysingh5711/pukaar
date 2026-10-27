@@ -21,7 +21,7 @@ use crate::event::{sha256, Key};
 use crate::fetch::{Details, Places, SharedFetched, Store};
 use crate::joinreq;
 use crate::lezkey::{derive_lez_secret, lez_account_id};
-use crate::profile::{self, Announce};
+use crate::profile::{self, Announce, MAX_INLINE_PROFILE};
 use crate::rpc::{clock_ms, get_account, Rpc, SharedChain};
 use crate::sync::{Wire, WriteKind};
 use crate::writes::{self, Ctx, PlaceOp, Pointed, SuperOp, Tx};
@@ -484,7 +484,7 @@ impl Queue {
     }
 
     /// `chain_status`: the state of each write of this site, and of the key import.
-    pub fn status_json(&self, site: &Key) -> serde_json::Value {
+    pub fn status_json(&self, site: &Key, now_ms: u64) -> serde_json::Value {
         let key = match &self.key {
             KeyState::Unknown => "not imported yet".to_string(),
             KeyState::Ready => "ok".to_string(),
@@ -498,6 +498,8 @@ impl Queue {
                 serde_json::json!({
                     "id": e.id, "kind": e.intent.name(), "state": e.state_name(), "items": e.intent.len(),
                     "tx": e.tx.as_ref().map(|t| t.chars().take(10).collect::<String>()), "reason": e.reason,
+                    // Seconds in `Preparing` (what the reason says it waits for), else null.
+                    "waited_s": (e.state == St::Preparing).then(|| now_ms.saturating_sub(e.since_ms) / 1000),
                     // The members that the write is about (base58), so the UI can mark their rows.
                     "accounts": e.intent.users().iter().map(crate::chain::b58).collect::<Vec<_>>(),
                 })
@@ -649,8 +651,15 @@ fn step(env: &Env, e: &mut Entry, ks: &mut KeyState, commit: &dyn Fn(&Entry)) {
 
 // ---- Preparing ----
 
+/// A file that the chain or an announce points to. What the fetchers or Delivery brought is read first,
+/// so a remote node is only asked when we hold nothing. The wait is short (`try_download`): this runs on
+/// the write thread.
 fn fetch_blob(env: &Env, cid: &str, sha: &[u8; 32]) -> Result<Vec<u8>, String> {
-    let b = env.store.download(cid).map_err(|e| format!("storage: {e}"))?;
+    let held = env.fetched.lock().unwrap().cached(cid, sha);
+    if let Some(b) = held {
+        return Ok(b);
+    }
+    let b = env.store.try_download(cid).map_err(|e| format!("storage: {e}"))?;
     if sha256(&b) != *sha {
         return Err(format!("storage: {cid} does not match the SHA-256 on the chain"));
     }
@@ -779,7 +788,8 @@ fn prepare_publish(env: &Env, e: &mut Entry, body: profile::Body, version: u64) 
         let b = &e.blobs[0];
         let a = Announce::sign(env.key, e.site, version, b.cid.as_deref().unwrap_or(""), sha256(&b.bytes));
         env.fetched.lock().unwrap().note_announce(a.clone());
-        (env.broadcast)(Wire::ProfileAnnounce(a));
+        // The file goes with the announce when it fits: an admin then approves without Storage.
+        (env.broadcast)(if b.bytes.len() <= MAX_INLINE_PROFILE { Wire::ProfileBlob { announce: a, file: b.bytes.clone() } } else { Wire::ProfileAnnounce(a) });
         e.to(St::Done, env.now_ms);
     }
     Ok(())
