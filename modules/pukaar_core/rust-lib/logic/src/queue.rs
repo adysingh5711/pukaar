@@ -22,7 +22,7 @@ use crate::fetch::{Details, Places, SharedFetched, Store};
 use crate::joinreq;
 use crate::lezkey::{derive_lez_secret, lez_account_id};
 use crate::profile::{self, Announce, MAX_INLINE_PROFILE};
-use crate::rpc::{claim_ms, get_account, Rpc, SharedChain};
+use crate::rpc::{balance, claim_ms, get_account, lez, Rpc, SharedChain, FLOOR_LEPTA};
 use crate::sync::{Wire, WriteKind};
 use crate::writes::{self, Ctx, PlaceOp, Pointed, SuperOp, Tx};
 use ed25519_dalek::SigningKey;
@@ -47,6 +47,19 @@ const MAX_REJECTED: usize = 256;
 const UPLOAD_TRIES: u32 = 5;
 /// A join request is valid for a day.
 pub const REQUEST_VALID_MS: u64 = 24 * 60 * 60 * 1000;
+
+/// The start of the reason of a write that waits for funds (`status_json` marks the write by it).
+pub const SHORT_OF_FUNDS: &str = "Your account has ";
+
+/// Why a write does not go yet: the balance is under the floor. The write stays queued and goes by itself.
+pub fn short_of_funds(have: u128, account: &AccountId) -> String {
+    format!(
+        "{SHORT_OF_FUNDS}{} LEZ. A write needs at least {} LEZ so that a failed write can still be paid. Send funds to {} and the write will go on.",
+        lez(have),
+        lez(FLOOR_LEPTA),
+        crate::chain::b58(account)
+    )
+}
 
 pub enum Poll {
     Pending,
@@ -549,6 +562,8 @@ impl Queue {
                 serde_json::json!({
                     "id": e.id, "kind": e.intent.name(), "state": e.state_name(), "items": e.intent.len(),
                     "tx": e.tx.as_ref().map(|t| t.chars().take(10).collect::<String>()), "reason": e.reason,
+                    // The balance is under the floor: the write is not sent and goes on when funds arrive.
+                    "needs_funds": e.state == St::Queued && e.reason.as_deref().is_some_and(|r| r.starts_with(SHORT_OF_FUNDS)),
                     // Seconds in `Preparing` (what the reason says it waits for), else null.
                     "waited_s": (e.state == St::Preparing).then(|| now_ms.saturating_sub(e.since_ms) / 1000),
                     // The members that the write is about (base58), so the UI can mark their rows.
@@ -950,6 +965,13 @@ fn send(env: &Env, e: &mut Entry, ks: &mut KeyState, commit: &dyn Fn(&Entry)) ->
             return Ok(());
         }
     };
+    // The fee hold of a failed write is lost, so a balance under the floor holds the write. It is read now, not
+    // at prepare: the balance may have dropped while the entry waited. The entry stays `Queued` (nothing was
+    // sent) and the next tick reads again, so it goes on when funds arrive.
+    let have = balance(env.rpc, &me).map_err(|e| format!("could not read the balance of your account: {e}"))?;
+    if have < FLOOR_LEPTA {
+        return Err(short_of_funds(have, &me));
+    }
     // Save "Sending" first: a crash after the send must never lead to a second send.
     e.to(St::Sending, now);
     commit(e);

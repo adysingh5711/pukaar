@@ -37,6 +37,13 @@ impl FakeRpc {
     }
 }
 
+impl FakeRpc {
+    /// The native balance of an account, in lepta: 16 bytes in the shard of the native token program.
+    pub(crate) fn fund(&self, id: &AccountId, lepta: u128) {
+        self.put(id, &crate::rpc::NATIVE_PROGRAM, lepta.to_le_bytes().to_vec());
+    }
+}
+
 impl Rpc for FakeRpc {
     fn call(&self, method: &str, params: Value) -> Result<String, String> {
         match method {
@@ -195,6 +202,7 @@ impl World {
         };
         w.put_site(&w.site.clone());
         w.put_member(&w.creator.clone());
+        w.rpc.fund(&acct(1), 100_000_000); // far above the floor
         w.rpc.put(&writes::CLOCK_ACCOUNT, &writes::clock_program(), [&[0u8; 8][..], &CLOCK_NOW.to_le_bytes()].concat());
         w
     }
@@ -879,4 +887,84 @@ fn the_margin_claim_passes_the_rules_and_the_old_claim_does_not() {
     let out = apply_effect(&rv(claim_of(read)), &admin.encode()).unwrap().unwrap();
     let m = pukaar_sites_rules::Member::decode(&out).unwrap();
     assert_eq!((m.status, m.revoked.unwrap().at_ms), (MemberStatus::Removed, claim_of(read)));
+}
+
+// ---- the balance guard ----
+
+#[test]
+fn a_balance_under_the_floor_holds_the_write_with_the_reason() {
+    use pukaar_sites_rules::Role;
+    let w = World::new();
+    w.put_member(&w.member(2, Role::Resident));
+    w.rpc.fund(&acct(1), FLOOR_LEPTA - 1);
+    let id = w.push(role_item(2, Role::Steward), St::Queued, vec![]);
+    w.tick(T0);
+    let e = w.entry(id);
+    assert_eq!((e.state, e.tx), (St::Queued, None));
+    let want = format!("Your account has 0.004499999 LEZ. A write needs at least 0.0045 LEZ so that a failed write can still be paid. Send funds to {} and the write will go on.", b58(&acct(1)));
+    assert_eq!(e.reason.as_deref(), Some(want.as_str()));
+    assert!(w.sent().is_empty() && w.out.lock().unwrap().is_empty(), "nothing is signed or sent");
+    let s = w.q.lock().unwrap().status_json(&w.site_id(), T0);
+    assert_eq!((s["writes"][0]["state"].as_str(), s["writes"][0]["needs_funds"].as_bool()), (Some("queued"), Some(true)));
+    // The wait has no end: Queued has no window, and the next tick holds it again.
+    w.tick(T0 + 3 * SEND_WINDOW_MS);
+    assert_eq!((w.entry(id).state, w.sent().len()), (St::Queued, 0));
+}
+
+#[test]
+fn the_floor_itself_sends() {
+    use pukaar_sites_rules::Role;
+    let w = World::new();
+    w.put_member(&w.member(2, Role::Resident));
+    w.rpc.fund(&acct(1), FLOOR_LEPTA);
+    let id = w.push(role_item(2, Role::Steward), St::Queued, vec![]);
+    w.tick(T0);
+    assert_eq!((w.entry(id).state, w.sent().len()), (St::Sent, 1));
+}
+
+#[test]
+fn a_balance_that_drops_after_prepare_is_caught_at_the_send() {
+    let w = World::new();
+    // A Places edit prepares first (uploads its file), then waits as Queued.
+    let op = PlaceOp::Add(crate::event::Location { code: "W-02".into(), label: "Pump".into(), group: "Water".into() });
+    let id = w.push(Intent::Places { ops: vec![op] }, St::Preparing, vec![]);
+    w.tick(T0);
+    assert_eq!(w.entry(id).state, St::Queued, "prepared while the account was funded");
+    w.rpc.fund(&acct(1), 1_000_000); // the balance dropped meanwhile
+    w.tick(T0 + 5_000);
+    let e = w.entry(id);
+    assert_eq!(e.state, St::Queued);
+    assert!(e.reason.as_deref().is_some_and(|r| r.starts_with(SHORT_OF_FUNDS) && r.contains("0.001 LEZ")), "{:?}", e.reason);
+    assert!(w.sent().is_empty());
+}
+
+#[test]
+fn funds_that_arrive_resume_the_write_and_it_is_sent_once() {
+    use pukaar_sites_rules::Role;
+    let w = World::new();
+    w.put_member(&w.member(2, Role::Resident));
+    w.rpc.fund(&acct(1), 0);
+    let id = w.push(role_item(2, Role::Steward), St::Queued, vec![]);
+    w.tick(T0);
+    w.tick(T0 + 5_000);
+    assert_eq!((w.entry(id).state, w.sent().len()), (St::Queued, 0));
+    w.rpc.fund(&acct(1), 20_000_000);
+    w.tick(T0 + 10_000);
+    let e = w.entry(id);
+    assert_eq!((e.state, e.reason, w.sent().len()), (St::Sent, None, 1), "the reason is gone");
+    w.tick(T0 + 15_000);
+    assert_eq!(w.sent().len(), 1, "no second send");
+}
+
+#[test]
+fn an_unreadable_balance_keeps_the_write_and_sends_nothing() {
+    use pukaar_sites_rules::Role;
+    let w = World::new();
+    w.put_member(&w.member(2, Role::Resident));
+    w.rpc.accounts.lock().unwrap().insert(b58(&acct(1)), (crate::rpc::NATIVE_PROGRAM, vec![1, 2, 3]));
+    let id = w.push(role_item(2, Role::Steward), St::Queued, vec![]);
+    w.tick(T0);
+    let e = w.entry(id);
+    assert_eq!((e.state, w.sent().len()), (St::Queued, 0));
+    assert!(e.reason.as_deref().is_some_and(|r| r.starts_with("could not read the balance")));
 }

@@ -315,10 +315,25 @@ Item {
     function writeWhy(w) { return w.reason ? ": " + w.reason : "" }
     // The key of our account in the wallet: only a failure is news ("ok" and "not imported yet" are not).
     readonly property string keyProblem: ["", "ok", "not imported yet"].indexOf(chain.key || "") >= 0 ? "" : chain.key
+    // The balance of our network account (chain_status, in lepta, null until the first read). The core holds a write
+    // back under chain.floor_lepta, so that a failed write can still be paid, and it goes on when funds arrive.
+    // The warning comes under chain.low_lepta: fewer than three more writes fit.
+    readonly property var balance: chain.balance_lepta === undefined ? null : chain.balance_lepta
+    function lez(l) {
+        var f = String(1e9 + l % 1e9).substr(1).replace(/0+$/, "")
+        return Math.floor(l / 1e9) + (f ? "." + f : "")
+    }
+    readonly property string balanceState: balance === null ? "unknown" : balance < chain.floor_lepta ? "short" : balance < chain.low_lepta ? "low" : "ok"
+    readonly property string balanceLine: balance === null ? "Balance: not read yet."
+        : "Balance: " + lez(balance) + " LEZ." + (balanceState === "short" ? " A write needs at least " + lez(chain.floor_lepta)
+            + " LEZ, so that a failed write can still be paid. Send funds to this account." : balanceState === "low" ? " This is enough for fewer than three more writes. Add funds soon." : "")
+    // The first write that waits because the account holds too little (its reason says what to do), or null.
+    readonly property var fundsWrite: writes.filter(function (w) { return w.needs_funds })[0] || null
     // The banners at the top: a rejected write, and a write that has no row of its own (the site, places,
     // super admins) while it is on its way. The site stays on screen once it is on the chain, until closed.
     readonly property var writeBanners: writes.filter(function (w) {
         if (dismissed[w.id]) return false
+        if (w.needs_funds) return false      // the funds banner says why it waits
         return w.state === "rejected" || (w.kind === "create_site" ? true
             : (w.accounts || []).length === 0 && w.kind !== "profile" && isLive(w))
     }).slice(-3)
@@ -352,6 +367,9 @@ Item {
             { name: "Storage", site: true, tone: storageRow[0], state: storageRow[1], detail: storageRow[2] }
         ]
     }
+    // Profile's own extra row: the balance of the network account. Not in connRows, because the sidebar shows one dot for each of those.
+    readonly property var balanceRow: ({ name: "Balance", site: false, tone: ({ unknown: "conn", short: "off", low: "conn", ok: "ok" })[balanceState],
+        state: balance === null ? "Not read yet" : lez(balance) + " LEZ", detail: balance === null ? "The balance shows after the first read of the chain." : balanceLine.replace(/^Balance: [^ ]+ LEZ\.\s*/, "") || "Enough for the next writes." })
     // A status dot colour: the sidebar's tokens, or the page's.
     function toneColor(tone, side) {
         return (side ? { ok: t.sbOk, conn: t.sbConn, off: t.sbOff, idle: t.sbCtl } : { ok: t.okDot, conn: t.connDot, off: t.danger, idle: t.ctlBd })[tone]
@@ -1517,8 +1535,13 @@ Item {
             }
         }
         Help {
+            visible: root.inSite
+            text: root.balanceLine; color: root.balanceState === "short" ? root.t.danger : root.balanceState === "low" ? root.t.warn : root.t.muted
+            font.weight: root.balanceState === "short" || root.balanceState === "low" ? Font.DemiBold : Font.Normal
+        }
+        Help {
             text: "This account pays the small network fee for each change that you send to the chain. "
-                + "It needs funds before your first change. Add funds to it from your wallet. Without funds, the chain rejects the change."
+                + "It needs funds before your first change. Add funds to it from your wallet. Without funds, the app holds the change back and sends it when funds arrive."
         }
     }
 
@@ -2203,6 +2226,13 @@ Item {
             text: "The admin declined this request. You can send it again."
             buttonText: "Send again"
             onActivated: root.run("join_again", [])
+        }
+        Flash {   // a change waits because the account holds too little: it goes on by itself when funds arrive
+            visible: root.inSite && !!root.fundsWrite
+            Accessible.role: Accessible.AlertMessage
+            tone: "warn"; icon: "warn"
+            lead: "A change is waiting for funds."
+            text: root.fundsWrite ? root.fundsWrite.reason : ""
         }
         Flash {   // the wallet cannot use our key: nothing can be sent to the chain
             visible: root.inSite && root.keyProblem !== ""
@@ -3335,7 +3365,7 @@ Item {
                             x: 1; y: 1; width: parent.width - 2
                             spacing: 0
                             Repeater {
-                                model: root.connRows
+                                model: root.connRows.concat([root.balanceRow])
                                 delegate: ColumnLayout {
                                     id: crow
                                     required property var modelData

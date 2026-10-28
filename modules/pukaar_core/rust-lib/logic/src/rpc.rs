@@ -69,6 +69,39 @@ pub fn get_account(rpc: &dyn Rpc, program: &AccountId, id: &AccountId) -> Result
     shard_of(&rpc.call("getAccount", json!([b58(id)]))?, program)
 }
 
+/// The native token keeps every balance in the shard of this program id (LEZ v0.3.1 `native_token`): 16 bytes,
+/// little endian, empty for zero. Seen on the real testnet.
+pub const NATIVE_PROGRAM: AccountId = [0; 32];
+/// One lepta is a billionth of a LEZ.
+pub const LEPTA_PER_LEZ: u128 = 1_000_000_000;
+/// The least balance that a write needs. The sequencer holds `gas_limit * 8 + tx bytes * 8` before it runs the
+/// call and keeps all of it when the call fails: 4,006,680 lepta at gas_limit 500,000 for a small call, and
+/// 4,036,776 for the biggest one (an `approve_batch` of 10, 4,597 bytes). The rest of the 4.5 M is a margin for a
+/// rise of the base fee, which was at its minimum (8) in every measurement.
+pub const FLOOR_LEPTA: u128 = 4_500_000;
+/// A normal write costs 0.5 to 1.4 M lepta (a batch of 10 up to 3.4 M). Below the floor plus three of the dear
+/// ones, fewer than three more writes fit, and the UI warns.
+pub const LOW_LEPTA: u128 = FLOOR_LEPTA + 3 * 1_400_000;
+
+/// The native balance of `account` in lepta. An account that the chain does not know holds 0.
+pub fn balance(rpc: &dyn Rpc, account: &AccountId) -> Result<u128, String> {
+    let d = get_account(rpc, &NATIVE_PROGRAM, account)?;
+    match d.len() {
+        0 => Ok(0),
+        16 => Ok(u128::from_le_bytes(d.try_into().expect("16 bytes"))),
+        n => Err(format!("the balance record has {n} bytes, not 16")),
+    }
+}
+
+/// Lepta in LEZ for the UI, without trailing zeros: 4500000 gives "0.0045".
+pub fn lez(lepta: u128) -> String {
+    let (whole, frac) = (lepta / LEPTA_PER_LEZ, lepta % LEPTA_PER_LEZ);
+    if frac == 0 {
+        return whole.to_string();
+    }
+    format!("{whole}.{}", format!("{frac:09}").trim_end_matches('0'))
+}
+
 /// Read the Site, then the Member of every account in `users` (plus the creator and the super
 /// admins). Returns the roster and the block id read before the accounts.
 pub fn read_roster(
@@ -148,6 +181,11 @@ pub struct Chain {
     pub missing: bool,
     /// When the newest good read ended (ms since 1970). 0 until the first one.
     pub read_ms: u64,
+    /// Our own account: it pays the fee of every write.
+    me: AccountId,
+    /// Its native balance in lepta at the last good read, `None` until the first one. Read apart from the
+    /// roster: it shows before the site exists, so the user can fund the account first.
+    pub balance: Option<u128>,
     /// Accounts we trust enough to keep: our own, the ones `track` got, every account of a keyring that we
     /// saw (so a member that a revoke left out of the next keyring is still read, and listed as removed),
     /// and the hints that had a record. Saved in `file`, so a restart keeps them.
@@ -180,6 +218,8 @@ impl Chain {
             error: None,
             missing: false,
             read_ms: 0,
+            me,
+            balance: None,
             users: BTreeSet::from([me]),
             file: None,
             expect: BTreeMap::new(),
@@ -341,14 +381,16 @@ impl Chain {
 /// Read the chain now and store the result. The lock is held only to take the inputs and to store
 /// the result, never during the network calls. A failed read keeps the old cache and sets `error`.
 pub fn refresh(chain: &Mutex<Chain>, rpc: &dyn Rpc) {
-    let (program, site_id, users) = {
+    let (program, site_id, users, me) = {
         let c = chain.lock().unwrap();
         let all = c.users.iter().chain(c.expect.keys()).chain(&c.hints);
-        (c.program, c.site_id, all.copied().collect())
+        (c.program, c.site_id, all.copied().collect(), c.me)
     };
+    let funds = balance(rpc, &me);
     let r = read_roster(rpc, &program, &site_id, &users);
     let mut c = chain.lock().unwrap();
     c.busy = false;
+    c.balance = funds.ok().or(c.balance); // a failed read keeps the last balance
     match r {
         Ok((mut roster, block)) => {
             roster.retain_matching(&c.expect);
@@ -433,6 +475,27 @@ mod tests {
             c.lock().unwrap().track(acct(n));
         }
         c
+    }
+
+    #[test]
+    fn lez_text_and_balance_read() {
+        assert_eq!([lez(0), lez(4_500_000), lez(1_000_000_000), lez(12_345_678_900)], ["0", "0.0045", "1", "12.3456789"]);
+        let f = fake();
+        assert_eq!(balance(&f, &acct(2)), Ok(0), "an unknown account holds nothing");
+        let body = |b: u128| format!(r#"{{"result":{{"nonce":0,"data":{{"shards":{{"11111111111111111111111111111111":{:?}}}}}}}}}"#, b.to_le_bytes().to_vec());
+        f.accounts.lock().unwrap().insert(b58(&acct(2)), body(11_434_640));
+        assert_eq!(balance(&f, &acct(2)), Ok(11_434_640));
+    }
+
+    #[test]
+    fn refresh_keeps_the_balance_and_a_failed_read_keeps_the_last_one() {
+        let (c, f) = (chain(), fake());
+        assert_eq!(c.lock().unwrap().balance, None);
+        refresh(&c, &f);
+        assert_eq!(c.lock().unwrap().balance, Some(0));
+        f.accounts.lock().unwrap().insert(b58(&acct(2)), r#"{"result":{"nonce":0,"data":{"shards":{"11111111111111111111111111111111":[1,0]}}}}"#.into());
+        refresh(&c, &f); // two bytes: not a balance
+        assert_eq!(c.lock().unwrap().balance, Some(0), "the last good value stays");
     }
 
     #[test]

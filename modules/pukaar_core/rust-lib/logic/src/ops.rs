@@ -14,7 +14,7 @@ use crate::node::{fingerprint, parse_id, Node};
 use crate::profile;
 use crate::sync::Wire;
 use crate::queue::{ApproveReq, Blob, Intent, Prof, ProfReq, Queue, RevokeReq, St, REQUEST_VALID_MS};
-use crate::rpc::rank_name;
+use crate::rpc::{self, rank_name};
 use crate::writes::{self, Genesis, PlaceOp};
 use ed25519_dalek::SigningKey;
 use pukaar_sites_rules::{can, request_id, seed, Action, Member, MemberStatus, Rank, Role, Site};
@@ -439,6 +439,11 @@ pub fn remember_known(node: &Node, q: &Queue) {
 pub fn status(node: &Node, q: &Queue, now_ms: u64) -> Value {
     let mut v = q.status_json(&node.store.site, now_ms);
     v["refresh_waiting"] = refresh_items(node, q).len().into();
+    // The native balance of our account (lepta, null until the first read) and the two limits of the guard.
+    v["balance_lepta"] = node.chain.as_ref().and_then(|c| c.lock().unwrap().balance).map(|b| b as u64).into();
+    v["floor_lepta"] = (rpc::FLOOR_LEPTA as u64).into();
+    v["low_lepta"] = (rpc::LOW_LEPTA as u64).into();
+    v["account"] = b58(&node.account).into();
     let me = node.me();
     let removed = node.chain.as_ref().is_some_and(|c| c.lock().unwrap().revocation_of(&me, &node.names).is_some());
     v["reason"] = match (node.role_now(&me), removed) {

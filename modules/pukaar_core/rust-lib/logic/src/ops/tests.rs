@@ -354,6 +354,10 @@ fn status_has_the_shape_of_chain_status() {
     assert_eq!((w0["kind"].as_str(), w0["state"].as_str()), (Some("set_role"), Some("waiting")));
     assert_eq!(w0["accounts"], serde_json::json!([crate::chain::b58(&acct(2))]), "the row of the member is found by its account");
     let _ = PROGRAM;
+    // The balance of our account comes from the cached read (null before the first one), in lepta.
+    assert_eq!(s["balance_lepta"].as_u64(), Some(100_000_000));
+    assert_eq!((s["floor_lepta"].as_u64(), s["low_lepta"].as_u64()), (Some(4_500_000), Some(8_700_000)));
+    assert_eq!(s["account"], crate::chain::b58(&n.account));
 }
 
 /// Member `n` that the chain shows as removed by member 1.
