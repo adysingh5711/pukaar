@@ -32,6 +32,15 @@ Item {
     property bool onlyMine: false
     property string historyPlace: ""     // History's place filter: a place code, "" = every place
     property string notice: ""           // an info banner after an action: where a reopened issue went
+    // ---- Notifications: every banner worth keeping lands here, newest first, until the app closes ----
+    property var inbox: []               // [{ms, text, tone}], at most 50
+    property int unread: 0               // notices added since the panel was last open: the bell's badge
+    property bool inboxOpen: false
+    function addNotice(text, tone) {
+        if (inbox.length && inbox[0].text === text) return      // the same banner twice in a row is one notice
+        inbox = [{ ms: Date.now(), text: text, tone: tone }].concat(inbox.slice(0, 49))
+        if (!inboxOpen) unread++
+    }
     property bool busy: false            // a call is running: every action button waits (no double submit)
     readonly property bool inSite: !!(me && me.site)
     readonly property bool staff: me.role === "Steward" || me.role === "Admin"
@@ -393,7 +402,11 @@ Item {
     readonly property var fundsWrite: writes.filter(function (w) { return w.needs_funds })[0] || null
     // The banners at the top: a rejected write, and a write that has no row of its own (the site, places,
     // super admins) while it is on its way. The site stays on screen once it is on the chain, until closed.
-    readonly property var writeBanners: writes.filter(function (w) {
+    // Kept in a property of its own, replaced only when its content changed: chain_status arrives every 2 s as a new object,
+    // and a rebuilt Repeater would restart every banner's delay and never show it.
+    property var writeBanners: []
+    onWriteBannersNextChanged: if (JSON.stringify(writeBannersNext) !== JSON.stringify(writeBanners)) writeBanners = writeBannersNext
+    readonly property var writeBannersNext: writes.filter(function (w) {
         if (dismissed[w.id]) return false
         if (w.needs_funds) return false      // the funds banner says why it waits
         return w.state === "rejected" || (w.kind === "create_site" ? true
@@ -1533,8 +1546,37 @@ Item {
 
     // A tinted notice (info blue, `err` red, or a `tone`: "warn" amber, "plain" neutral) with an icon, wrapped text, and optionally one button
     // on the right: a text one (`buttonText`) or an icon-only one (`buttonIcon`).
+    // A notice shows only after its condition `when` has held for `delay` ms (a start-up state that clears by itself
+    // never shows), and goes away by itself after `expire` ms (0 = stays). `shown` is the result; when `when` clears,
+    // the next time starts again.
+    component Settled: Item {
+        id: gate
+        property bool when: true
+        property int delay: 0
+        property int expire: 0
+        property bool ready: delay === 0
+        property bool spent: false
+        readonly property bool shown: when && ready && !spent
+        onWhenChanged: if (!when) { ready = delay === 0; spent = false }
+        Timer { running: gate.when && !gate.ready; interval: gate.delay; onTriggered: gate.ready = true }
+        Timer { running: gate.shown && gate.expire > 0; interval: gate.expire; onTriggered: gate.spent = true }
+    }
+
+    // `when`, `delay` and `expire` are Settled's. `log` keeps what it said in the Notifications panel. A caller that
+    // sets `visible` itself skips all of this.
     component Flash: Rectangle {
         id: flash
+        property bool when: true
+        property int delay: 0
+        property int expire: 0
+        property bool log: false
+        readonly property string said: (lead ? lead + " " : "") + text
+        function keep() { if (log && gate.shown) root.addNotice(said, tone) }
+        visible: gate.shown
+        onShownChanged: keep()
+        onSaidChanged: keep()
+        readonly property bool shown: gate.shown
+        Settled { id: gate; when: flash.when; delay: flash.delay; expire: flash.expire }
         property string text
         property string lead               // a bold red first sentence
         property bool err: false
@@ -1575,6 +1617,10 @@ Item {
 
     // A wrapped paragraph. Plain text on purpose: "<YOUR_PUBLIC_ACCOUNT>" must not be read as a tag.
     component Note: Label {
+        property bool when: true           // with `delay` (ms): shows only after `when` has held that long (see Settled)
+        property int delay: 0
+        visible: gate.shown
+        Settled { id: gate; when: parent.when; delay: parent.delay }
         Layout.fillWidth: true
         wrapMode: Text.Wrap
         textFormat: Text.PlainText
@@ -2169,6 +2215,11 @@ Item {
             ColumnLayout {
                 Layout.fillWidth: true; Layout.topMargin: -4
                 spacing: 12
+                NavItem {   // Notifications: the bell opens the panel; the pill counts what came in since it was last open
+                    text: "Notifications"; glyph: "bell"; compact: !sidebar.open
+                    count: root.unread; current: root.inboxOpen
+                    onClicked: root.inboxOpen = !root.inboxOpen
+                }
                 GridLayout {   // delivery, chain and Storage: one dot each, no words. A click opens Profile, which has the details.
                     Layout.alignment: sidebar.open ? Qt.AlignLeft : Qt.AlignHCenter
                     Layout.leftMargin: sidebar.open ? 2 : 0
@@ -2271,6 +2322,55 @@ Item {
         color: "#4d000000"
         MouseArea { anchors.fill: parent; onClicked: root.overlayOpen = false }
     }
+    // ---- the Notifications panel: the notices of this session, newest first ----
+    onInboxOpenChanged: {
+        if (inboxOpen) { unread = 0; inboxPanel.open() } else inboxPanel.close()
+    }
+    Popup {
+        id: inboxPanel
+        parent: root
+        onClosed: root.inboxOpen = false     // Escape
+        closePolicy: Popup.CloseOnEscape
+        x: root.sidebarWidth + 8
+        width: Math.min(400, root.width - x - 16); height: Math.min(440, root.height - 32); y: root.height - height - 16
+        padding: 12
+        background: Rectangle { radius: 8; color: root.t.card; border.color: root.t.bd }
+        contentItem: ColumnLayout {
+            spacing: 8
+            RowLayout {
+                spacing: 12
+                Label { Layout.fillWidth: true; text: "Notifications"; font.weight: Font.DemiBold; font.pointSize: root.baseSize * 16 / 14; color: root.t.fg }
+                LinkButton { visible: root.inbox.length > 0; text: "Clear all"; onClicked: root.inbox = [] }
+                LinkButton { text: "Close"; onClicked: root.inboxOpen = false }
+            }
+            Help { when: root.inbox.length === 0; text: "Nothing here. Notices that go away by themselves are kept here." }
+            ListView {
+                Layout.fillWidth: true; Layout.fillHeight: true
+                clip: true; spacing: 8
+                model: root.inbox
+                ScrollBar.vertical: ScrollBar {}
+                delegate: RowLayout {
+                    id: item
+                    required property var modelData
+                    required property int index
+                    width: ListView.view.width
+                    spacing: 8
+                    Icon { Layout.alignment: Qt.AlignTop; Layout.topMargin: 2; name: item.modelData.tone === "info" ? "info" : "warn"; size: 16
+                           color: item.modelData.tone === "err" ? root.t.danger : item.modelData.tone === "warn" ? root.t.warn : root.t.accent }
+                    ColumnLayout {
+                        Layout.fillWidth: true; spacing: 2
+                        Label { text: root.when(item.modelData.ms / 1000, "HH:mm"); color: root.t.muted; font.pointSize: root.smallSize }
+                        Note { text: item.modelData.text; color: root.t.fg }
+                    }
+                    LinkButton {
+                        Layout.alignment: Qt.AlignTop
+                        text: "Dismiss"; Accessible.name: "Dismiss this notice"
+                        onClicked: root.inbox = root.inbox.filter(function (n, i) { return i !== item.index })
+                    }
+                }
+            }
+        }
+    }
     Shortcut { sequence: "Escape"; enabled: root.overlayOpen; onActivated: root.overlayOpen = false }
     Button {   // the collapse toggle: a 28 px knob in a 36 px hit area, on the divider and the site-name line
         id: toggle
@@ -2295,33 +2395,33 @@ Item {
         spacing: 8
 
         Flash {   // the last refused action; stays until dismissed or the next action replaces it
-            visible: root.message !== ""
+            when: root.message !== ""; log: true
             Accessible.role: Accessible.AlertMessage
             err: true; bold: true
             text: root.message.replace(/^error: /, "")   // the red warning icon already says so
             buttonIcon: "x"; buttonName: "Dismiss this error"
             onActivated: root.message = ""
         }
-        Flash {   // after an action: where it went (a reopened issue is back on the board)
-            visible: root.notice !== ""
+        Flash {   // after an action: where it went (a reopened issue is back on the board). Goes by itself.
+            when: root.notice !== ""; expire: 6000; log: true
             icon: "reopen"
             text: root.notice
             buttonIcon: "x"; buttonName: "Dismiss this notice"
             onActivated: root.notice = ""
         }
         Flash {   // forks: someone signed two versions of their log (the threat model says: flag it)
-            visible: root.inSite && root.info.forks > 0
+            when: root.inSite && root.info.forks > 0; log: true
             err: true; bold: true; icon: "shield"
             text: "Integrity warning: " + root.info.forks + " conflicting history pair(s) found. Someone signed two versions of their log, so devices may show different boards."
         }
         Flash {   // joined, but the site data has not come yet: the chain or Storage is slow, or the id is wrong
-            visible: root.inSite && !root.info.name
+            when: root.inSite && !root.info.name; delay: 3000
             text: "Waiting for site data. It comes from the chain and from storage, and that can take a minute. If this lasts, check the site id."
             buttonText: "Leave this site"
             onActivated: root.leave()
         }
         Flash {   // joined and waiting for a role: the request is out; what to do, and what comes after
-            visible: root.awaitingApproval
+            when: root.awaitingApproval; delay: 3000
             icon: "res"
             lead: "Request sent."
             text: (root.me.pending === "requested" ? "Your request is with the admin. " : "")
@@ -2350,14 +2450,14 @@ Item {
             onActivated: root.run("join_again", [])
         }
         Flash {   // a change waits because the account holds too little: it goes on by itself when funds arrive
-            visible: root.inSite && !!root.fundsWrite
+            when: root.inSite && !!root.fundsWrite; log: true
             Accessible.role: Accessible.AlertMessage
             tone: "warn"; icon: "warn"
             lead: "A change is waiting for funds."
             text: root.fundsWrite ? root.fundsWrite.reason : ""
         }
         Flash {   // the wallet cannot use our key: nothing can be sent to the chain
-            visible: root.inSite && root.keyProblem !== ""
+            when: root.inSite && root.keyProblem !== ""; delay: 3000; log: true
             Accessible.role: Accessible.AlertMessage
             err: true
             lead: "The wallet cannot use your key."
@@ -2370,6 +2470,10 @@ Item {
                 required property var modelData
                 readonly property bool site: modelData.kind === "create_site"
                 readonly property bool rejected: modelData.state === "rejected"
+                readonly property bool included: modelData.state === "included"
+                delay: rejected || included ? 0 : 3000      // a write on its way shows only if it takes a while
+                expire: included ? 6000 : 0                 // "on the chain" is good news: it goes by itself
+                log: rejected || included
                 err: rejected
                 Accessible.role: rejected ? Accessible.AlertMessage : Accessible.StaticText
                 icon: !rejected && modelData.state === "included" ? "res" : rejected ? "warn" : "update"
@@ -2385,7 +2489,7 @@ Item {
             }
         }
         Flash {   // the reminder of a meeting that starts soon
-            visible: root.reminder !== ""
+            when: root.reminder !== ""; log: true
             tone: "warn"; icon: "bell"; lead: "Reminder."
             text: root.reminder
             buttonIcon: "x"; buttonName: "Close this reminder"
@@ -2401,7 +2505,7 @@ Item {
             onActivated: root.run("join_again", [])
         }
         Flash {
-            visible: root.inSite && root.syncing
+            when: root.inSite && root.syncing; delay: 3000
             err: true; icon: "update"
             text: "Restoring your earlier reports from the network. Actions are paused until they arrive, so your new ones can't conflict with them."
             buttonText: "Skip waiting (history lost)"
@@ -4190,12 +4294,13 @@ Item {
                         title: "Messages"
                         lede: "Write privately to another active member. Only the two of you can read the messages."
                     }
-                    Flash { visible: !!chatPage.link.error; err: true; lead: "Chat is not running."; text: chatPage.link.error || "" }
-                    Flash { visible: !!chatPage.problem; err: true; lead: "The chat module did not answer."; text: chatPage.problem }
-                    Flash { visible: chatPage.st.delivery === "error"; err: true; lead: "Chat cannot reach the network."; text: chatPage.st.detail || "" }
-                    Flash { visible: !!chatPage.st.note; tone: "warn"; icon: "warn"; text: chatPage.st.note || "" }
+                    Flash { when: !!chatPage.link.error; delay: 3000; err: true; lead: "Chat is not running."; text: chatPage.link.error || "" }
+                    Flash { when: !!chatPage.problem; delay: 3000; err: true; lead: "The chat module did not answer."; text: chatPage.problem }
+                    Flash { when: chatPage.st.delivery === "error"; delay: 3000; err: true; lead: "Chat cannot reach the network."; text: chatPage.st.detail || "" }
+                    Flash { when: !!chatPage.st.note; delay: 3000; tone: "warn"; icon: "warn"; text: chatPage.st.note || "" }
                     Help {
-                        visible: !!chatPage.link.starting || (!!chatPage.link.ok && chatPage.st.delivery === "initialising")
+                        delay: 3000
+                        when: !!chatPage.link.starting || (!!chatPage.link.ok && chatPage.st.delivery === "initialising")
                         text: "Chat is starting. Messages that you write now are kept and sent when it is ready."
                     }
                     Connections { target: root; function onChatWithChanged() { chatPage.picking = false; picker.clear() } }   // a chat opened from People
@@ -4288,7 +4393,7 @@ Item {
                                     LinkButton { visible: !chatPage.twoPane; text: "‹  Back"; Accessible.name: "Back to the chats"; onClicked: root.chatWith = "" }
                                     Label { Layout.fillWidth: true; elide: Text.ElideRight; textFormat: Text.PlainText; font.weight: Font.DemiBold; font.pointSize: root.baseSize * 16 / 14; text: chatPage.currentName }
                                 }
-                                Help { visible: !chatPage.hasAddress; text: "Their chat address has not arrived yet. Your message waits in the queue and goes out when it arrives." }
+                                Help { when: !chatPage.hasAddress; delay: 3000; text: "Their chat address has not arrived yet. Your message waits in the queue and goes out when it arrives." }
                                 ListView {
                                     id: thread
                                     Layout.fillWidth: true; Layout.fillHeight: true
