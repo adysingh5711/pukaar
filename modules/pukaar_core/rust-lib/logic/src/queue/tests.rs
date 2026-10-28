@@ -97,12 +97,14 @@ impl Store for FakeStore {
     }
 }
 
+type SendHook = Box<dyn Fn(&Tx) + Send>;
+
 pub(crate) struct FakeWriter {
     import: Mutex<Result<(), String>>,
     imports: AtomicU32,
     sent: Mutex<Vec<Tx>>,
     polls: Mutex<VecDeque<Poll>>,
-    on_send: Mutex<Option<Box<dyn Fn(&Tx) + Send>>>,
+    on_send: Mutex<Option<SendHook>>,
 }
 
 impl ChainWriter for FakeWriter {
@@ -877,13 +879,13 @@ fn the_margin_claim_passes_the_rules_and_the_old_claim_does_not() {
     let read = block + 60_000;
     assert_eq!(apply_effect(&Effect::ClockIs(read), &shard(block)), Err(RuleError::ClockBehind), "the old claim");
     assert_eq!(apply_effect(&Effect::ClockIs(claim_of(read)), &shard(block)), Ok(None));
-    assert!(CLAIM_MARGIN_MS + 60_000 < CLOCK_TOLERANCE_MS, "the claim is never stale for a fresh read");
+    const { assert!(CLAIM_MARGIN_MS + 60_000 < CLOCK_TOLERANCE_MS, "the claim is never stale for a fresh read") };
     // A revoke of an Admin by a super admin, where the Admin was granted after the claim: no rule compares
     // the claim to the grant time, so the lower claim is accepted.
     let mut admin = w.member(2, Role::Admin);
     admin.granted_at_ms = block;
     let actor = Actor { account: acct(1), claimed: Rank::SuperAdmin };
-    let rv = |now_ms| Effect::Revoke { actor: actor.clone(), reason_sha256: sha256(b"spam"), now_ms };
+    let rv = |now_ms| Effect::Revoke { actor, reason_sha256: sha256(b"spam"), now_ms };
     let out = apply_effect(&rv(claim_of(read)), &admin.encode()).unwrap().unwrap();
     let m = pukaar_sites_rules::Member::decode(&out).unwrap();
     assert_eq!((m.status, m.revoked.unwrap().at_ms), (MemberStatus::Removed, claim_of(read)));

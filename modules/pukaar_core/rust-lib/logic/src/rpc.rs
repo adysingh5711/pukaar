@@ -238,7 +238,7 @@ impl Chain {
     pub fn persist_in(&mut self, dir: &std::path::Path) {
         let file = dir.join(format!("accounts-{}", hex::encode(self.site_id)));
         let kept = std::fs::read(&file).unwrap_or_default();
-        self.users.extend(kept.chunks_exact(32).map(|c| <AccountId>::try_from(c).expect("32 bytes")));
+        self.users.extend(kept.as_chunks::<32>().0.iter().map(|c| <AccountId>::from(*c)));
         self.file = Some(file);
     }
 

@@ -513,7 +513,7 @@ fn cycle(store: &dyn Store, chain: &SharedChain, fx: &SharedFetched, me: &Signin
         (site.details_cid.clone(), site.details_sha256),
         (site.places_cid.clone(), site.places_sha256),
     ];
-    want.extend(members.iter().map(|m| pointer(m)).map(|(c, s, _)| (c, s)));
+    want.extend(members.iter().map(pointer).map(|(c, s, _)| (c, s)));
     want.extend(strangers.iter().map(|a| (a.cid.clone(), a.sha256)));
     want.retain(|(cid, _)| !cid.is_empty());
     {

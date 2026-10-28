@@ -160,6 +160,7 @@ fn sig_message(e: &Envelope) -> Result<Vec<u8>, String> {
     .concat())
 }
 
+#[allow(clippy::too_many_arguments)] // one arg per wire-format envelope field
 pub fn build(
     author: &SigningKey,
     site_id: &Key,

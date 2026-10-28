@@ -114,12 +114,15 @@ impl State {
     }
 }
 
+/// Role lookup: (site, user, time) to rank.
+type RolesFn = dyn Fn(&Key, Option<&Key>, u64) -> Option<Rank>;
+
 /// The state after `ordered`. `config` and `locations` come from `details.json` and
 /// `places.json`, `roles` from the chain.
 #[must_use]
 pub fn reduce<'a>(
     ordered: impl IntoIterator<Item = &'a Event>,
-    roles: &dyn Fn(&Key, Option<&Key>, u64) -> Option<Rank>,
+    roles: &RolesFn,
     config: &Config,
     locations: &[Location],
 ) -> State {
