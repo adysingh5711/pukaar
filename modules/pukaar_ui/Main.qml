@@ -53,6 +53,12 @@ Item {
     property string reminder: ""         // the pop-up text; "" = none
     property var reminded: ({})          // meeting ids that were reminded since the app opened
     function startMeet(member) { meetWith = member; openPage("meet") }
+    // ---- another member's profile (member_profile): a row of People opens it ----
+    property string viewKey: ""          // the member whose page is open
+    property var viewed: null            // member_profile of viewKey, or {error} once the core refused
+    readonly property var socialLabels: ["website", "github", "x", "linkedin", "other"]   // the labels the core allows
+    function applyViewed(v) { if (v && v.key === viewKey) viewed = v; else if (typeof v === "string") viewed = { error: v } }
+    function showMember(key) { viewKey = key; viewed = null; call("member_profile", [key], applyViewed); openPage("member") }
     function meetTime(r) { return when(r.start_ms / 1000, "ddd d MMM HH:mm") + " to " + when(r.end_ms / 1000, "HH:mm") }
     // What a time runs into, as sentences: c is {mine, theirs} from the core (meet_check or a row's clashes).
     function clashLines(c) {
@@ -74,7 +80,7 @@ Item {
     }
     Timer { interval: 15000; running: root.inSite && root.approved; repeat: true; triggeredOnStart: true; onTriggered: root.checkReminders() }
     // ---- shell (design/proposal/NOTES.md section 3) ----
-    readonly property var pages: ["board", "report", "people", "places", "proof", "profile", "history", "meet"]   // the StackLayout's children, in order
+    readonly property var pages: ["board", "report", "people", "places", "proof", "profile", "history", "meet", "member"]   // the StackLayout's children, in order
     property string page: "board"
     // The sidebar is expanded (216 px) from 1100 px of window, an 80 px icon rail below; the user's
     // toggle ("expanded" / "collapsed", "" = never pressed) wins at every width and is remembered.
@@ -282,6 +288,7 @@ Item {
             ["meet_list", [], function (l) { if (l && Array.isArray(l.meetings)) meets = l }],
             ["list_issues", [], function (l) { if (Array.isArray(l)) issues = l }]
         ]
+        if (page === "member" && viewKey) steps.push(["member_profile", [viewKey], applyViewed])
         // only refresh the pane that is still open (a reply landing after Close must not reopen it)
         if (selected) {
             var open = selected.issue.id
@@ -2114,7 +2121,7 @@ Item {
                     delegate: NavItem {
                         required property var modelData
                         text: modelData.label; glyph: modelData.icon
-                        current: root.page === modelData.page; compact: !sidebar.open
+                        current: root.page === modelData.page || (modelData.page === "people" && root.page === "member"); compact: !sidebar.open
                         count: modelData.count || 0
                         onClicked: root.openPage(modelData.page)
                     }
@@ -2989,6 +2996,11 @@ Item {
                                             StatusChip { visible: root.compactRows; label: memberRow.modelData.role; stage: memberRow.elevated ? root.t.progress : root.t.closed }
                                         }
                                         Label { visible: memberRow.own; text: "you"; color: root.t.muted; font.pointSize: root.smallSize }
+                                        LinkButton {
+                                            objectName: "memberOpen-" + memberRow.modelData.fingerprint
+                                            text: "View profile  ›"; Accessible.name: "Open the profile of " + memberRow.person
+                                            onClicked: root.showMember(memberRow.modelData.key)
+                                        }
                                         LinkButton { visible: !memberRow.own && root.approved; text: "1:1 meeting  ›"; Accessible.name: "Plan a 1:1 meeting with " + memberRow.person; onClicked: root.startMeet(memberRow.modelData) }
                                         Label {   // O5: a staff name counts only with the signature of an admin
                                             visible: memberRow.elevated
@@ -3135,6 +3147,10 @@ Item {
                                 Help {
                                     text: "Removed by " + root.who(removedRow.modelData.by, removedRow.modelData.by_name) + " on "
                                           + root.when(removedRow.modelData.ts, "d MMM") + ": " + removedRow.modelData.reason
+                                }
+                                LinkButton {
+                                    text: "View profile  ›"; Accessible.name: "Open the profile of " + root.who(removedRow.modelData.key, removedRow.modelData.name)
+                                    onClicked: root.showMember(removedRow.modelData.key)
                                 }
                             }
                         }
@@ -3420,6 +3436,16 @@ Item {
                     readonly property string myName: root.me.name || ""   // a string: changes only when the name does, not on every refresh
                     readonly property string myBio: root.me.bio || ""
                     readonly property string myExperience: root.me.experience || ""
+                    readonly property var mySocials: root.me.socials || []
+                    // The filled rows as the core takes them: [["github","github.com/asha"], ...]
+                    function socialsJson() {
+                        var out = []
+                        for (var i = 0; i < socialRows.count; i++) {
+                            var r = socialRows.itemAt(i)
+                            if (r.address.text.trim() !== "") out.push([r.label.currentText, r.address.text])
+                        }
+                        return JSON.stringify(out)
+                    }
                     property bool saved: false           // the last save went through: say where it is shown
                     readonly property var myReports: root.issues.filter(function (i) { return i.reporter === root.me.key })
                     readonly property int mineOpen: myReports.filter(function (i) { return !root.isTerminal(i.status) }).length
@@ -3518,13 +3544,51 @@ Item {
                             onEdited: profilePage.saved = false
                         }
                     }
+                    FramedCheck {
+                        id: shareProfile
+                        visible: !profilePage.staffLocked
+                        text: "Share my bio, experience and links with the site (off: members see my name and role only)"
+                        Binding on checked { value: root.me.private !== true }
+                        onToggled: profilePage.saved = false
+                    }
+                    FormRow {
+                        visible: !profilePage.staffLocked
+                        label: "Links"; sub: "(optional, up to 4)"
+                        Help { text: "Write the address without https://, at most 30 characters, for example github.com/asha." }
+                        Repeater {
+                            id: socialRows
+                            model: 4
+                            delegate: RowLayout {
+                                id: socialRow
+                                required property int index
+                                readonly property var kept: profilePage.mySocials[index] || null   // [label, address] from the saved profile
+                                property alias label: socialLabel
+                                property alias address: socialAddress
+                                Layout.fillWidth: true; spacing: 8
+                                FramedCombo {
+                                    id: socialLabel
+                                    Layout.preferredWidth: 130
+                                    model: root.socialLabels; Accessible.name: "Type of link " + (socialRow.index + 1)
+                                    currentIndex: socialRow.kept ? Math.max(0, root.socialLabels.indexOf(socialRow.kept[0])) : 0
+                                    onActivated: profilePage.saved = false
+                                }
+                                FramedField {
+                                    id: socialAddress
+                                    Layout.fillWidth: true; maximumLength: 30
+                                    text: socialRow.kept ? socialRow.kept[1] : ""; Accessible.name: "Address of link " + (socialRow.index + 1)
+                                    placeholderText: "e.g. github.com/asha"
+                                    onTextEdited: profilePage.saved = false
+                                }
+                            }
+                        }
+                    }
                     RowLayout {
                         visible: !profilePage.staffLocked
                         Layout.fillWidth: true
                         spacing: 12
                         ActionButton {
                             text: "Save profile"; kind: "primary"
-                            onClicked: root.run("set_profile", [nameField.text, bioField.text, experienceField.text],
+                            onClicked: root.run("set_profile", [nameField.text, bioField.text, experienceField.text, profilePage.socialsJson(), shareProfile.checked ? "" : "1"],
                                                 function () { profilePage.saved = true })
                         }
                         Help { visible: profilePage.saved; text: "Members see this now. The chain record updates at the next admin batch." }
@@ -3969,6 +4033,74 @@ Item {
                         buttonText: "Restore"
                         missing: meetPage.backup.job ? "A backup or a restore is running." : ""
                         onSubmitted: root.run("meet_restore", [restoreCid.text])
+                    }
+                }
+
+                // Member (a row of People opens it): the profile of one member of this site. A steward has a name
+                // and a role only, like on the You page. Links show as plain text and open after a confirm.
+                TabPage {
+                    id: memberPage
+                    objectName: "memberPage"
+                    readonly property var v: root.viewed
+                    readonly property bool ok: !!v && !v.error
+                    readonly property bool full: ok && !v.removed && v.role !== "Steward" && v.state !== "private"   // bio, experience and links show
+                    readonly property string person: ok ? root.who(v.key, v.name) : ""
+                    readonly property var links: ok && v.socials ? v.socials : []
+                    readonly property bool empty: ok && !v.bio && !v.experience && links.length === 0
+                    LinkButton { text: "‹  Back to People"; Accessible.name: "Back to People"; onClicked: root.openPage("people") }
+                    PageHead { title: memberPage.ok ? memberPage.person : "Member"; lede: memberPage.ok ? root.esc(memberPage.v.removed ? "Removed" : (memberPage.v.super_admin ? "Super admin" : memberPage.v.role || "Pending")) : "" }
+                    Help { visible: !memberPage.v; text: "Loading this member…" }
+                    Help { visible: !!memberPage.v && !!memberPage.v.error; color: root.t.danger; text: memberPage.v ? String(memberPage.v.error || "") : "" }
+                    RowLayout {
+                        visible: memberPage.ok
+                        spacing: 8
+                        Fingerprint { text: memberPage.ok ? memberPage.v.fingerprint : "" }
+                        StatusChip { visible: memberPage.ok && !memberPage.v.removed && memberPage.v.role !== "Resident"; label: memberPage.ok ? (memberPage.v.super_admin ? "Super admin" : memberPage.v.role || "") : ""; stage: root.t.progress }
+                        StatusChip { visible: memberPage.ok && !!memberPage.v.removed; label: "Removed"; stage: root.t.closed }
+                        Label { visible: memberPage.ok && memberPage.v.own; text: "you"; color: root.t.muted; font.pointSize: root.smallSize }
+                    }
+                    FormRow {
+                        visible: memberPage.ok && memberPage.v.granted_at_ms > 0
+                        label: "Joined"
+                        Label { text: memberPage.ok ? root.when(memberPage.v.granted_at_ms / 1000, "d MMMM yyyy") : "" }
+                    }
+                    Help { visible: memberPage.ok && !!memberPage.v.removed; text: "This member was removed from the site. Only the name stays." }
+                    Help { visible: memberPage.ok && memberPage.v.role === "Steward"; text: "A steward has a name and a role only." }
+                    Help { visible: memberPage.ok && memberPage.v.state === "private"; text: "This member keeps their profile private. You see the name and the role only." }
+                    Help { visible: memberPage.ok && memberPage.v.own && memberPage.v.private; text: "Your profile is private. Other members see your name and role only." }
+                    Help { visible: memberPage.ok && memberPage.v.pointer === "announced"; text: "This profile has a newer edit. The chain record updates at the next admin batch." }
+                    ColumnLayout {
+                        visible: memberPage.full
+                        Layout.fillWidth: true; spacing: 8
+                        Help { visible: memberPage.v && memberPage.v.state === "loading"; text: "This profile has not arrived yet. The app tries again by itself." }
+                        ActionButton { visible: memberPage.v && memberPage.v.state === "loading"; text: "Try again"; onClicked: root.call("member_profile", [root.viewKey], root.applyViewed) }
+                        Help { visible: memberPage.v && memberPage.v.state !== "loading" && memberPage.empty; text: memberPage.v && memberPage.v.own ? "You have no bio yet. Add one on the You page." : "This member has no bio yet." }
+                        Heading { visible: !!(memberPage.v && memberPage.v.bio); text: "Bio" }
+                        Note { visible: !!(memberPage.v && memberPage.v.bio); text: memberPage.v ? memberPage.v.bio || "" : "" }
+                        Heading { visible: !!(memberPage.v && memberPage.v.experience); text: "Experience" }
+                        Note { visible: !!(memberPage.v && memberPage.v.experience); text: memberPage.v ? memberPage.v.experience || "" : "" }
+                        Heading { visible: memberPage.links.length > 0; text: "Links" }
+                        Repeater {
+                            model: memberPage.links
+                            delegate: RowLayout {
+                                id: linkRow
+                                required property var modelData
+                                Layout.fillWidth: true; spacing: 12
+                                Label { Layout.preferredWidth: 90; text: linkRow.modelData[0]; textFormat: Text.PlainText; color: root.t.muted }
+                                Label { Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText; font.family: "monospace"; text: linkRow.modelData[1] }
+                                ConfirmButton {
+                                    text: "Open"; name: "Open the " + linkRow.modelData[0] + " link"; confirmText: "Open link"
+                                    effect: "This opens https://" + linkRow.modelData[1] + " in your browser. Open only links that you trust."
+                                    onConfirmed: Qt.openUrlExternally("https://" + linkRow.modelData[1])
+                                }
+                            }
+                        }
+                    }
+                    RowLayout {
+                        visible: memberPage.ok && !memberPage.v.removed
+                        spacing: 12
+                        ActionButton { visible: memberPage.ok && memberPage.v.own; text: "Edit your profile"; kind: "primary"; onClicked: root.openPage("profile") }
+                        ActionButton { visible: memberPage.ok && !memberPage.v.own && root.approved; text: "Plan a 1:1 meeting"; onClicked: root.startMeet(memberPage.v) }
                     }
                 }
             }
