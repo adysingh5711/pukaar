@@ -59,6 +59,10 @@ pub trait PukaarCoreModule: Send + 'static {
     /// pointer follows at the next admin `send_batch`. `{"ok":true,"queued":id}`. `bio` and
     /// `experience` are optional: a call with the name only keeps working, and clears both.
     fn set_profile(&mut self, display_name: String, bio: Option<String>, experience: Option<String>) -> String;
+    /// Admin only. Signs the display name of a steward or an admin and queues the chain pointer at once
+    /// (one fee, no batch). Readers accept a staff name only with the signature of an admin.
+    /// `{"ok":true,"queued":id}`. A super admin names another admin, an admin names stewards and itself.
+    fn set_staff_name(&mut self, subject_hex: String, name: String) -> String;
     /// Held until an admin calls `send_batch`. `name` is required for steward/admin and optional for
     /// residents. Only a super admin
     /// grants "admin" or changes an admin's role; nobody changes a super admin's.
@@ -937,6 +941,12 @@ impl PukaarCoreModule for Pukaar {
         // Members read the new profile as soon as it is in Storage and announced. The chain pointer
         // follows at the next admin batch.
         let r = queued(|node, q, _| ops::set_profile(node, q, &display_name, bio.as_deref().unwrap_or(""), experience.as_deref().unwrap_or(""), now_ms()));
+        flush();
+        id_reply(r)
+    }
+
+    fn set_staff_name(&mut self, subject_hex: String, name: String) -> String {
+        let r = queued(|node, q, _| ops::set_staff_name(node, q, &subject_hex, &name, now_ms()));
         flush();
         id_reply(r)
     }

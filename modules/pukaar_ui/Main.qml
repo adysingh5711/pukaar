@@ -298,7 +298,7 @@ Item {
     readonly property var stateText: ({ waiting: "waiting to be sent", preparing: "preparing", queued: "queued", sent: "sending",
                                         confirming: "confirming", included: "on the chain", rejected: "rejected" })
     readonly property var kindText: ({ create_site: "Site", approve: "Approval", set_role: "Role change", revoke: "Revoke",
-        set_profile: "Profile update", profile: "Profile", set_details: "Site details", set_places: "Places change",
+        set_profile: "Profile update", staff_name: "Staff name", profile: "Profile", set_details: "Site details", set_places: "Places change",
         super_admin_add: "Super admin change", super_admin_remove: "Super admin change", super_admin_transfer: "Super admin change" })
     // The held kinds that Send changes sends: approvals, role changes, revokes and profile refreshes.
     readonly property var batchKinds: ["approve", "set_role", "revoke", "set_profile"]
@@ -2870,6 +2870,12 @@ Item {
                                             StatusChip { visible: root.compactRows; label: memberRow.modelData.role; stage: memberRow.elevated ? root.t.progress : root.t.closed }
                                         }
                                         Label { visible: memberRow.own; text: "you"; color: root.t.muted; font.pointSize: root.smallSize }
+                                        Label {   // O5: a staff name counts only with the signature of an admin
+                                            visible: memberRow.elevated
+                                            Layout.fillWidth: true; wrapMode: Text.Wrap; color: root.t.muted; font.pointSize: root.smallSize
+                                            text: memberRow.modelData.name_signed_by_admin ? "Name signed by an admin"
+                                                : root.isAdmin ? "No name yet. Use Set name to sign one." : "No name yet. An admin must sign one."
+                                        }
                                         WriteMark { Layout.topMargin: 4; account: memberRow.modelData.account || "" }
                                     }
                                     RowLayout {   // only the controls this viewer may use; nothing at all for residents and stewards
@@ -2881,16 +2887,21 @@ Item {
                                             Layout.fillWidth: false; Layout.maximumWidth: 240
                                             text: "Only a super admin can revoke an admin."
                                         }
+                                        ActionButton {   // O5: an admin signs the name of staff
+                                            visible: memberRow.elevated && (!memberRow.admin || root.isSuper || memberRow.own)
+                                            text: "Set name"; Accessible.name: "Set the name of " + memberRow.person
+                                            onClicked: memberRow.panel = "name"
+                                        }
                                         ConfirmButton {
                                             visible: root.isSuper && !memberRow.admin && !!memberRow.modelData.name
                                             text: "Grant admin"; name: text + ": " + memberRow.person; confirmText: "Confirm grant"
-                                            effect: "They become an admin when you send the batch."
+                                            effect: "They become an admin when you send the batch. Your signature on their name is sent now and costs a network fee."
                                             onConfirmed: root.run("grant_role", [memberRow.modelData.key, "admin", memberRow.modelData.name])
                                         }
                                         ConfirmButton {
                                             visible: memberRow.canAddSuper && !!memberRow.modelData.name
                                             text: "Make steward"; name: text + ": " + memberRow.person; confirmText: "Confirm"
-                                            effect: "They become a steward when you send the batch. Everyone on the site can see the change."
+                                            effect: "They become a steward when you send the batch. Your signature on their name is sent now and costs a network fee. Everyone on the site can see the change."
                                             onConfirmed: root.run("grant_role", [memberRow.modelData.key, "steward", memberRow.modelData.name])
                                         }
                                         ConfirmButton {
@@ -2920,6 +2931,26 @@ Item {
                                             visible: !memberRow.admin || (root.isSuper && !memberRow.sup)
                                             text: "Revoke"; kind: "danger"; Accessible.name: "Revoke " + memberRow.person
                                             onClicked: memberRow.panel = "revoke"
+                                        }
+                                    }
+                                }
+                                ReasonPanel {   // O5: the name of a steward or an admin, signed by us
+                                    visible: memberRow.panel === "name" && root.isAdmin
+                                    Layout.leftMargin: 16 + 92 + 12
+                                    title: "Set the name of " + memberRow.person
+                                    withReason: false
+                                    ready: staffNameField.text.trim().length > 0
+                                    effect: "Sent to the chain now and costs a network fee. Everyone sees it marked as signed by an admin."
+                                    okText: "Sign name"
+                                    onConfirmed: root.run("set_staff_name", [memberRow.modelData.key, staffNameField.text], function () { memberRow.panel = "" })
+                                    onCancelled: memberRow.panel = ""
+                                    FormRow {
+                                        label: "Name"; compact: true
+                                        FramedField {
+                                            id: staffNameField
+                                            Layout.fillWidth: true; maximumLength: 64
+                                            text: memberRow.modelData.name || ""; Accessible.name: "Name for " + memberRow.person
+                                            placeholderText: "e.g. Ravi Kumar"
                                         }
                                     }
                                 }
@@ -3276,6 +3307,7 @@ Item {
                 // Profile (the you block opens it): me on this device. Name, backup, invite, leave.
                 TabPage {
                     id: profilePage
+                    readonly property bool staffLocked: root.me.role === "Steward"   // O5: only an admin signs a steward's name
                     readonly property string myName: root.me.name || ""   // a string: changes only when the name does, not on every refresh
                     readonly property string myBio: root.me.bio || ""
                     readonly property string myExperience: root.me.experience || ""
@@ -3340,8 +3372,10 @@ Item {
                         Fingerprint { text: root.me.fingerprint || ""; big: root.unapproved }
                     }
                     Heading { text: "About you" }
-                    Help { text: "Members of this site read these. Leave them empty to stay a pseudonym." }
+                    Help { visible: !profilePage.staffLocked; text: "Members of this site read these. Leave them empty to stay a pseudonym." }
+                    Help { visible: profilePage.staffLocked; text: "An admin sets the name of staff. Ask an admin to sign your name." }
                     FormRow {
+                        visible: !profilePage.staffLocked
                         label: "Display name"
                         FramedField {
                             id: nameField
@@ -3352,6 +3386,7 @@ Item {
                         }
                     }
                     FormRow {
+                        visible: !profilePage.staffLocked
                         label: "Bio"; sub: "(optional)"
                         FramedTextArea {
                             id: bioField
@@ -3363,6 +3398,7 @@ Item {
                         }
                     }
                     FormRow {
+                        visible: !profilePage.staffLocked
                         label: "Experience"; sub: "(optional)"
                         FramedTextArea {
                             id: experienceField
@@ -3374,6 +3410,7 @@ Item {
                         }
                     }
                     RowLayout {
+                        visible: !profilePage.staffLocked
                         Layout.fillWidth: true
                         spacing: 12
                         ActionButton {

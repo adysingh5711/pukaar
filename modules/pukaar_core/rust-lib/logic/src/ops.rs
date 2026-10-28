@@ -7,6 +7,7 @@
 
 use crate::chain::b58;
 use crate::event::{Key, Location, MAX_TEXT};
+use crate::fetch::is_staff;
 use crate::joinreq;
 use crate::lezkey::{derive_lez_secret, lez_account_id};
 use crate::node::{fingerprint, parse_id, Node};
@@ -154,8 +155,52 @@ pub fn set_profile(node: &Node, q: &mut Queue, display_name: &str, bio: &str, ex
         return Err("too long: keep the name under 64 characters".into());
     }
     let (bio, experience) = (about_text("bio", bio)?, about_text("experience", experience)?);
+    // O5: readers ignore the own name of a steward, so refuse it here instead of saving a name nobody sees.
+    if view(node).is_ok_and(|v| v.mine == Some(Rank::Steward)) {
+        return Err(STAFF_NAME.into());
+    }
     let version = next_version(node, q);
     Ok(q.push(node.store.site, Intent::Publish { name, version, bio, experience }, St::Preparing, vec![], now))
+}
+
+/// The text when a steward tries to set their own name (O5).
+pub const STAFF_NAME: &str = "An admin sets the name of staff. Ask an admin to set your name.";
+
+/// `set_staff_name` (O5): an admin signs the name of a steward or an admin. It is a chain write of one
+/// profile pointer, sent at once (it costs one fee, no batch). The old program already takes it.
+pub fn set_staff_name(node: &Node, q: &mut Queue, subject_hex: &str, name: &str, now: u64) -> Result<u64, String> {
+    let subject = parse_id(subject_hex.trim()).ok_or("bad member key")?;
+    let name: String = name.chars().filter(|c| !c.is_control()).collect::<String>().trim().to_string();
+    if name.is_empty() {
+        return Err("a name is required".into());
+    }
+    if name.chars().count() > 64 {
+        return Err("too long: keep the name under 64 characters".into());
+    }
+    let (v, site) = (view(node)?, node.store.site);
+    let m = v.active(&subject)?;
+    if !is_staff(&v.site, m) {
+        return Err("a resident sets their own name".into());
+    }
+    let rank = v.rank_of(m);
+    v.need(Action::SetProfile, Some(rank))?;
+    if rank >= Rank::Admin && m.user != node.account && v.mine != Some(Rank::SuperAdmin) {
+        return Err("only a super admin sets the name of another admin".into());
+    }
+    Ok(push_staff_name(q, site, m, name, now))
+}
+
+/// Queue the signed name. A name that did not start yet is replaced. The version is above the chain pointer
+/// and above every pointer that waits.
+fn push_staff_name(q: &mut Queue, site: Key, m: &Member, name: String, now: u64) -> u64 {
+    q.entries.retain(|e| !(e.site == site && e.state == St::Preparing && matches!(&e.intent, Intent::StaffName { user, .. } if *user == m.user)));
+    let queued = q.entries.iter().filter(|e| e.site == site).filter_map(|e| match &e.intent {
+        Intent::StaffName { user, version, .. } if *user == m.user => Some(*version),
+        Intent::SetProfile { items } => items.iter().filter(|i| i.user == m.user).map(|i| i.prof.version).max(),
+        _ => None,
+    });
+    let version = queued.max().unwrap_or(0).max(m.profile_version) + 1;
+    q.push(site, Intent::StaffName { user: m.user, key: m.pukaar_key, name, version }, St::Preparing, vec![], now)
 }
 
 // ---- roles ----
@@ -176,7 +221,13 @@ pub fn grant(node: &Node, q: &mut Queue, subject_hex: &str, role: &str, name: &s
         }
         let user = m.user;
         drop_held(q, &site, |i| matches!(i, Intent::SetRole { items } if items[0].0 == user));
-        return Ok(q.push(site, Intent::SetRole { items: vec![(user, writes::role_code(role))] }, St::Held, vec![], now));
+        let id = q.push(site, Intent::SetRole { items: vec![(user, writes::role_code(role))] }, St::Held, vec![], now);
+        // O5: a member who becomes staff needs a name that an admin signs (a demotion to resident keeps the old one).
+        if role != Role::Resident {
+            // The reader accepts an admin-signed name for any rank, so it can land before the role change.
+            push_staff_name(q, site, m, name, now);
+        }
+        return Ok(id);
     }
     let (body, request) = q.request_for(&subject, now).ok_or("no join request from this person, or it expired: ask them to join again")?;
     if spent(&v.members, &body) {
@@ -193,8 +244,7 @@ pub fn grant(node: &Node, q: &mut Queue, subject_hex: &str, role: &str, name: &s
         return Err("This person's profile has not arrived yet. Try again in a minute.".into());
     }
     drop_held(q, &site, |i| matches!(i, Intent::Approve { items, .. } if items[0].request == request));
-    // ponytail: a steward or admin name that an admin signs (O5) is not built: readers do not accept
-    // such a profile yet. The name is kept here for 2.3c.
+    // O5: for a steward or an admin, `prepare_approve` signs this name into the profile file.
     let item = ApproveReq { request, role: writes::role_code(role), name, profile: None };
     Ok(q.push(site, Intent::Approve { roster_len: 0, items: vec![item] }, St::Held, vec![], now))
 }
@@ -305,7 +355,7 @@ pub fn place_edit(node: &Node, q: &mut Queue, req: Place, now: u64) -> Result<u6
 /// The profile files that members announced and the chain does not point to yet.
 pub fn refresh_items(node: &Node, q: &Queue) -> Vec<ProfReq> {
     let (Some(c), Some(f)) = (&node.chain, &node.fetched) else { return vec![] };
-    let members = c.lock().unwrap().snapshot().1;
+    let (Some(v_site), members) = c.lock().unwrap().snapshot() else { return vec![] };
     let announces = f.lock().unwrap().announces();
     let open: Vec<([u8; 32], u64)> = q
         .open(&node.store.site)
@@ -318,6 +368,7 @@ pub fn refresh_items(node: &Node, q: &Queue) -> Vec<ProfReq> {
     members
         .iter()
         .filter(|m| m.status == MemberStatus::Active && m.revoked.is_none())
+        .filter(|m| !is_staff(&v_site, m)) // O5: a staff name comes from an admin, not from an announce
         .filter_map(|m| {
             let a = announces.iter().find(|a| a.author == m.pukaar_key && a.version > m.profile_version)?;
             let item = ProfReq { user: m.user, prof: Prof { cid: a.cid.clone(), sha: a.sha256, version: a.version } };

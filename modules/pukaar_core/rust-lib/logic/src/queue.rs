@@ -26,7 +26,7 @@ use crate::rpc::{claim_ms, get_account, Rpc, SharedChain};
 use crate::sync::{Wire, WriteKind};
 use crate::writes::{self, Ctx, PlaceOp, Pointed, SuperOp, Tx};
 use ed25519_dalek::SigningKey;
-use pukaar_sites_rules::{request_id, ApproveItem, JoinBody, Member, MemberStatus, Pointer, ProfileItem, Rank, Site, JOIN_BODY_LEN, JOIN_REQ_LEN};
+use pukaar_sites_rules::{request_id, ApproveItem, JoinBody, Member, MemberStatus, Pointer, ProfileItem, Rank, Role, Site, JOIN_BODY_LEN, JOIN_REQ_LEN};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -122,6 +122,9 @@ pub enum Intent {
     SuperAdd(AccountId),
     SuperRemove(AccountId),
     SuperTransfer(AccountId),
+    /// O5: an admin signs the name of a staff member. Blob: the profile file. The pointer goes to the chain
+    /// at once with `set_profile_batch`, one item.
+    StaffName { user: AccountId, key: Key, name: String, version: u64 },
     /// Not a chain write: seal our profile, upload it and send the announce. Blob: the profile file.
     Publish {
         name: String,
@@ -143,7 +146,7 @@ impl Intent {
             Approve { .. } => WriteKind::Approve,
             SetRole { .. } => WriteKind::SetRole,
             Revoke { .. } => WriteKind::Revoke,
-            SetProfile { .. } => WriteKind::SetProfile,
+            SetProfile { .. } | StaffName { .. } => WriteKind::SetProfile,
             Details { .. } | Places { .. } => WriteKind::SetSite,
             SuperAdd(_) | SuperRemove(_) | SuperTransfer(_) => WriteKind::SuperAdmin,
             Publish { .. } => return None,
@@ -158,6 +161,7 @@ impl Intent {
             SetRole { .. } => "set_role",
             Revoke { .. } => "revoke",
             SetProfile { .. } => "set_profile",
+            StaffName { .. } => "staff_name",
             Details { .. } => "set_details",
             Places { .. } => "set_places",
             SuperAdd(_) => "super_admin_add",
@@ -186,6 +190,7 @@ impl Intent {
             SetRole { items } => items.iter().map(|(u, _)| *u).collect(),
             Revoke { items } => items.iter().map(|i| i.user).collect(),
             SetProfile { items } => items.iter().map(|i| i.user).collect(),
+            StaffName { user, .. } => vec![*user],
             SuperAdd(t) | SuperTransfer(t) => vec![*t],
             _ => vec![],
         }
@@ -219,6 +224,7 @@ impl Intent {
                 items.retain(|i| !m(&i.user).is_some_and(|x| x.profile_version >= i.prof.version));
                 items.is_empty()
             }
+            StaffName { user, version, .. } => m(user).is_some_and(|x| x.profile_version >= *version),
             Details { .. } => site.zip(blob_cid).is_some_and(|(s, c)| s.details_cid == c),
             Places { .. } => site.zip(blob_cid).is_some_and(|(s, c)| s.places_cid == c),
             SuperAdd(t) => site.is_some_and(|s| s.is_super(t)),
@@ -771,6 +777,7 @@ fn prepare(env: &Env, e: &mut Entry) -> Result<(), String> {
                 e.blobs = vec![Blob::new(p.to_bytes())];
             }
             Intent::Approve { items, .. } => return prepare_approve(env, e, items),
+            Intent::StaffName { user, name, version, key } => return prepare_staff_name(env, e, user, key, name, version),
             Intent::Revoke { items } => {
                 let site = need_site(env, e)?;
                 let (ring, mut keys) = open_ring(env, &site)?;
@@ -799,7 +806,16 @@ fn prepare_approve(env: &Env, e: &mut Entry, mut items: Vec<ApproveReq>) -> Resu
         let body = body_of(&it.request).ok_or("bad join request")?;
         let a = env.fetched.lock().unwrap().announce_of(&body.pukaar_ed_pk).ok_or_else(|| format!("no profile from {} yet", crate::node::fingerprint(&body.pukaar_ed_pk)))?;
         let mut file = profile::from_bytes(&fetch_blob(env, &a.cid, &a.sha256)?)?;
-        profile::add_site_wrap(&mut file, env.key, &keys)?;
+        if writes::role_from_code(it.role) == Role::Resident {
+            profile::add_site_wrap(&mut file, env.key, &keys)?;
+        } else {
+            // O5: staff get a name that an admin signs. The joiner's own file only gives the bio and experience.
+            let mut text = profile::open(&file, env.key, &keys)?;
+            if !it.name.trim().is_empty() {
+                text.display_name = it.name.trim().into();
+            }
+            file = profile::build(env.key, &e.site, &body.user_account, a.version, site.key_epoch, &text, Some(&newest), &[])?;
+        }
         let out = profile::to_bytes(&file);
         let cid = env.store.upload(&out).map_err(|e| format!("storage: {e}"))?;
         env.fetched.lock().unwrap().put(&cid, &out);
@@ -809,6 +825,22 @@ fn prepare_approve(env: &Env, e: &mut Entry, mut items: Vec<ApproveReq>) -> Resu
     profile::add_seats(&mut ring, &newest, &seats)?;
     e.blobs = vec![Blob::new(profile::keyring_to_bytes(&ring))];
     e.intent = Intent::Approve { roster_len: site.roster_len, items };
+    if upload_all(env, e)? {
+        e.to(St::Queued, env.now_ms);
+    }
+    Ok(())
+}
+
+/// O5: build the profile of a staff member with our signature (the site key is the reader). The bio and the
+/// experience stay as they are. `prepare` uploads the file and the entry goes on as `set_profile_batch`.
+fn prepare_staff_name(env: &Env, e: &mut Entry, user: AccountId, key: Key, name: String, version: u64) -> Result<(), String> {
+    let site = need_site(env, e)?;
+    let (_, keys) = open_ring(env, &site)?;
+    let newest = *keys.get(&site.key_epoch).ok_or("we hold no site key of the current epoch")?;
+    let (bio, experience) = env.fetched.lock().unwrap().about.get(&key).cloned().unwrap_or_default();
+    let body = profile::Body { display_name: name, bio, experience };
+    let file = profile::build(env.key, &e.site, &user, version, site.key_epoch, &body, Some(&newest), &[])?;
+    e.blobs = vec![Blob::new(profile::to_bytes(&file))];
     if upload_all(env, e)? {
         e.to(St::Queued, env.now_ms);
     }
@@ -866,6 +898,10 @@ fn build(ctx: &Ctx, e: &Entry, r: &Reads) -> Result<Tx, String> {
         Intent::Revoke { items } => writes::revoke_batch(ctx, blob(0)?, items.iter().map(|i| (i.user, writes::reason_hash(&i.reason))).collect()),
         Intent::SetProfile { items } => {
             writes::set_profile_batch(ctx, items.iter().map(|i| ProfileItem { user: i.user, cid: i.prof.cid.clone(), sha256: i.prof.sha, version: i.prof.version }).collect())
+        }
+        Intent::StaffName { user, version, .. } => {
+            let (cid, sha256) = blob(0)?;
+            writes::set_profile_batch(ctx, vec![ProfileItem { user: *user, cid, sha256, version: *version }])
         }
         Intent::Details { .. } => writes::set_pointer(ctx, Pointer::Details, blob(0)?),
         Intent::Places { .. } => writes::set_pointer(ctx, Pointer::Places, blob(0)?),

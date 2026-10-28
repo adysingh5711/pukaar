@@ -54,8 +54,10 @@ fn a_role_change_is_held_until_send_batch() {
     let id2 = grant(&n, &mut q, &hexk(2), "admin", "Ravi", NOW).unwrap();
     let held: Vec<u64> = q.held(&w.site_id()).map(|e| e.id).collect();
     assert_eq!(held, vec![id2]);
-    // Nothing was sent or prepared: the worker has nothing to do.
-    assert!(q.entries.iter().all(|e| e.state == St::Held));
+    // Nothing was sent. The signed name of the new staff member (O5) is the only entry that is not held,
+    // and the second choice replaced the first.
+    let names: Vec<_> = q.entries.iter().filter(|e| e.state != St::Held).map(|e| e.intent.name()).collect();
+    assert_eq!(names, vec!["staff_name"]);
 }
 
 #[test]
@@ -603,4 +605,178 @@ fn the_new_wire_message_is_appended_and_old_ones_keep_their_bytes() {
     assert_eq!(tag(Wire::BlobChunk { cid: "c".into(), sha256: [0; 32], index: 0, total: 1, bytes: vec![1] }), 7);
     let d = Wire::JoinDecline { site: [1; 32], request_id: [2; 32], admin: [3; 32], sig: vec![4; 64] }.encode();
     assert_eq!((d[0], d.len()), (8, 1 + 3 * 32 + 1 + 64));
+}
+
+// ---- O5: a staff name carries the signature of an admin ----
+
+use crate::event::sha256;
+use crate::fetch::fetch_cycle;
+use crate::queue::tests::{decode, CLOCK_NOW};
+use pukaar_sites_rules::Instruction;
+
+/// Member `n` with `role`, whose chain pointer is a profile file signed by user `signer`.
+fn pointed(w: &World, n: u8, role: Role, signer: u8, name: &str, version: u64) {
+    let body = profile::Body { display_name: name.into(), bio: String::new(), experience: String::new() };
+    let file = profile::build(&key(signer), &w.site_id(), &acct(n), version, 1, &body, None, &[pk(1)]).unwrap();
+    let bytes = profile::to_bytes(&file);
+    let mut m = w.member(n, role);
+    (m.profile_cid, m.profile_sha256, m.profile_version) = (w.store.put(&bytes), sha256(&bytes), version);
+    w.put_member(&m);
+}
+
+fn read(w: &World) -> (std::collections::BTreeMap<Key, String>, std::collections::BTreeSet<Key>) {
+    let _ = node(w, 1); // reads the chain
+    fetch_cycle(&*w.store, &w.chain, &w.fetched, &key(1));
+    fetch_cycle(&*w.store, &w.chain, &w.fetched, &key(1));
+    let f = w.fetched.lock().unwrap();
+    (f.names.clone(), f.signed.clone())
+}
+
+#[test]
+fn a_staff_name_counts_only_with_the_signature_of_an_admin() {
+    let w = World::new();
+    pointed(&w, 2, Role::Resident, 2, "Asha", 1); // a resident signs their own
+    pointed(&w, 3, Role::Steward, 3, "Fake Boss", 1); // a steward signs their own: not accepted
+    pointed(&w, 4, Role::Steward, 1, "Dr Rao", 1); // an admin signs a steward
+    let (names, signed) = read(&w);
+    assert_eq!(names.get(&pk(2)).map(String::as_str), Some("Asha"));
+    assert_eq!(names.get(&pk(3)), None, "no name until an admin signs one");
+    assert_eq!(names.get(&pk(4)).map(String::as_str), Some("Dr Rao"));
+    assert_eq!(signed, [pk(4)].into(), "only the admin-signed staff name has the mark");
+
+    // A steward is no admin: their signature does not give a resident a name either.
+    pointed(&w, 2, Role::Resident, 3, "Asha by a steward", 2);
+    assert_eq!(read(&w).0.get(&pk(2)).map(String::as_str), Some("Asha"), "the old name stays");
+
+    // Promotion: the own name of a resident stops counting at once.
+    pointed(&w, 2, Role::Steward, 2, "Asha", 1);
+    let (names, signed) = read(&w);
+    assert_eq!((names.get(&pk(2)), signed.contains(&pk(2))), (None, false));
+    // The admin signs it: it shows with the mark.
+    pointed(&w, 2, Role::Steward, 1, "Asha", 2);
+    let (names, signed) = read(&w);
+    assert_eq!((names.get(&pk(2)).map(String::as_str), signed.contains(&pk(2))), (Some("Asha"), true));
+}
+
+#[test]
+fn the_own_announce_of_a_staff_member_is_not_used_or_refreshed() {
+    let w = World::new();
+    pointed(&w, 2, Role::Resident, 2, "Asha", 1);
+    pointed(&w, 3, Role::Steward, 3, "", 1);
+    let n = node(&w, 1);
+    for (who, cid) in [(2u8, "zAsha"), (3, "zBoss")] {
+        let a = Announce::sign(&key(who), w.site_id(), 5, cid, [9; 32]);
+        assert!(w.fetched.lock().unwrap().note_announce(a));
+    }
+    let q = locked(&w);
+    let items = refresh_items(&n, &q);
+    assert_eq!(items.iter().map(|i| i.user).collect::<Vec<_>>(), vec![acct(2)], "the resident only");
+}
+
+#[test]
+fn a_steward_cannot_set_their_own_name_but_others_can() {
+    let w = World::new();
+    w.put_member(&w.member(2, Role::Steward));
+    w.put_member(&w.member(3, Role::Resident));
+    let mut q = locked(&w);
+    assert_eq!(set_profile(&node(&w, 2), &mut q, "Boss", "", "", NOW).unwrap_err(), STAFF_NAME);
+    assert!(q.entries.is_empty(), "nothing is queued");
+    set_profile(&node(&w, 3), &mut q, "Asha", "", "", NOW).unwrap();
+    set_profile(&node(&w, 1), &mut q, "Admin", "", "", NOW).unwrap();
+    assert_eq!(q.entries.len(), 2);
+}
+
+#[test]
+fn only_an_admin_signs_a_staff_name_and_the_versions_grow() {
+    let w = World::new();
+    w.put_member(&w.member(2, Role::Steward));
+    w.put_member(&w.member(3, Role::Resident));
+    w.put_member(&w.member(4, Role::Admin));
+    let mut q = locked(&w);
+    let (admin, boss, steward, resident) = (node(&w, 4), node(&w, 1), node(&w, 2), node(&w, 3));
+    let queued = |q: &Queue, id: u64| match &q.entries.iter().find(|e| e.id == id).unwrap().intent {
+        Intent::StaffName { user, key, name, version } => (*user, *key, name.clone(), *version),
+        i => panic!("{i:?}"),
+    };
+    let id = set_staff_name(&admin, &mut q, &hexk(2), "  Dr Rao ", NOW).unwrap();
+    assert_eq!(queued(&q, id), (acct(2), pk(2), "Dr Rao".into(), 1));
+    assert_eq!(q.entries.iter().find(|e| e.id == id).unwrap().state, St::Preparing);
+    let id2 = set_staff_name(&admin, &mut q, &hexk(2), "Dr Rao Jr", NOW).unwrap();
+    assert_eq!((queued(&q, id2).2, q.entries.len()), ("Dr Rao Jr".into(), 1), "a name that did not start is replaced");
+    q.entries[0].state = St::Queued; // started: the next one must get a higher version
+    let id2 = set_staff_name(&admin, &mut q, &hexk(2), "Dr Rao III", NOW).unwrap();
+    assert_eq!(queued(&q, id2).3, 2, "a later edit gets a higher version");
+    assert!(set_staff_name(&admin, &mut q, &hexk(3), "Asha", NOW).unwrap_err().contains("resident sets their own"));
+    assert!(set_staff_name(&admin, &mut q, &hexk(2), " ", NOW).is_err());
+    assert!(set_staff_name(&admin, &mut q, &hexk(1), "Boss", NOW).unwrap_err().contains("only a super admin"));
+    assert!(set_staff_name(&admin, &mut q, &hexk(4), "Me", NOW).is_ok(), "an admin names themselves");
+    assert!(set_staff_name(&boss, &mut q, &hexk(4), "Admin Four", NOW).is_ok());
+    assert!(set_staff_name(&steward, &mut q, &hexk(2), "Me", NOW).unwrap_err().starts_with("not allowed"));
+    assert!(set_staff_name(&resident, &mut q, &hexk(2), "Me", NOW).unwrap_err().starts_with("not allowed"));
+}
+
+#[test]
+fn a_promotion_queues_the_signed_name_with_the_role_change() {
+    let w = World::new();
+    w.put_member(&w.member(2, Role::Resident));
+    let n = node(&w, 1);
+    let mut q = locked(&w);
+    grant(&n, &mut q, &hexk(2), "steward", "Ravi", NOW).unwrap();
+    let kinds: Vec<(&str, St)> = q.entries.iter().map(|e| (e.intent.name(), e.state)).collect();
+    assert_eq!(kinds, vec![("set_role", St::Held), ("staff_name", St::Preparing)]);
+    // A demotion to resident queues no name.
+    drop(q);
+    let w = World::new();
+    w.put_member(&w.member(2, Role::Steward));
+    let n = node(&w, 1);
+    let mut q = locked(&w);
+    grant(&n, &mut q, &hexk(2), "resident", "", NOW).unwrap();
+    assert_eq!(q.entries.len(), 1);
+}
+
+#[test]
+fn an_approval_as_staff_signs_the_name_with_the_admin_key() {
+    let w = World::new();
+    let mut req = joiner(&w, 4, writes::role_code(Role::Steward));
+    req.name = "Dr Rao".into();
+    w.push(Intent::Approve { roster_len: 0, items: vec![req] }, St::Preparing, vec![]);
+    w.tick(T0);
+    let e = w.q.lock().unwrap().entries[0].clone();
+    assert_eq!(e.state, St::Queued);
+    let Intent::Approve { items, .. } = &e.intent else { panic!() };
+    let p = items[0].profile.clone().unwrap();
+    let file = profile::from_bytes(&w.store.get(&p.cid)).unwrap();
+    assert_eq!((file.pukaar_key.as_str(), file.user.as_str()), (hexk(1).as_str(), hex::encode(acct(4)).as_str()), "the admin signed it for the joiner");
+    profile::verify(&file).unwrap();
+    let keys = profile::open_keyring(&profile::keyring_from_bytes(&e.blobs[0].bytes).unwrap(), &key(4)).unwrap();
+    assert_eq!(profile::open(&file, &key(4), &keys).unwrap().display_name, "Dr Rao", "the joiner reads it with the site key");
+    assert_eq!((sha256(&w.store.get(&p.cid)), p.version), (p.sha, 1));
+}
+
+#[test]
+fn a_staff_name_is_uploaded_and_sent_as_one_profile_pointer() {
+    let w = World::new();
+    w.put_member(&w.member(3, Role::Steward));
+    let id = w.push(Intent::StaffName { user: acct(3), key: pk(3), name: "Dr Rao".into(), version: 1 }, St::Preparing, vec![]);
+    w.tick(T0);
+    let e = w.entry(id);
+    assert_eq!(e.state, St::Queued);
+    let file = profile::from_bytes(&e.blobs[0].bytes).unwrap();
+    profile::verify(&file).unwrap();
+    assert_eq!((file.pukaar_key.as_str(), file.user.as_str(), file.version), (hexk(1).as_str(), hex::encode(acct(3)).as_str(), 1));
+    w.tick(T0 + 1);
+    let Instruction::SetProfileBatch(ix) = decode(&w.sent()[0]) else { panic!("not set_profile_batch") };
+    assert_eq!(ix.items.len(), 1);
+    let (cid, sha) = (e.blobs[0].cid.clone().unwrap(), sha256(&e.blobs[0].bytes));
+    assert_eq!((ix.items[0].user, ix.items[0].cid.clone(), ix.items[0].sha256, ix.items[0].version), (acct(3), cid, sha, 1));
+    assert_eq!(ix.auth.now_ms, crate::rpc::claim_of(CLOCK_NOW));
+    // The chain shows the version: the entry is done and nothing is sent again.
+    let mut m = w.read_member(3);
+    m.profile_version = 1;
+    w.put_member(&m);
+    w.poll_next(crate::queue::Poll::Included);
+    w.tick(T0 + 10_000);
+    w.tick(T0 + 20_000);
+    assert_eq!(w.entry(id).state, St::Done);
+    assert_eq!(w.sent().len(), 1);
 }

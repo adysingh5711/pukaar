@@ -70,6 +70,8 @@ pub struct Node {
     pub names: BTreeMap<Key, String>, // from the profiles
     /// The bio and the experience of each member, from the profiles.
     pub about: BTreeMap<Key, (String, String)>,
+    /// Staff members whose name an admin signed (O5).
+    pub signed: std::collections::BTreeSet<Key>,
     /// The text of each removal reason, by the SHA-256 of the text (from details.json).
     pub reasons: BTreeMap<Key, String>,
     /// What the Storage fetchers learned, and the version of it that we copied last.
@@ -93,6 +95,7 @@ impl Node {
             retired: Vec::new(),
             names: BTreeMap::new(),
             about: BTreeMap::new(),
+            signed: Default::default(),
             reasons: BTreeMap::new(),
             fetched: None,
             fetched_version: 0,
@@ -133,6 +136,7 @@ impl Node {
         self.retired = f.retired.clone();
         self.names = f.names.clone();
         self.about = f.about.clone();
+        self.signed = f.signed.clone();
         self.reasons = f.reasons.clone();
     }
 
@@ -359,6 +363,13 @@ impl Node {
         };
         let gone: Vec<Value> = people["revoked"].as_array().into_iter().flatten().map(|r| self.with_reason(r.clone())).collect();
         people["revoked"] = json!(gone);
+        // O5: a staff name that carries the signature of an admin gets a marker for the UI.
+        for list in ["members", "super_admins"] {
+            for row in people[list].as_array_mut().into_iter().flatten() {
+                let by_admin = row["key"].as_str().and_then(|k| hex::decode(k).ok()).and_then(|k| <Key>::try_from(k).ok()).is_some_and(|k| self.signed.contains(&k));
+                row["name_signed_by_admin"] = by_admin.into();
+            }
+        }
         let storage = self.fetched.as_ref().map_or(json!({ "pending": 0, "error": null }), |f| f.lock().unwrap().status_json());
         json!({
             "site": hex::encode(self.store.site),

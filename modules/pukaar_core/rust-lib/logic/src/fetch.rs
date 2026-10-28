@@ -21,7 +21,7 @@ use crate::sync::{Wire, BLOB_CHUNK, MAX_CHUNKS, MAX_FALLBACK};
 use crate::reducer::Config;
 use crate::rpc::{refresh, Rpc, SharedChain};
 use ed25519_dalek::SigningKey;
-use pukaar_sites_rules::Member;
+use pukaar_sites_rules::{Member, Rank, Site};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
@@ -149,6 +149,8 @@ pub struct Fetched {
     pub names: BTreeMap<Key, String>,
     /// The bio and the experience of each member, by Pukaar key.
     pub about: BTreeMap<Key, (String, String)>,
+    /// Staff members whose name carries the signature of an admin (O5).
+    pub signed: BTreeSet<Key>,
     /// The removal reasons, by SHA-256 of the text.
     pub reasons: BTreeMap<Key, String>,
     /// How many files of the chain records have not arrived (or did not match) yet.
@@ -187,6 +189,7 @@ impl Default for Fetched {
             retired: vec![],
             names: BTreeMap::new(),
             about: BTreeMap::new(),
+            signed: BTreeSet::new(),
             reasons: BTreeMap::new(),
             pending: 0,
             error: None,
@@ -398,10 +401,25 @@ fn about_of(b: &profile::Body) -> (String, String) {
     (clean_about(&b.bio), clean_about(&b.experience))
 }
 
-fn read_profile(bytes: &[u8], site: &str, m: &Member, version: u64, me: &SigningKey, keys: &BTreeMap<u64, Key>) -> Result<profile::Body, String> {
+/// Steward or above, super admins included.
+pub fn is_staff(site: &Site, m: &Member) -> bool {
+    site.is_super(&m.user) || Rank::from(m.role) >= Rank::Steward
+}
+
+/// The reader error for a staff profile that no admin signed (O5). It is no storage fault.
+const NOT_BY_ADMIN: &str = "a staff name needs the signature of an admin";
+
+/// O5: a resident signs their own profile. A staff profile needs the signature of an admin (an admin
+/// who names themselves is an admin too). `admins` are the Pukaar keys of the active admins.
+fn read_profile(bytes: &[u8], site: &Site, m: &Member, version: u64, me: &SigningKey, keys: &BTreeMap<u64, Key>, admins: &BTreeSet<Key>) -> Result<profile::Body, String> {
     let e = profile::from_bytes(bytes)?;
-    if e.site_id != site || e.user != hex::encode(m.user) || e.pukaar_key != hex::encode(m.pukaar_key) {
+    let author = account(&e.pukaar_key);
+    let own = author == Some(m.pukaar_key) && !is_staff(site, m);
+    if e.site_id != hex::encode(site.site_id) || e.user != hex::encode(m.user) {
         return Err("the file belongs to someone else".into());
+    }
+    if !own && !author.is_some_and(|a| admins.contains(&a)) {
+        return Err(if is_staff(site, m) { NOT_BY_ADMIN } else { "the file belongs to someone else" }.into());
     }
     if e.version != version {
         return Err("the version differs from the pointer".into());
@@ -414,8 +432,9 @@ fn cycle(store: &dyn Store, chain: &SharedChain, fx: &SharedFetched, me: &Signin
     let site_hex = hex::encode(site.site_id);
     let announces = fx.lock().unwrap().announces.clone();
     // The newest profile of a member: the announce when its version is higher than the chain pointer.
+    // A staff profile counts only with the signature of an admin (O5), so a staff member's own announce is not used.
     let pointer = |m: &Member| match announces.get(&m.pukaar_key) {
-        Some(a) if a.version > m.profile_version => (a.cid.clone(), a.sha256, a.version),
+        Some(a) if a.version > m.profile_version && !is_staff(&site, m) => (a.cid.clone(), a.sha256, a.version),
         _ => (m.profile_cid.clone(), m.profile_sha256, m.profile_version),
     };
     let strangers: Vec<&Announce> = announces.values().filter(|a| !members.iter().any(|m| m.pukaar_key == a.author)).collect();
@@ -524,13 +543,27 @@ fn cycle(store: &dyn Store, chain: &SharedChain, fx: &SharedFetched, me: &Signin
 
     let mut names = f.names.clone(); // a name stays when its newer file has not arrived
     let mut about = f.about.clone();
+    let mut signed = f.signed.clone();
+    let active = |m: &Member| m.status == pukaar_sites_rules::MemberStatus::Active && m.revoked.is_none();
+    let admins: BTreeSet<Key> = members.iter().filter(|m| active(m) && (site.is_super(&m.user) || Rank::from(m.role) >= Rank::Admin)).map(|m| m.pukaar_key).collect();
     for m in &members {
         let (cid, _, version) = pointer(m);
         let Some(bytes) = file(&cid) else { continue };
-        match read_profile(bytes, &site_hex, m, version, me, &site_keys) {
+        match read_profile(bytes, &site, m, version, me, &site_keys, &admins) {
             Ok(b) => {
                 names.insert(m.pukaar_key, clean(&b.display_name));
                 about.insert(m.pukaar_key, about_of(&b));
+                if is_staff(&site, m) {
+                    signed.insert(m.pukaar_key);
+                } else {
+                    signed.remove(&m.pukaar_key);
+                }
+            }
+            // A promoted member's own name stops counting: no name until an admin signs one.
+            Err(e) if e == NOT_BY_ADMIN => {
+                names.remove(&m.pukaar_key);
+                about.remove(&m.pukaar_key);
+                signed.remove(&m.pukaar_key);
             }
             Err(e) if site_keys.is_empty() && profile::is_no_access(&e) => {} // we hold no site key: expected
             Err(e) => errors.push(format!("profile {}: {e}", crate::node::fingerprint(&m.pukaar_key))),
@@ -562,10 +595,10 @@ fn cycle(store: &dyn Store, chain: &SharedChain, fx: &SharedFetched, me: &Signin
     f.site_keys = site_keys;
     f.pending = pending;
     f.error = errors.into_iter().next();
-    if (f.config.as_ref(), f.places.as_ref(), &f.retired, &f.names, &f.about, &f.reasons)
-        != (config.as_ref(), place_list.as_ref(), &retired, &names, &about, &reasons)
+    if (f.config.as_ref(), f.places.as_ref(), &f.retired, &f.names, &f.about, &f.reasons, &f.signed)
+        != (config.as_ref(), place_list.as_ref(), &retired, &names, &about, &reasons, &signed)
     {
-        (f.config, f.places, f.retired, f.names, f.about, f.reasons) = (config, place_list, retired, names, about, reasons);
+        (f.config, f.places, f.retired, f.names, f.about, f.reasons, f.signed) = (config, place_list, retired, names, about, reasons, signed);
         f.version += 1;
     }
     grew
