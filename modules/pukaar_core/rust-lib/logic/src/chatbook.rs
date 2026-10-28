@@ -14,7 +14,7 @@ use crate::meet::Signed;
 use crate::persist::SiteFile;
 use crate::sync::Wire;
 use ed25519_dalek::SigningKey;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -120,6 +120,12 @@ pub struct Msg {
     pub timestamp_ms: u64,
     #[serde(default)]
     pub sender: Option<String>,
+}
+
+/// The list that a module call answered: a JSON array, or inside `{"value": …}`.
+pub fn list_of<T: DeserializeOwned>(v: Value) -> Result<Vec<T>, String> {
+    let v = if v.is_array() { v } else { v["value"].clone() };
+    serde_json::from_value(v).map_err(|e| e.to_string())
 }
 
 /// The messages of a thread, oldest first: each conversation's messages (`old` for a conversation that
@@ -508,6 +514,19 @@ mod tests {
         assert_eq!(again.latest(&a), Some("addr-1"));
         assert_eq!(again.queued(&a).count(), 1, "the queue survives a restart");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_module_lists_read_with_float_times_and_either_wrapping() {
+        let convo = json!({ "convo_id": "c1", "message_count": 2, "last_activity_ms": 1781234567890.0, "kind": "direct", "history_only": false });
+        let a: Vec<Convo> = list_of(json!([convo.clone()])).unwrap();
+        let b: Vec<Convo> = list_of(json!({ "success": true, "value": [convo] })).unwrap();
+        assert_eq!(
+            (a[0].last_ms, a[0].preview.clone()),
+            (1_781_234_567_890, None)
+        );
+        assert_eq!(b.len(), 1);
+        assert!(list_of::<Msg>(json!("junk")).is_err());
     }
 
     #[test]

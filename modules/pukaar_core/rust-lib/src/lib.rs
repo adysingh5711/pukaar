@@ -9,13 +9,14 @@ mod chat;
 mod wallet;
 mod storage;
 
+use pukaar_logic::chatbook::ChatBook;
 use pukaar_logic::event::{sha256, Body, Event, Key, SigningKey};
 use pukaar_logic::fetch::{sync_once, Fetched, Store as _};
 use pukaar_logic::identity;
 use pukaar_logic::node::{action_body, parse_id, Node};
 use pukaar_logic::lezkey::{derive_lez_secret, lez_account_id};
 use pukaar_logic::meet::{Act, Meetings};
-use pukaar_logic::persist;
+use pukaar_logic::persist::{self, SiteFile as _};
 use pukaar_logic::profile;
 use pukaar_logic::ops::{self, Place, SuperKind};
 use pukaar_logic::queue::{self, Queue, SharedQueue};
@@ -166,9 +167,22 @@ pub trait PukaarCoreModule: Send + 'static {
     /// Reads the CID of your backup from the chain (a typed `cid` is used only when the chain has none), downloads it
     /// from Storage in the background and adds the meetings that are missing.
     fn meet_restore(&mut self, cid: String) -> String;
-    /// Starts `chat_module` on the Delivery preset `logos.dev` and reads its installation address (a new one at each start).
-    /// Safe to call again: `{"address", "delivery", "detail", "adopted", "preset"}`, or `error: …`.
+    /// Starts `chat_module` on the Delivery preset `logos.dev`, reads its installation address (a new one at each start)
+    /// and announces it to the site, signed. Only an active member can. The core also does this by itself in the
+    /// background. Safe to call again: `{"address", "delivery", "detail", "adopted", "preset", "note"}`, or `error: …`.
+    /// `note` is set when chat, not Pukaar, created the shared Delivery node (its setup then differs from Pukaar's).
     fn chat_start(&mut self) -> String;
+    /// The chat list of an active member: `{"threads":[{"key","name","preview","last_ms","queued","history_only",
+    /// "has_address"}],"known":[keys whose chat address arrived],"chat":{"ok","status"|"error"},"problem"}`, newest first.
+    /// One thread per person, old conversations and the new one together. It reads the chat module, so the screen polls it.
+    fn chat_threads(&mut self) -> String;
+    /// The thread with one member: `{"messages":[{"from_self","content","ts_ms","old","queued"}]}`, oldest first. `old` is
+    /// a message of a conversation from before a restart (read only), `queued` a message that is not sent yet.
+    fn chat_messages(&mut self, key_hex: String) -> String;
+    /// Sends a message to an active member. It is kept first and sent at once if their chat address is known; if not
+    /// (or if chat is down) it waits in a local queue and goes out when the address arrives:
+    /// `{"ok":true,"sent":bool,"why"}`. `error: …` for a message that is refused (empty, too long, not a member).
+    fn chat_send(&mut self, key_hex: String, text: String) -> String;
     fn on_context_ready(&mut self, _ctx: &RustModuleContext) {}
 }
 
@@ -248,6 +262,8 @@ struct Shared {
     last_meet: Option<Instant>,
     /// When we last asked the peers for profile announces.
     last_announce_req: Option<Instant>,
+    /// The chat addresses, the conversation links and the unsent messages of the site of `node` (`chat.rs`).
+    chats: ChatBook,
 }
 
 impl Shared {
@@ -590,6 +606,7 @@ fn on_wire(channel: &str, bytes: &[u8]) {
         queue,
         peers,
         meets,
+        chats,
         dir,
         ..
     }) = g.as_mut()
@@ -660,6 +677,11 @@ fn on_wire(channel: &str, bytes: &[u8]) {
             let (site, members) = (node.store.site, node.approved_keys());
             meets.for_site(dir, &site).on_busy(&site, &b, &members);
         }
+        // A member's chat address. The core sends what waits for them at its next background step.
+        Some(Wire::ChatAddr(m)) => {
+            let (site, members) = (node.store.site, node.approved_keys());
+            chats.for_site(dir, &site).on_addr(&site, &m, &members);
+        }
         // Only recorded: `site_info.chain.pending_peers` shows it for a while.
         Some(Wire::ChainPending { tx, kind }) => {
             peers.retain(|(t, _, at)| *t != tx && at.elapsed() < PEER_PENDING_FOR);
@@ -681,6 +703,7 @@ fn send_queued(site: &str) -> Result<(), String> {
             outbox,
             last_heads,
             meets,
+            chats,
             last_meet,
             last_announce_req,
             dir,
@@ -700,6 +723,7 @@ fn send_queued(site: &str) -> Result<(), String> {
         if last_meet.is_none_or(|t| t.elapsed() >= MEET_EVERY) {
             *last_meet = Some(Instant::now());
             outbox.extend(meets.for_site(dir, &node.store.site).resend(&node.key, &node.store.site, now_ms()));
+            outbox.extend(chats.for_site(dir, &node.store.site).resend(&node.key, &node.store.site));
         }
         std::mem::take(outbox)
     };
@@ -728,6 +752,7 @@ fn send_queued(site: &str) -> Result<(), String> {
 fn flush() {
     chain_tick();
     write_tick();
+    chat::tick();
     let (link, ids) = {
         let mut g = SHARED.lock().unwrap();
         let Some(sh) = g.as_mut() else {
@@ -869,6 +894,15 @@ fn meet_q<T>(f: impl FnOnce(&Node, &mut Meetings, &mut Queue, &mut Vec<Vec<u8>>)
     node.apply_fetched();
     let mut q = sh.queue.lock().unwrap();
     f(node, sh.meets.for_site(&sh.dir, &node.store.site), &mut q, &mut sh.outbox)
+}
+
+/// Run `f` on the node and the chat book of its site. `chat.rs` calls the chat module between two of these, never inside one.
+fn chats<T>(f: impl FnOnce(&Node, &mut ChatBook, &mut Vec<Vec<u8>>) -> Result<T, String>) -> Result<T, String> {
+    let mut g = SHARED.lock().unwrap();
+    let sh = g.as_mut().ok_or("module not ready")?;
+    let node = sh.node.as_mut().ok_or(NO_SITE)?;
+    node.apply_fetched();
+    f(node, sh.chats.for_site(&sh.dir, &node.store.site), &mut sh.outbox)
 }
 
 /// `meet` for a method that sends: the reply is `ok`, or what `reply` makes of the result.
@@ -1344,7 +1378,19 @@ impl PukaarCoreModule for Pukaar {
     }
 
     fn chat_start(&mut self) -> String {
-        chat::start().map_or_else(err, |v| v.to_string())
+        chat::ensure().map_or_else(err, |v| v.to_string())
+    }
+
+    fn chat_threads(&mut self) -> String {
+        chat::threads().map_or_else(err, |v| v.to_string())
+    }
+
+    fn chat_messages(&mut self, key_hex: String) -> String {
+        key_arg(&key_hex).and_then(|who| chat::messages(&who)).map_or_else(err, |v| v.to_string())
+    }
+
+    fn chat_send(&mut self, key_hex: String, text: String) -> String {
+        key_arg(&key_hex).and_then(|who| chat::send(&who, &text)).map_or_else(err, |v| v.to_string())
     }
 
     fn meet_restore(&mut self, cid: String) -> String {
@@ -1393,6 +1439,7 @@ impl PukaarCoreModule for Pukaar {
             meets: Meetings::default(),
             last_meet: None,
             last_announce_req: None,
+            chats: ChatBook::default(),
         });
     }
 }
