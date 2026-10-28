@@ -22,6 +22,9 @@ const PRESET: &str = "logos.dev";
 const CALL: Duration = Duration::from_secs(20);
 /// The background step (start, announce, send what waits) runs at most this often.
 const EVERY: Duration = Duration::from_secs(5);
+/// A new conversation is not written into at once: the other module joins it a moment after the invite, and a
+/// message sent before that is lost (nobody listens to its topic yet). `send_message` only hands to Delivery.
+const OPENING: &str = "Opening the chat with them.";
 const NO_ADDR: &str = "Their chat address has not arrived yet.";
 /// Shown when chat, not Pukaar, created the shared Delivery node (see `delivery_adopted`).
 const OTHER_MODE: &str = "Chat started the shared Delivery node first, so it runs in the chat's setup and not in Pukaar's. Messages should work. If the site stops syncing, restart Basecamp.";
@@ -99,7 +102,7 @@ pub fn ensure() -> Result<Value, String> {
 static DRAIN: Mutex<()> = Mutex::new(());
 
 /// Send the unsent messages to `who`, in order. A conversation that was opened with their newest address is
-/// used, else a new one is opened. What was not sent stays queued. Gives how many went out.
+/// used, else a new one is opened and given time to be joined. What was not sent stays queued. Gives how many went out.
 fn drain(who: &Key) -> Result<usize, String> {
     let _one = DRAIN.lock().unwrap_or_else(PoisonError::into_inner);
     let (addr, texts, known) = chats(|node, book, _| {
@@ -114,11 +117,21 @@ fn drain(who: &Key) -> Result<usize, String> {
     let p = proxy();
     let live = conversations(&p)?;
     let usable = known.into_iter().find(|id| live.iter().any(|c| c.id == *id && !c.history_only));
-    let created = usable.is_none();
     let convo = match usable {
         Some(id) => id,
-        None => call(&p, "create_conversation", json!([addr]), CALL)?.as_str().ok_or("chat_module gave no conversation id")?.to_owned(),
+        None => {
+            let id = call(&p, "create_conversation", json!([addr]), CALL)?.as_str().ok_or("chat_module gave no conversation id")?.to_owned();
+            chats(|_, book, _| {
+                book.link(&id, *who, &addr);
+                book.opened(&id, now_ms());
+                Ok(())
+            })?;
+            id
+        }
     };
+    if !chats(|_, book, _| Ok(book.settled(&convo, now_ms())))? {
+        return Err(OPENING.into()); // stays queued; the next round sends it
+    }
     let (mut sent, mut failed) = (0, None);
     for text in &texts {
         match call(&p, "send_message", json!([convo, text]), CALL) {
@@ -130,9 +143,6 @@ fn drain(who: &Key) -> Result<usize, String> {
         }
     }
     chats(|_, book, _| {
-        if created {
-            book.link(&convo, *who, &addr);
-        }
         book.unqueue(who, sent);
         if sent > 0 {
             book.mark_read(who, now_ms()); // our own message is not news to us

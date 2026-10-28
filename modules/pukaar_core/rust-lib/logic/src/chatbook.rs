@@ -27,6 +27,9 @@ const KEEP_ADDRS: usize = 8;
 /// Unsent messages to one person, so a person who never comes online cannot fill the disk.
 pub const MAX_QUEUED: usize = 50;
 pub const MAX_TEXT: usize = 4000;
+/// How long a new conversation waits before the first message goes into it (see `ChatBook::opened`). The other
+/// module joined within about a second in the field; the background step runs every 5 s.
+const SETTLE_MS: u64 = 8_000;
 const PREVIEW_CHARS: usize = 160;
 
 /// The body of an announce: `ts` is the clock of the sender and the newest wins.
@@ -83,6 +86,10 @@ pub struct ChatBook {
     /// Our own current address and the time of its announce: set at each start of the chat module.
     #[serde(skip)]
     mine: Option<(u64, String)>,
+    /// Conversations that this start of the core opened, with the time. The other side needs a moment to join one;
+    /// a message sent before that goes to a topic that nobody listens to yet and is lost.
+    #[serde(skip)]
+    opened: Vec<(String, u64)>,
 }
 
 impl SiteFile for ChatBook {
@@ -238,6 +245,19 @@ impl ChatBook {
             });
             self.save();
         }
+    }
+
+    /// Note that we opened `convo` just now.
+    pub fn opened(&mut self, convo: &str, now_ms: u64) {
+        self.opened.push((convo.to_owned(), now_ms));
+    }
+
+    /// True when `convo` is old enough to send into: the other side has had `SETTLE_MS` to join it.
+    #[must_use]
+    pub fn settled(&self, convo: &str, now_ms: u64) -> bool {
+        self.opened
+            .iter()
+            .all(|(c, at)| c != convo || now_ms.saturating_sub(*at) >= SETTLE_MS)
     }
 
     /// Link a conversation that someone opened with us, by the address of its sender. False when no member announced that address.
@@ -417,6 +437,15 @@ mod tests {
             Some(Wire::ChatAddr(m)) => Some(m),
             other => panic!("unexpected {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_new_conversation_takes_no_message_until_the_other_side_has_had_time_to_join() {
+        let mut b = book();
+        b.opened("new", NOW);
+        assert!(!b.settled("new", NOW + SETTLE_MS - 1));
+        assert!(b.settled("new", NOW + SETTLE_MS));
+        assert!(b.settled("other", NOW)); // a conversation that this start did not open is ready
     }
 
     #[test]
