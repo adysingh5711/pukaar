@@ -4415,7 +4415,8 @@ Item {
                                     width: ListView.view.width
                                     highlighted: modelData.key === root.chatWith
                                     readonly property string title: modelData.group ? modelData.name : root.who(modelData.key, modelData.name)
-                                    Accessible.name: (modelData.group ? "Group " : "Chat with ") + title + ". " + modelData.preview
+                                    readonly property bool isUnread: modelData.unread === true && !highlighted
+                                    Accessible.name: (modelData.group ? "Group " : "Chat with ") + title + (isUnread ? ", unread" : "") + ". " + modelData.preview
                                     onClicked: root.openChat(modelData.key)
                                     background: Rectangle { color: chatRow.highlighted ? root.t.sbActBg : chatRow.hovered ? root.t.hover : "transparent" }
                                     contentItem: ColumnLayout {
@@ -4423,7 +4424,8 @@ Item {
                                         RowLayout {
                                             Layout.fillWidth: true
                                             Icon { visible: chatRow.modelData.group === true; name: "members"; size: 14; color: root.t.muted }
-                                            Label { Layout.fillWidth: true; elide: Text.ElideRight; textFormat: Text.PlainText; font.weight: Font.DemiBold; color: root.t.fg; text: chatRow.title }
+                                            Label { Layout.fillWidth: true; elide: Text.ElideRight; textFormat: Text.PlainText; font.weight: chatRow.isUnread ? Font.Bold : Font.DemiBold; color: root.t.fg; text: chatRow.title }
+                                            Rectangle { visible: chatRow.isUnread; width: 10; height: 10; radius: 5; color: root.t.primary }
                                             Label { text: root.chatTime(chatRow.modelData.last_ms); font.pointSize: root.smallSize; color: root.t.muted }
                                         }
                                         Label {
