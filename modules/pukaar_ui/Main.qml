@@ -56,12 +56,12 @@ Item {
     readonly property string roleName: isSuper ? "Super admin" : me.role || (removed ? "Removed" : "Pending")
     // A restored identity waits for its own history before signing anything (core refuses meanwhile).
     readonly property bool syncing: !!me.syncing_own_history
-    // ---- 1:1 meetings (1-1-meet.md): the core keeps UTC milliseconds, the page shows local time ----
+    // ---- meetings (1-1-meet.md): one organizer, 1 to 8 invitees. The core keeps UTC milliseconds, the page shows local time ----
     property var meets: ({ meetings: [], share: true, lead_min: 10, backup: ({}) })   // meet_list
-    property var meetWith: null          // the member of the open "New meeting" box, or null
+    property var meetGuests: []          // the members chosen in the "New meeting" box (1 to 8), [] = box closed
     property string reminder: ""         // the pop-up text; "" = none
     property var reminded: ({})          // meeting ids that were reminded since the app opened
-    function startMeet(member) { meetWith = member; openPage("meet") }
+    function startMeet(member) { meetGuests = [member]; openPage("meet") }
     // ---- Messages: private chat (chat_threads, chat_messages, chat_send). One thread per person, and one per group (a row with `group: true`, its `key` the group's id) ----
     property var chat: ({ threads: [], known: [], chat: ({}) })   // chat_threads
     property string chatWith: ""         // the member whose thread is open, "" = none
@@ -105,23 +105,30 @@ Item {
     function applyViewed(v) { if (v && v.key === viewKey) viewed = v; else if (typeof v === "string") viewed = { error: v } }
     function showMember(key) { viewKey = key; viewed = null; call("member_profile", [key], applyViewed); openPage("member") }
     function meetTime(r) { return when(r.start_ms / 1000, "ddd d MMM HH:mm") + " to " + when(r.end_ms / 1000, "HH:mm") }
-    // What a time runs into, as sentences: c is {mine, theirs} from the core (meet_check or a row's clashes).
-    function clashLines(c) {
+    // What a time runs into, as sentences: c is {mine, theirs} from the core (meet_check or a row's clashes). `name` is whose
+    // busy times `theirs` holds, "" for "They" (one person).
+    function clashLines(c, name) {
         if (!c) return []
         return (c.mine || []).map(function (x) { return "You are busy with " + who(x.with, x.name) + ", " + meetTime(x) + "." })
-            .concat((c.theirs || []).map(function (r) { return "They are busy, " + meetTime(r) + "." }))
+            .concat((c.theirs || []).map(function (r) { return (name ? name + " is" : "They are") + " busy, " + meetTime(r) + "." }))
     }
+    // The people of a meeting but you, as one line: for one invitee that is the other person.
+    function meetTitle(m) {
+        return [m.organizer].concat(m.invitees).filter(function (p) { return !p.you }).map(function (p) { return who(p.with, p.name) }).join(", ")
+    }
+    // A meeting that you are part of and that still counts: you organize it, or you accepted it.
+    function meetMine(m) { return (m.status === "confirmed" || m.status === "proposed") && (m.you === "requester" || m.my_answer === "accepted") }
     // A local timer: the first confirmed meeting that starts within the lead time, once. It runs only while the app is open.
     function checkReminders() {
         var now = Date.now(), lead = (meets.lead_min >= 0 ? meets.lead_min : 10) * 60000   // 0 = no reminder
         if (lead === 0) return
         var due = (meets.meetings || []).filter(function (m) {
-            return m.status === "confirmed" && !reminded[m.id] && m.start_ms - now <= lead && m.start_ms > now - 60000
+            return m.status === "confirmed" && meetMine(m) && !reminded[m.id] && m.start_ms - now <= lead && m.start_ms > now - 60000
         })
         if (!due.length) return
         var m = due[0], r = Object.assign({}, reminded)
         r[m.id] = true; reminded = r
-        reminder = "Meeting with " + who(m.with, m.name) + " starts " + (m.start_ms > now ? "in " + plural(Math.max(1, Math.round((m.start_ms - now) / 60000)), "minute") : "now")
+        reminder = "Meeting with " + meetTitle(m) + " starts " + (m.start_ms > now ? "in " + plural(Math.max(1, Math.round((m.start_ms - now) / 60000)), "minute") : "now")
                  + ", at " + when(m.start_ms / 1000, "HH:mm") + "."
     }
     Timer { interval: 15000; running: root.inSite && root.approved; repeat: true; triggeredOnStart: true; onTriggered: root.checkReminders() }
@@ -1383,10 +1390,19 @@ Item {
         required property int index
         property bool open: false
         readonly property var verb: ({ proposed: "Proposed by", accepted: "Accepted by", declined: "Declined by", cancelled: "Cancelled by" })
+        readonly property bool many: modelData.invitees.length > 1
+        readonly property string names: root.meetTitle(modelData)
+        // What each person has answered, for the details and the waiting count.
+        readonly property int answered: modelData.invitees.filter(function (p) { return p.state !== "pending" }).length
+        // The step of a log: an invitee who cancels leaves, only their own part ends.
+        function stepVerb(s) { return s.did === "cancelled" && s.with !== modelData.organizer.with ? "Left by" : verb[s.did] }
         default property alias actions: act.data
         readonly property var lines: root.clashLines(modelData.clashes)
-        readonly property string phrase: ({ proposed: modelData.you === "requester" ? "Waiting for their answer" : "Asks for your answer",
-                                           confirmed: "Confirmed", declined: "Declined", cancelled: modelData.cancelled_by_you ? "Cancelled by you" : "Cancelled", unaccepted: "Not accepted" })[modelData.status]
+        readonly property bool out: modelData.my_answer === "declined" || modelData.my_answer === "left"   // you are not in it any more
+        readonly property string waiting: modelData.you === "requester" ? (many ? "Waiting: " + answered + " of " + modelData.invitees.length + " answered" : "Waiting for their answer")
+                                          : modelData.my_answer === "pending" ? "Asks for your answer" : "Waiting for the others"
+        readonly property string phrase: out ? "You " + modelData.my_answer
+            : ({ proposed: waiting, confirmed: "Confirmed", declined: "Declined", cancelled: modelData.cancelled_by_you ? "Cancelled by you" : "Cancelled", unaccepted: "Not accepted" })[modelData.status]
         Layout.fillWidth: true
         spacing: 0
         Rectangle { visible: mr.index > 0; Layout.fillWidth: true; implicitHeight: 1; color: root.t.bd }
@@ -1399,9 +1415,9 @@ Item {
                 TapHandler { onTapped: mr.open = !mr.open }
                 Flow {
                     Layout.fillWidth: true; spacing: 6
-                    Label { text: root.who(mr.modelData.with, mr.modelData.name); textFormat: Text.PlainText; font.weight: Font.DemiBold }
-                    StatusChip { label: mr.phrase; stage: mr.modelData.status === "confirmed" ? root.t.resolved : mr.modelData.status === "proposed" ? root.t.progress : root.t.closed }
-                    LinkButton { text: mr.open ? "Hide details" : "Details"; Accessible.name: text + " of the meeting with " + root.who(mr.modelData.with, mr.modelData.name); onClicked: mr.open = !mr.open }
+                    Label { text: mr.names; textFormat: Text.PlainText; font.weight: Font.DemiBold }
+                    StatusChip { label: mr.phrase; stage: mr.out ? root.t.closed : mr.modelData.status === "confirmed" ? root.t.resolved : mr.modelData.status === "proposed" ? root.t.progress : root.t.closed }
+                    LinkButton { text: mr.open ? "Hide details" : "Details"; Accessible.name: text + " of the meeting with " + mr.names; onClicked: mr.open = !mr.open }
                 }
                 Label { text: root.meetTime(mr.modelData); color: root.t.muted; font.pointSize: root.smallSize }
                 Label {
@@ -1423,12 +1439,21 @@ Item {
                     }
                     Label { text: "Starts " + root.when(mr.modelData.start_ms / 1000, "ddd d MMM yyyy HH:mm") + ", ends " + root.when(mr.modelData.end_ms / 1000, "HH:mm") + " (your local time)"; font.pointSize: root.smallSize }
                     Label { text: "Status: " + mr.phrase; font.pointSize: root.smallSize }
+                    Label { visible: mr.many; text: "Who is invited"; font.pointSize: root.smallSize; font.weight: Font.DemiBold }
+                    Repeater {
+                        model: mr.many ? mr.modelData.invitees : []
+                        delegate: Label {
+                            required property var modelData
+                            Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText; font.pointSize: root.smallSize
+                            text: (modelData.you ? "You" : root.who(modelData.with, modelData.name)) + ": " + modelData.state
+                        }
+                    }
                     Repeater {
                         model: mr.modelData.log || []
                         delegate: Label {
                             required property var modelData
                             Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText; font.pointSize: root.smallSize
-                            text: mr.verb[modelData.did] + " " + (modelData.you ? "you" : root.who(modelData.with, modelData.name)) + (modelData.at_ms ? ", " + root.when(modelData.at_ms / 1000, "d MMM yyyy HH:mm") : "")
+                            text: mr.stepVerb(modelData) + " " + (modelData.you ? "you" : root.who(modelData.with, modelData.name)) + (modelData.at_ms ? ", " + root.when(modelData.at_ms / 1000, "d MMM yyyy HH:mm") : "")
                         }
                     }
                     Help { text: "Times are when this device saw each step." }
@@ -2282,7 +2307,7 @@ Item {
                         { label: "History", icon: "hist", page: "history" },
                         { label: "People", icon: "members", page: "people", count: root.isAdmin ? root.pending.length : 0 },   // the admin's waiting count
                         { label: "Messages", icon: "cmt", page: "messages", dot: root.chat.unread === true && root.page !== "messages" },
-                        { label: "Meetings", icon: "bell", page: "meet", count: root.meets.meetings.filter(function (m) { return m.status === "proposed" && m.you === "invitee" }).length },   // requests that wait for us
+                        { label: "Meetings", icon: "bell", page: "meet", count: root.meets.meetings.filter(function (m) { return m.status === "proposed" && m.my_answer === "pending" }).length },   // requests that wait for us
                         { label: "Places", icon: "pin", page: "places" }
                     ].filter(function (e) { return root.approved || ["report", "meet", "messages"].indexOf(e.page) < 0 })   // a pending key cannot report, meet or message
                     delegate: NavItem {
@@ -4087,42 +4112,61 @@ Item {
                         }
                     }
                 }
-                // Meetings: 1:1 with another member. Requests, a new meeting, upcoming, history, settings and backup.
+                // Meetings: with one or more members (up to 8). Requests, a new meeting, upcoming, history, settings and backup.
                 TabPage {
                     id: meetPage
                     enabled: !root.syncing
-                    readonly property var target: root.meetWith
-                    readonly property string targetName: target ? root.who(target.key, target.name) : ""
+                    readonly property var guests: root.meetGuests
+                    readonly property int maxGuests: 8   // the core's MAX_INVITEES
+                    readonly property string guestNames: guests.map(function (g) { return root.who(g.key, g.name) }).join(", ")
                     property int lenMin: 30
                     property var pick: null          // the chosen slot
-                    property var view: null          // meet_slots of the target
+                    property var views: ({})         // meet_slots of each chosen person, by key
                     property string slotsError: ""   // why the times did not load, "" when they did
-                    property var clash: null         // meet_check of the pick
+                    property var clashes: ({})       // meet_check of the pick for each chosen person, by key
                     property string customError: ""  // why a typed length or the chosen time was refused, "" when fine
                     property var days: []            // the next 30 local days of the date box: [{ms (midnight), label}]
                     property string leadError: ""    // the same for the reminder
                     readonly property var others: root.approved ? root.members.filter(function (m) { return m.key !== root.me.key }) : []   // who we can plan with
                     readonly property var all: root.meets.meetings || []
                     readonly property var backup: root.meets.backup || ({})
-                    readonly property var requests: all.filter(function (m) { return m.status === "proposed" && m.you === "invitee" })
-                    readonly property var upcoming: all.filter(function (m) { return (m.status === "confirmed" || (m.status === "proposed" && m.you === "requester")) && m.end_ms > root.now * 1000 })
+                    readonly property var requests: all.filter(function (m) { return m.status === "proposed" && m.my_answer === "pending" })
+                    readonly property var upcoming: all.filter(function (m) { return root.meetMine(m) && requests.indexOf(m) < 0 && m.end_ms > root.now * 1000 })
                     readonly property var history: all.filter(function (m) { return requests.indexOf(m) < 0 && upcoming.indexOf(m) < 0 }).reverse()
-                    readonly property var lines: root.clashLines(clash)
+                    // Our own calendar is the same in every answer, so the first one says if we are busy.
+                    readonly property var ours: guests.length ? clashes[guests[0].key] : null
+                    readonly property bool youBusy: !!ours && ours.mine.length > 0
+                    readonly property var lines: {
+                        var out = ours ? root.clashLines({ mine: ours.mine, theirs: [] }) : []
+                        guests.forEach(function (g) {
+                            var c = clashes[g.key]
+                            if (c) out = out.concat(root.clashLines({ mine: [], theirs: c.theirs }, guests.length > 1 ? root.who(g.key, g.name) : ""))
+                        })
+                        return out
+                    }
                     readonly property var hours: range(24, 1)
                     readonly property var minutes: range(12, 5)
-                    readonly property bool youBusy: !!clash && clash.mine.length > 0
-                    readonly property bool theirBusy: !!clash && clash.theirs.length > 0
-                    // Free or busy at the chosen time, for both people (the core's meet_check and meet_slots).
-                    readonly property string youLine: !pick ? "" : !clash ? "You: checking…"
-                        : !youBusy ? "You: free" : "You: busy (clashes with " + clash.mine.map(function (x) { return root.who(x.with, x.name) + " from " + hm(x) }).join(", ") + ")"
-                    readonly property string theirLine: !pick ? "" : !view ? targetName + ": checking…" : !view.shared ? targetName + ": shares no free and busy times"
-                        : !clash ? targetName + ": checking…" : !theirBusy ? targetName + ": free"
-                        : targetName + ": busy (" + clash.theirs.map(hm).join(", ") + ")"
-                    // Their busy ranges on the chosen day, when they share.
-                    readonly property var theirDay: {
-                        if (!pick || !view || !view.shared) return []
+                    // Free or busy at the chosen time, for you and for each chosen person (the core's meet_check and meet_slots).
+                    readonly property string youLine: !pick ? "" : !ours ? "You: checking…"
+                        : !youBusy ? "You: free" : "You: busy (clashes with " + ours.mine.map(function (x) { return root.who(x.with, x.name) + " from " + hm(x) }).join(", ") + ")"
+                    function theirBusy(g) { var c = clashes[g.key]; return !!c && c.theirs.length > 0 }
+                    function theirLine(g) {
+                        var v = views[g.key], c = clashes[g.key], n = root.who(g.key, g.name)
+                        return !v ? n + ": checking…" : !v.shared ? n + ": shares no free and busy times"
+                            : !c ? n + ": checking…" : c.theirs.length === 0 ? n + ": free" : n + ": busy (" + c.theirs.map(hm).join(", ") + ")"
+                    }
+                    // Their busy ranges on the chosen day, when they share; null when they do not.
+                    function busyDay(g) {
+                        var v = views[g.key]
+                        if (!pick || !v || !v.shared) return null
                         var a = new Date(pick.start_ms), s = new Date(a.getFullYear(), a.getMonth(), a.getDate()).getTime()
-                        return view.theirs.filter(function (r) { return r.end_ms > s && r.start_ms < s + 86400000 })
+                        return v.theirs.filter(function (r) { return r.end_ms > s && r.start_ms < s + 86400000 })
+                    }
+                    // Add the person to the meeting, or take them out. The core takes up to `maxGuests`.
+                    function toggle(m) {
+                        var i = guests.findIndex(function (g) { return g.key === m.key })
+                        if (i >= 0) root.meetGuests = guests.filter(function (g) { return g.key !== m.key })
+                        else if (guests.length < maxGuests) root.meetGuests = guests.concat([m])
                     }
                     // n two-digit labels "00", "05" … stepping by `step`.
                     function range(n, step) {
@@ -4143,9 +4187,14 @@ Item {
                         else setLen(n)
                     }
                     // A pick from the date and time boxes: the proposal carries this start and end itself.
-                    function choose(slot) { pick = slot; clash = null; check(slot) }
+                    function choose(slot) { pick = slot; clashes = ({}); check(slot) }
                     function check(slot) {
-                        root.call("meet_check", [target.key, slot.start_ms, slot.end_ms], function (c) { if (c && c.mine && pick === slot) clash = c })
+                        guests.forEach(function (g) {
+                            root.call("meet_check", [g.key, slot.start_ms, slot.end_ms], function (c) {
+                                if (!c || !c.mine || pick !== slot) return
+                                var next = Object.assign({}, clashes); next[g.key] = c; clashes = next
+                            })
+                        })
                     }
                     // The boxes start at the next full hour. A change of date, time or length picks at once (a light
                     // delay, so a few changes together make one check).
@@ -4160,10 +4209,10 @@ Item {
                         hourBox.currentIndex = first.getHours(); minBox.currentIndex = 0
                         applyTime()
                     }
-                    function applyTime() { if (target && days.length) timeTimer.restart() }
+                    function applyTime() { if (guests.length && days.length) timeTimer.restart() }
                     function pickTime() {
                         var d = new Date(days[dayBox.currentIndex].ms), s = new Date(d.getFullYear(), d.getMonth(), d.getDate(), hourBox.currentIndex, minBox.currentIndex * 5)
-                        if (s.getTime() < Date.now()) { customError = "That time has already passed. Pick a later time."; pick = null; clash = null; return }
+                        if (s.getTime() < Date.now()) { customError = "That time has already passed. Pick a later time."; pick = null; clashes = ({}); return }
                         customError = ""
                         choose({ start_ms: s.getTime(), end_ms: s.getTime() + lenMin * 60000 })
                     }
@@ -4174,19 +4223,28 @@ Item {
                         root.run("meet_prefs", [root.meets.share === false ? 0 : 1, n])
                     }
                     function load() {
-                        if (target) root.call("meet_slots", [target.key, Date.now(), lenMin], function (v) {
-                            var ok = !!v && Array.isArray(v.slots)
-                            if (ok) view = v
-                            slotsError = ok ? "" : String(typeof v === "string" ? v : "no answer").replace(/^error:\s*/, "")
+                        guests.forEach(function (g) {
+                            root.call("meet_slots", [g.key, Date.now(), lenMin], function (v) {
+                                var ok = !!v && Array.isArray(v.slots)
+                                if (ok) { var next = Object.assign({}, views); next[g.key] = v; views = next }
+                                slotsError = ok ? "" : String(typeof v === "string" ? v : "no answer").replace(/^error:\s*/, "")
+                            })
                         })
                     }
-                    onTargetChanged: { pick = null; clash = null; view = null; slotsError = ""; customError = ""; descField.text = ""; load(); if (target) resetTime() }
+                    // A new choice of people keeps the time, the length and the description, and checks them again.
+                    onGuestsChanged: {
+                        views = ({}); clashes = ({}); slotsError = ""
+                        load()
+                        if (!guests.length) { pick = null; days = []; customError = ""; descField.text = "" }
+                        else if (!days.length) resetTime()
+                        else if (pick) check(pick)
+                    }
                     Timer { id: timeTimer; interval: 150; onTriggered: meetPage.pickTime() }
                     Timer { id: lenTimer; interval: 500; onTriggered: if (lenField.text !== "") meetPage.customLength(lenField.text) }
-                    Timer { interval: 20000; running: !!meetPage.target && root.page === "meet"; repeat: true; onTriggered: { meetPage.load(); if (meetPage.pick) meetPage.check(meetPage.pick) } }
+                    Timer { interval: 20000; running: meetPage.guests.length > 0 && root.page === "meet"; repeat: true; onTriggered: { meetPage.load(); if (meetPage.pick) meetPage.check(meetPage.pick) } }
                     PageHead {
                         title: "Meetings"
-                        lede: "Plan a 1:1 meeting with another member: choose who below, or use 1:1 meeting in People. Times show in your local time."
+                        lede: "Plan a meeting with one or more members, up to 8: choose who below, or use 1:1 meeting in People. Times show in your local time."
                     }
                     Heading { visible: meetPage.requests.length > 0; text: "Requests" }
                     Frame {
@@ -4199,8 +4257,8 @@ Item {
                                 model: meetPage.requests
                                 delegate: MeetRow {
                                     id: req
-                                    ActionButton { text: "Accept"; kind: "primary"; Accessible.name: "Accept the meeting with " + root.who(req.modelData.with, req.modelData.name); onClicked: root.run("meet_accept", [req.modelData.id]) }
-                                    ActionButton { text: "Decline"; Accessible.name: "Decline the meeting with " + root.who(req.modelData.with, req.modelData.name); onClicked: root.run("meet_decline", [req.modelData.id]) }
+                                    ActionButton { text: "Accept"; kind: "primary"; Accessible.name: "Accept the meeting with " + root.meetTitle(req.modelData); onClicked: root.run("meet_accept", [req.modelData.id]) }
+                                    ActionButton { text: "Decline"; Accessible.name: "Decline the meeting with " + root.meetTitle(req.modelData); onClicked: root.run("meet_decline", [req.modelData.id]) }
                                 }
                             }
                         }
@@ -4219,15 +4277,21 @@ Item {
                                 id: whoBtn
                                 required property var modelData
                                 text: root.who(modelData.key, modelData.name)
-                                kind: meetPage.target && meetPage.target.key === modelData.key ? "primary" : "default"
-                                Accessible.name: "Plan a 1:1 meeting with " + text
-                                onClicked: root.meetWith = modelData
+                                readonly property bool chosen: meetPage.guests.some(function (g) { return g.key === modelData.key })
+                                kind: chosen ? "primary" : "default"
+                                Accessible.name: (chosen ? "Remove " : "Add ") + text + (chosen ? " from" : " to") + " the new meeting"
+                                onClicked: meetPage.toggle(modelData)
                             }
                         }
                     }
-                    Heading { visible: !!meetPage.target; text: "New meeting with " + meetPage.targetName }
+                    Help {
+                        visible: meetPage.others.length > 0
+                        text: meetPage.guests.length >= meetPage.maxGuests ? "Up to " + meetPage.maxGuests + " people. Choose a name again to remove it."
+                            : "Choose one or more people (up to " + meetPage.maxGuests + "). Choose a name again to remove it."
+                    }
+                    Heading { visible: meetPage.guests.length > 0; text: "New meeting with " + meetPage.guestNames }
                     ColumnLayout {
-                        visible: !!meetPage.target
+                        visible: meetPage.guests.length > 0
                         Layout.fillWidth: true; spacing: 8
                         RowLayout {
                             spacing: 12
@@ -4237,7 +4301,7 @@ Item {
                                 current: [30, 60, 90].indexOf(meetPage.lenMin)
                                 onPicked: function (i) { meetPage.setLen([30, 60, 90][i]) }
                             }
-                            LinkButton { text: "Close"; onClicked: root.meetWith = null }
+                            LinkButton { text: "Close"; onClicked: root.meetGuests = [] }
                         }
                         RowLayout {
                             spacing: 8
@@ -4282,16 +4346,24 @@ Item {
                         ColumnLayout {
                             visible: !!meetPage.pick
                             spacing: 2
-                            Label { text: meetPage.youLine; color: meetPage.youBusy ? root.t.warn : meetPage.clash ? root.t.resolved.fg : root.t.muted; font.weight: Font.DemiBold }
-                            Label {
-                                text: meetPage.theirLine; font.weight: Font.DemiBold
-                                color: meetPage.theirBusy ? root.t.warn : meetPage.view && meetPage.view.shared && meetPage.clash ? root.t.resolved.fg : root.t.muted
+                            Label { text: meetPage.youLine; color: meetPage.youBusy ? root.t.warn : meetPage.ours ? root.t.resolved.fg : root.t.muted; font.weight: Font.DemiBold }
+                            Repeater {
+                                model: meetPage.guests
+                                delegate: ColumnLayout {
+                                    required property var modelData
+                                    Layout.fillWidth: true; spacing: 2
+                                    Label {
+                                        Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
+                                        text: meetPage.theirLine(modelData); font.weight: Font.DemiBold
+                                        color: meetPage.theirBusy(modelData) ? root.t.warn : meetPage.views[modelData.key] && meetPage.views[modelData.key].shared && meetPage.clashes[modelData.key] ? root.t.resolved.fg : root.t.muted
+                                    }
+                                    Help {
+                                        visible: !!meetPage.busyDay(modelData)
+                                        text: root.who(modelData.key, modelData.name) + " is busy on " + (meetPage.pick ? root.when(meetPage.pick.start_ms / 1000, "ddd d MMM") : "") + ": "
+                                              + ((meetPage.busyDay(modelData) || []).length > 0 ? meetPage.busyDay(modelData).map(meetPage.hm).join(", ") : "nothing")
+                                    }
+                                }
                             }
-                        }
-                        Help {
-                            visible: !!meetPage.view && meetPage.view.shared && !!meetPage.pick
-                            text: meetPage.targetName + " is busy on " + (meetPage.pick ? root.when(meetPage.pick.start_ms / 1000, "ddd d MMM") : "") + ": "
-                                  + (meetPage.theirDay.length > 0 ? meetPage.theirDay.map(meetPage.hm).join(", ") : "nothing")
                         }
                         RowLayout {
                             spacing: 8
@@ -4311,8 +4383,8 @@ Item {
                         ActionButton {
                             visible: !!meetPage.pick
                             text: meetPage.lines.length > 0 ? "Send anyway" : "Send proposal"; kind: "primary"
-                            onClicked: root.run("meet_propose", [meetPage.target.key, meetPage.pick.start_ms, meetPage.pick.end_ms, descField.text],
-                                                function () { meetPage.pick = null; meetPage.clash = null; root.meetWith = null })
+                            onClicked: root.run("meet_propose", [meetPage.guests.map(function (g) { return g.key }).join(","), meetPage.pick.start_ms, meetPage.pick.end_ms, descField.text],
+                                                function () { meetPage.pick = null; meetPage.clashes = ({}); root.meetGuests = [] })
                         }
                     }
                     Heading { text: "Upcoming" }
@@ -4328,8 +4400,10 @@ Item {
                                 delegate: MeetRow {
                                     id: up
                                     ConfirmButton {
-                                        text: up.modelData.status === "confirmed" ? "Cancel meeting" : "Withdraw"; name: text + " with " + root.who(up.modelData.with, up.modelData.name)
-                                        confirmText: "Confirm"; effect: "The other person gets a signed cancel message and the time is free again."
+                                        text: up.modelData.you === "invitee" ? "Leave meeting" : up.modelData.status === "confirmed" ? "Cancel meeting" : "Withdraw"; name: text + " with " + up.names
+                                        confirmText: "Confirm"
+                                        effect: up.modelData.you === "invitee" ? "Only you leave. The organizer and the others get a signed message and your time is free again."
+                                              : up.many ? "Everybody invited gets a signed cancel message and the time is free again." : "The other person gets a signed cancel message and the time is free again."
                                         onConfirmed: root.run("meet_cancel", [up.modelData.id])
                                     }
                                 }
