@@ -53,6 +53,21 @@ Item {
     property string reminder: ""         // the pop-up text; "" = none
     property var reminded: ({})          // meeting ids that were reminded since the app opened
     function startMeet(member) { meetWith = member; openPage("meet") }
+    // ---- Messages: private 1:1 chat (chat_threads, chat_messages, chat_send). The core keeps one thread per person ----
+    property var chat: ({ threads: [], known: [], chat: ({}) })   // chat_threads
+    property string chatWith: ""         // the member whose thread is open, "" = none
+    property var chatMessages: []        // chat_messages of chatWith, oldest first
+    function applyChat(c) { if (c && Array.isArray(c.threads)) chat = c }
+    function applyChatMessages(v) { if (v && Array.isArray(v.messages)) chatMessages = v.messages }
+    function openChat(key) {
+        chatWith = key; chatMessages = []; seen["chat_messages"] = ""      // the poll must apply the reply even when it equals the last one
+        call("chat_messages", [key], applyChatMessages)
+        openPage("messages")
+    }
+    function chatTime(ms) {
+        if (!ms) return ""
+        return new Date(ms).toDateString() === new Date().toDateString() ? when(ms / 1000, "HH:mm") : when(ms / 1000, "d MMM")
+    }
     // ---- another member's profile (member_profile): a row of People opens it ----
     property string viewKey: ""          // the member whose page is open
     property var viewed: null            // member_profile of viewKey, or {error} once the core refused
@@ -80,7 +95,7 @@ Item {
     }
     Timer { interval: 15000; running: root.inSite && root.approved; repeat: true; triggeredOnStart: true; onTriggered: root.checkReminders() }
     // ---- shell (design/proposal/NOTES.md section 3) ----
-    readonly property var pages: ["board", "report", "people", "places", "proof", "profile", "history", "meet", "member"]   // the StackLayout's children, in order
+    readonly property var pages: ["board", "report", "people", "places", "proof", "profile", "history", "meet", "member", "messages"]   // the StackLayout's children, in order
     property string page: "board"
     // The sidebar is expanded (216 px) from 1100 px of window, an 80 px icon rail below; the user's
     // toggle ("expanded" / "collapsed", "" = never pressed) wins at every width and is remembered.
@@ -266,7 +281,7 @@ Item {
     // Drop this device's copy of the site (the key stays); back to the first-run screen.
     function leave() {
         run("leave_site", [], function () {
-            closeIssue(); page = "board"; checkpoint = null; issues = []; setInfo(noInfo); chain = noChain; seen = ({})
+            closeIssue(); page = "board"; chatWith = ""; checkpoint = null; issues = []; setInfo(noInfo); chain = noChain; seen = ({})
         })
     }
     // Poll steps in order; the site-bound ones only once my_identity says we are in a site.
@@ -289,6 +304,10 @@ Item {
             ["list_issues", [], function (l) { if (Array.isArray(l)) issues = l }]
         ]
         if (page === "member" && viewKey) steps.push(["member_profile", [viewKey], applyViewed])
+        if (page === "messages" && approved) {
+            steps.push(["chat_threads", [], applyChat])
+            if (chatWith) steps.push(["chat_messages", [chatWith], applyChatMessages])
+        }
         // only refresh the pane that is still open (a reply landing after Close must not reopen it)
         if (selected) {
             var open = selected.issue.id
@@ -2115,9 +2134,10 @@ Item {
                         { label: "Report", icon: "report", page: "report" },
                         { label: "History", icon: "hist", page: "history" },
                         { label: "People", icon: "members", page: "people", count: root.isAdmin ? root.pending.length : 0 },   // the admin's waiting count
+                        { label: "Messages", icon: "cmt", page: "messages" },
                         { label: "Meetings", icon: "bell", page: "meet", count: root.meets.meetings.filter(function (m) { return m.status === "proposed" && m.you === "invitee" }).length },   // requests that wait for us
                         { label: "Places", icon: "pin", page: "places" }
-                    ].filter(function (e) { return root.approved || ["report", "meet"].indexOf(e.page) < 0 })   // a pending key cannot report or meet
+                    ].filter(function (e) { return root.approved || ["report", "meet", "messages"].indexOf(e.page) < 0 })   // a pending key cannot report, meet or message
                     delegate: NavItem {
                         required property var modelData
                         text: modelData.label; glyph: modelData.icon
@@ -4113,6 +4133,176 @@ Item {
                         spacing: 12
                         ActionButton { visible: memberPage.ok && memberPage.v.own; text: "Edit your profile"; kind: "primary"; onClicked: root.openPage("profile") }
                         ActionButton { visible: memberPage.ok && !memberPage.v.own && root.approved; text: "Plan a 1:1 meeting"; onClicked: root.startMeet(memberPage.v) }
+                    }
+                }
+                // Messages: private 1:1 chat with another active member. The chats on the left, the open thread and the send box on
+                // the right (one column on a narrow window). Only the two people can read a message. A message that cannot go yet
+                // (their chat address has not arrived) waits in a local queue and goes out by itself.
+                ColumnLayout {
+                    id: chatPage
+                    enabled: !root.syncing
+                    spacing: 8
+                    readonly property var threads: root.chat.threads || []
+                    readonly property var known: root.chat.known || []
+                    readonly property var link: root.chat.chat || ({})          // {ok, status} or {ok: false, error | starting}
+                    readonly property var st: link.status || ({})
+                    readonly property string problem: root.chat.problem || ""   // the chat module did not answer the list
+                    readonly property var others: root.members.filter(function (m) { return m.key !== root.me.key })
+                    // the chats first, then the members that we have no chat with yet
+                    readonly property var rows: {
+                        var has = {}
+                        var chats = threads.map(function (t) { has[t.key] = true; return Object.assign({ group: "Chats" }, t) })
+                        var fresh = others.filter(function (m) { return !has[m.key] }).map(function (m) {
+                            return { group: "Start a chat", key: m.key, name: m.name, last_ms: 0, queued: 0,
+                                     preview: known.indexOf(m.key) >= 0 ? "No messages yet" : "Chat address has not arrived yet" }
+                        })
+                        return chats.concat(fresh)
+                    }
+                    readonly property var current: rows.filter(function (r) { return r.key === root.chatWith })[0] || null
+                    readonly property string currentName: current ? root.who(current.key, current.name) : ""
+                    readonly property bool hasAddress: known.indexOf(root.chatWith) >= 0
+                    readonly property bool twoPane: width >= 640
+                    readonly property bool online: st.delivery === "online"
+                    function send() {
+                        var key = root.chatWith
+                        root.run("chat_send", [key, draft.text.trim()], function (r) {
+                            draft.clear()
+                            if (r && r.sent === false)
+                                root.notice = "Your message is saved and not sent yet. " + (r.why || "") + " It goes out by itself as soon as it can."
+                            root.call("chat_messages", [key], root.applyChatMessages)
+                        })
+                    }
+                    PageHead {
+                        title: "Messages"
+                        lede: "Write privately to another active member. Only the two of you can read the messages."
+                    }
+                    Flash { visible: !!chatPage.link.error; err: true; lead: "Chat is not running."; text: chatPage.link.error || "" }
+                    Flash { visible: !!chatPage.problem; err: true; lead: "The chat module did not answer."; text: chatPage.problem }
+                    Flash { visible: chatPage.st.delivery === "error"; err: true; lead: "Chat cannot reach the network."; text: chatPage.st.detail || "" }
+                    Flash { visible: !!chatPage.st.note; tone: "warn"; icon: "warn"; text: chatPage.st.note || "" }
+                    Help {
+                        visible: !!chatPage.link.starting || (!!chatPage.link.ok && chatPage.st.delivery === "initialising")
+                        text: "Chat is starting. Messages that you write now are kept and sent when it is ready."
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true; Layout.fillHeight: true; Layout.bottomMargin: 16
+                        spacing: 8
+                        Frame {   // the chats
+                            visible: chatPage.twoPane || root.chatWith === ""
+                            Layout.preferredWidth: chatPage.twoPane ? 280 : -1
+                            Layout.fillWidth: !chatPage.twoPane; Layout.fillHeight: true
+                            fill: root.t.card; edge: root.t.bd
+                            ListView {
+                                id: chatList
+                                anchors { fill: parent; margins: 1 }
+                                clip: true
+                                model: chatPage.rows
+                                section.property: "group"
+                                section.delegate: Label {
+                                    required property string section
+                                    leftPadding: 12; topPadding: 10; bottomPadding: 4
+                                    text: section; font.pointSize: root.smallSize; font.weight: Font.DemiBold; color: root.t.muted
+                                }
+                                delegate: ItemDelegate {
+                                    id: chatRow
+                                    required property var modelData
+                                    width: ListView.view.width
+                                    highlighted: modelData.key === root.chatWith
+                                    Accessible.name: "Chat with " + root.who(modelData.key, modelData.name) + ". " + modelData.preview
+                                    onClicked: root.openChat(modelData.key)
+                                    background: Rectangle { color: chatRow.highlighted ? root.t.sbActBg : chatRow.hovered ? root.t.hover : "transparent" }
+                                    contentItem: ColumnLayout {
+                                        spacing: 2
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            Label { Layout.fillWidth: true; elide: Text.ElideRight; textFormat: Text.PlainText; font.weight: Font.DemiBold; color: root.t.fg; text: root.who(chatRow.modelData.key, chatRow.modelData.name) }
+                                            Label { text: root.chatTime(chatRow.modelData.last_ms); font.pointSize: root.smallSize; color: root.t.muted }
+                                        }
+                                        Label { Layout.fillWidth: true; elide: Text.ElideRight; textFormat: Text.PlainText; font.pointSize: root.smallSize; color: root.t.muted; text: chatRow.modelData.preview || "No messages yet" }
+                                    }
+                                }
+                            }
+                        }
+                        Frame {   // the open thread and the send box
+                            visible: chatPage.twoPane || root.chatWith !== ""
+                            Layout.fillWidth: true; Layout.fillHeight: true
+                            fill: root.t.card; edge: root.t.bd
+                            Blank {
+                                visible: root.chatWith === ""
+                                anchors.centerIn: parent; width: parent.width - 32
+                                icon: "cmt"; title: "Pick a person"; text: "Choose a chat on the left, or a member to start one."
+                            }
+                            ColumnLayout {
+                                visible: root.chatWith !== ""
+                                anchors { fill: parent; margins: 12 }
+                                spacing: 8
+                                RowLayout {
+                                    Layout.fillWidth: true; spacing: 12
+                                    LinkButton { visible: !chatPage.twoPane; text: "‹  Back"; Accessible.name: "Back to the chats"; onClicked: root.chatWith = "" }
+                                    Label { Layout.fillWidth: true; elide: Text.ElideRight; textFormat: Text.PlainText; font.weight: Font.DemiBold; font.pointSize: root.baseSize * 16 / 14; text: chatPage.currentName }
+                                }
+                                Help { visible: !chatPage.hasAddress; text: "Their chat address has not arrived yet. Your message is kept and goes out when it does." }
+                                ListView {
+                                    id: thread
+                                    Layout.fillWidth: true; Layout.fillHeight: true
+                                    clip: true; spacing: 6
+                                    model: root.chatMessages
+                                    onCountChanged: Qt.callLater(thread.positionViewAtEnd)
+                                    delegate: ColumnLayout {
+                                        id: bubble
+                                        required property var modelData
+                                        required property int index
+                                        readonly property bool mine: modelData.from_self
+                                        // the first new message after a chat from before a restart
+                                        readonly property bool startsNew: index > 0 && !modelData.old && root.chatMessages[index - 1].old
+                                        width: ListView.view.width
+                                        spacing: 6
+                                        Help { visible: bubble.startsNew; horizontalAlignment: Text.AlignHCenter; text: "The messages above are from before a restart and are read only. New messages start here." }
+                                        Rectangle {
+                                            Layout.alignment: bubble.mine ? Qt.AlignRight : Qt.AlignLeft
+                                            Layout.maximumWidth: thread.width * 0.8
+                                            implicitWidth: Math.min(body.implicitWidth, thread.width * 0.8 - 24) + 24
+                                            implicitHeight: body.implicitHeight + 16
+                                            radius: 8
+                                            color: bubble.mine ? root.t.accentBg : root.t.well
+                                            border.color: bubble.mine ? root.t.accentBd : root.t.bd
+                                            ColumnLayout {
+                                                id: body
+                                                anchors { fill: parent; margins: 8; leftMargin: 12; rightMargin: 12 }
+                                                spacing: 2
+                                                Label { Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText; color: root.t.fg; text: bubble.modelData.content }
+                                                Label {
+                                                    font.pointSize: root.smallSize; color: root.t.muted
+                                                    text: bubble.modelData.queued ? "Not sent yet" : root.chatTime(bubble.modelData.ts_ms) + (bubble.mine ? " · sent" : "")
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                Blank {
+                                    visible: root.chatMessages.length === 0
+                                    Layout.fillHeight: true
+                                    icon: "cmt"; title: "No messages yet"; text: "Write the first message below."
+                                }
+                                RowLayout {
+                                    Layout.fillWidth: true; spacing: 8
+                                    FramedField {
+                                        id: draft
+                                        Layout.fillWidth: true
+                                        placeholderText: "Write a message"; maxLength: 4000
+                                        Accessible.name: "Message to " + chatPage.currentName
+                                        onAccepted: sendButton.submit()
+                                    }
+                                    ActionButton {
+                                        id: sendButton
+                                        text: "Send"; kind: "primary"
+                                        allowed: draft.text.trim() !== ""
+                                        Accessible.name: "Send the message to " + chatPage.currentName
+                                        onClicked: chatPage.send()
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
