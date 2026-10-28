@@ -173,9 +173,12 @@ pub trait PukaarCoreModule: Send + 'static {
     /// `note` is set when chat, not Pukaar, created the shared Delivery node (its setup then differs from Pukaar's).
     fn chat_start(&mut self) -> String;
     /// The chat list of an active member: `{"threads":[{"key","name","preview","last_ms","queued","history_only",
-    /// "has_address"}],"known":[keys whose chat address arrived],"chat":{"ok","status"|"error"},"problem"}`, newest first.
+    /// "has_address","unread"}],"unread":bool,"known":[keys whose chat address arrived],"chat":{"ok","status"|"error"},"problem"}`, newest first.
     /// One thread per person, old conversations and the new one together. It reads the chat module, so the screen polls it.
     fn chat_threads(&mut self) -> String;
+    /// Marks the thread with one member as read, up to its newest message: its `unread` flag and the total `unread` go
+    /// out. The mark is kept in the site's chat file. `{"ok":true}`, or `error: …`.
+    fn chat_mark_read(&mut self, key_hex: String) -> String;
     /// The thread with one member: `{"messages":[{"from_self","content","ts_ms","old","queued"}]}`, oldest first. `old` is
     /// a message of a conversation from before a restart (read only), `queued` a message that is not sent yet.
     fn chat_messages(&mut self, key_hex: String) -> String;
@@ -1383,6 +1386,10 @@ impl PukaarCoreModule for Pukaar {
 
     fn chat_threads(&mut self) -> String {
         chat::threads().map_or_else(err, |v| v.to_string())
+    }
+
+    fn chat_mark_read(&mut self, key_hex: String) -> String {
+        key_arg(&key_hex).and_then(|who| chat::mark_read(&who)).map_or_else(err, |v| v.to_string())
     }
 
     fn chat_messages(&mut self, key_hex: String) -> String {

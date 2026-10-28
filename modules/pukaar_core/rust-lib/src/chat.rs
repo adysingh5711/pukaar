@@ -134,6 +134,9 @@ fn drain(who: &Key) -> Result<usize, String> {
             book.link(&convo, *who, &addr);
         }
         book.unqueue(who, sent);
+        if sent > 0 {
+            book.mark_read(who, now_ms()); // our own message is not news to us
+        }
         Ok(())
     })?;
     failed.map_or(Ok(sent), Err)
@@ -170,12 +173,23 @@ pub fn threads() -> Result<Value, String> {
             book.link_sender(id, sender);
         }
         let (members, me) = (node.approved_keys(), node.me());
+        let threads = book.threads_json(&convos, &node.names, &members, &me);
         Ok(json!({
-            "threads": book.threads_json(&convos, &node.names, &members, &me),
+            "unread": threads.as_array().is_some_and(|rows| rows.iter().any(|t| t["unread"] == true)),
+            "threads": threads,
             "known": members.iter().filter(|m| book.latest(m).is_some()).map(hex::encode).collect::<Vec<_>>(),
             "chat": status_json(),
             "problem": problem,
         }))
+    })
+}
+
+/// The thread with `who` is read: its dot goes out. Reads the chat module for the time of its newest message.
+pub fn mark_read(who: &Key) -> Result<Value, String> {
+    let convos = conversations(&proxy())?;
+    chats(|_, book, _| {
+        book.mark_thread_read(who, &convos);
+        Ok(json!({ "ok": true }))
     })
 }
 

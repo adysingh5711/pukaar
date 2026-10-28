@@ -54,6 +54,13 @@ struct Link {
     addr: String,
 }
 
+/// How far we have read the thread with `who`: the `last_ms` of its newest conversation at that time.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+struct Read {
+    who: Key,
+    ms: u64,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Queued {
     pub to: Key,
@@ -66,6 +73,9 @@ pub struct ChatBook {
     addrs: Vec<Held>,
     links: Vec<Link>,
     queue: Vec<Queued>,
+    /// Absent in a file from before the unread dot.
+    #[serde(default)]
+    read: Vec<Read>,
     #[serde(skip)]
     pub site: Key,
     #[serde(skip)]
@@ -291,6 +301,34 @@ impl ChatBook {
         t
     }
 
+    /// The thread with `who` is read up to `ms` (never back).
+    pub fn mark_read(&mut self, who: &Key, ms: u64) {
+        match self.read.iter_mut().find(|r| r.who == *who) {
+            Some(r) if r.ms >= ms => return,
+            Some(r) => r.ms = ms,
+            None => self.read.push(Read { who: *who, ms }),
+        }
+        self.save();
+    }
+
+    /// The thread with `who` is read up to the newest message of its conversations.
+    pub fn mark_thread_read(&mut self, who: &Key, convos: &[Convo]) {
+        let newest = convos
+            .iter()
+            .filter(|c| self.who_of_convo(&c.id) == Some(*who))
+            .map(|c| c.last_ms)
+            .max();
+        if let Some(ms) = newest {
+            self.mark_read(who, ms);
+        }
+    }
+
+    /// A live conversation with a message after the last read. A history-only one cannot get a new message.
+    fn is_unread(&self, who: &Key, convos: &[&Convo]) -> bool {
+        let read = self.read.iter().find(|r| r.who == *who).map_or(0, |r| r.ms);
+        convos.iter().any(|c| !c.history_only && c.last_ms > read)
+    }
+
     /// The first `n` unsent messages to `who` were sent.
     pub fn unqueue(&mut self, who: &Key, n: usize) {
         let mut left = n;
@@ -342,6 +380,7 @@ impl ChatBook {
                     "queued": self.queued(who).count(),
                     "history_only": !mine.is_empty() && mine.iter().all(|c| c.history_only),
                     "has_address": self.latest(who).is_some(),
+                    "unread": self.is_unread(who, &mine),
                 });
                 (last_ms, row)
             })
@@ -618,5 +657,53 @@ mod tests {
             "a removed member has no chat in the list"
         );
         let _ = ka;
+    }
+
+    #[test]
+    fn a_thread_is_unread_until_its_newest_live_message_is_marked_read_and_that_survives_a_restart()
+    {
+        let dir = std::env::temp_dir().join(format!("pukaar-chat-read-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let ((_, a), (_, me)) = (person(1), person(2));
+        let mut mine = ChatBook::load(&dir, SITE);
+        mine.link("c1", a, "addr-a");
+        mine.link("old", a, "addr-0");
+        let convo = |id: &str, last_ms, history_only| Convo {
+            id: id.into(),
+            last_ms,
+            preview: None,
+            history_only,
+            kind: "direct".into(),
+        };
+        let unread = |b: &ChatBook, convos: &[Convo]| {
+            b.threads_json(convos, &BTreeMap::new(), &[a, me], &me)[0]["unread"].clone()
+        };
+        let live = [convo("c1", NOW, false)];
+        assert_eq!(unread(&mine, &live), json!(true), "never read");
+        mine.mark_thread_read(&a, &live);
+        assert_eq!(unread(&mine, &live), json!(false));
+        assert_eq!(
+            unread(&mine, &[convo("c1", NOW + 1, false)]),
+            json!(true),
+            "a newer message"
+        );
+        assert_eq!(
+            unread(&ChatBook::load(&dir, SITE), &live),
+            json!(false),
+            "the mark is kept in the file"
+        );
+        let after_restart = [convo("c1", NOW + 5, true), convo("old", NOW + 9, true)];
+        assert_eq!(
+            unread(&mine, &after_restart),
+            json!(false),
+            "a history-only conversation is never unread"
+        );
+        mine.mark_read(&a, 5);
+        assert_eq!(
+            unread(&mine, &live),
+            json!(false),
+            "the mark never goes back"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
