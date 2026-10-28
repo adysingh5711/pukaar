@@ -6,7 +6,7 @@
 
 [![ci](https://github.com/adysingh5711/pukaar/actions/workflows/ci.yml/badge.svg)](https://github.com/adysingh5711/pukaar/actions/workflows/ci.yml)
 ![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)
-![status](https://img.shields.io/badge/status-pilot--ready%20v0.3.0-blue)
+![status](https://img.shields.io/badge/status-pilot--ready%20v0.4.0-blue)
 
 <p align="center"><img src="public/images/01-board.png" alt="The Pukaar board with four columns of fault reports, seen by the admin." width="900"></p>
 
@@ -14,7 +14,7 @@
 |---|---|
 | Demo video | To be added in later version |
 | Screenshots | [See the walkthrough](#screenshots) |
-| Latest release | [v0.3.0](https://github.com/adysingh5711/pukaar/releases/tag/v0.3.0): signed `.lgx` packages for Logos Basecamp 0.3.1 |
+| Latest release | [v0.4.0](https://github.com/adysingh5711/pukaar/releases/tag/v0.4.0): `.lgx` packages for Logos Basecamp 0.3.1. See [Install](#install-v040) |
 
 ---
 
@@ -290,6 +290,10 @@ scripts/basecamp.sh asha       # a separate profile (install Pukaar once in it)
 
 `scripts/basecamp.sh` works on macOS only, because it starts the binary inside a `.app` bundle. It uses `/Applications/LogosBasecamp.app`, and `BASECAMP_APP` sets another bundle path. The `default` profile is `~/Library/Application Support/Logos/LogosBasecamp`. Each named profile is a directory in `PUKAAR_BASECAMP_DIR`, and the default is `~/.local/share/pukaar-basecamp`.
 
+### Install (v0.4.0)
+
+Add this source in Basecamp, Package Manager: `https://raw.githubusercontent.com/adysingh5711/pukaar/main/public/install/logos-repo.json`. You can also install by hand. See [RELEASE_NOTES_0.4.0.md](RELEASE_NOTES_0.4.0.md) and the [install page](public/install/index.html).
+
 ### Upgrade from v0.2.4
 
 <details>
@@ -297,7 +301,7 @@ scripts/basecamp.sh asha       # a separate profile (install Pukaar once in it)
 
 v0.3.0 adds new event types, and a v0.2.4 app cannot decode them. Each event links to the previous event of its author. Thus a v0.2.4 app also holds back all later events from a member who signs a new event. The existing data of a site stays. Pukaar makes the site creator the first super admin from the existing history, without a new event. The test `a_v0_2_4_log_replays_to_the_same_state` replays a v0.2.4 log (`tests/fixtures/v0_2_4_log.json`) and gets the same state.
 
-1. In each Basecamp profile, install the v0.3.0 core package, then the UI package.
+1. In each Basecamp profile, install the core package of the latest release, then the UI package.
 2. Quit Basecamp fully, then start it again.
 3. Tell every member of the site to do the same steps.
 
@@ -425,6 +429,7 @@ THIRD_PARTY_LICENSES       Lucide icon licence
 
 </details>
 - **v0.3.0:** History and Places (with its change log) are tables, and reasons are asked in confirm steps. Integrity left the sidebar: a status strip on History opens it, and the Board shows a red banner only on an anchor mismatch. Super admins (at most two, with transfer) are the only ones who grant or change admins, and admin notice periods move an admin to steward or remove them after a notice, sealed by a staff member's app 10 minutes after the deadline. Breaking: v0.3.0 adds new event types, so every member must update. v0.2.4 apps cannot read the new events.
+- **v0.4.0:** chain port, profiles, meetings and backup, private chat with groups and unread dots, a notices panel and an install page. See [RELEASE_NOTES_0.4.0.md](RELEASE_NOTES_0.4.0.md).
 - **L1+:** anchoring from the app's Integrity page on localnet and a testnet anchor; an "identity active on another device" warning; Heads messages that carry head ids, so anti-entropy also repairs equal-length forks.
 - **L2:** LAN relay for sites without internet, a password-sealed key file, a site-health view (category level only, no per-person ranking), export and verify bundles, evidence photos on Logos Storage (EXIF stripped), UI tests beyond the screenshot harness, and a steward guide in Hindi and English.
 - **L3:** an anonymous reporting lane with an RLN rate limit, a phone path, and 2-of-3 admin grants.
