@@ -47,8 +47,34 @@ Item {
     readonly property string roleName: isSuper ? "Super admin" : me.role || (removed ? "Removed" : "Pending")
     // A restored identity waits for its own history before signing anything (core refuses meanwhile).
     readonly property bool syncing: !!me.syncing_own_history
+    // ---- 1:1 meetings (1-1-meet.md): the core keeps UTC milliseconds, the page shows local time ----
+    property var meets: ({ meetings: [], share: true, lead_min: 10, backup: ({}) })   // meet_list
+    property var meetWith: null          // the member of the open "New meeting" box, or null
+    property string reminder: ""         // the pop-up text; "" = none
+    property var reminded: ({})          // meeting ids that were reminded since the app opened
+    function startMeet(member) { meetWith = member; openPage("meet") }
+    function meetTime(r) { return when(r.start_ms / 1000, "ddd d MMM HH:mm") + " to " + when(r.end_ms / 1000, "HH:mm") }
+    // What a time runs into, as sentences: c is {mine, theirs} from the core (meet_check or a row's clashes).
+    function clashLines(c) {
+        if (!c) return []
+        return (c.mine || []).map(function (x) { return "You are busy with " + who(x.with, x.name) + ", " + meetTime(x) + "." })
+            .concat((c.theirs || []).map(function (r) { return "They are busy, " + meetTime(r) + "." }))
+    }
+    // A local timer: the first confirmed meeting that starts within the lead time, once. It runs only while the app is open.
+    function checkReminders() {
+        var now = Date.now(), lead = (meets.lead_min || 10) * 60000
+        var due = (meets.meetings || []).filter(function (m) {
+            return m.status === "confirmed" && !reminded[m.id] && m.start_ms - now <= lead && m.start_ms > now - 60000
+        })
+        if (!due.length) return
+        var m = due[0], r = Object.assign({}, reminded)
+        r[m.id] = true; reminded = r
+        reminder = "Meeting with " + who(m.with, m.name) + " starts " + (m.start_ms > now ? "in " + plural(Math.max(1, Math.round((m.start_ms - now) / 60000)), "minute") : "now")
+                 + ", at " + when(m.start_ms / 1000, "HH:mm") + "."
+    }
+    Timer { interval: 15000; running: root.inSite && root.approved; repeat: true; triggeredOnStart: true; onTriggered: root.checkReminders() }
     // ---- shell (design/proposal/NOTES.md section 3) ----
-    readonly property var pages: ["board", "report", "people", "places", "proof", "profile", "history"]   // the StackLayout's children, in order
+    readonly property var pages: ["board", "report", "people", "places", "proof", "profile", "history", "meet"]   // the StackLayout's children, in order
     property string page: "board"
     // The sidebar is expanded (216 px) from 1100 px of window, an 80 px icon rail below; the user's
     // toggle ("expanded" / "collapsed", "" = never pressed) wins at every width and is remembered.
@@ -253,6 +279,7 @@ Item {
             ["my_identity", [], function (m) { me = (m && typeof m === "object") ? m : {} }],
             ["site_info", [], function (i) { if (i && i.site) setInfo(i) }],
             ["chain_status", [], function (s) { if (s && Array.isArray(s.writes)) chain = s }],
+            ["meet_list", [], function (l) { if (l && Array.isArray(l.meetings)) meets = l }],
             ["list_issues", [], function (l) { if (Array.isArray(l)) issues = l }]
         ]
         // only refresh the pane that is still open (a reply landing after Close must not reopen it)
@@ -1241,6 +1268,40 @@ Item {
         Flow { id: acts; Layout.fillWidth: true; spacing: 8 }
     }
 
+    // One meeting: who, when, its state, what a waiting proposal runs into, then the buttons that the caller adds.
+    component MeetRow: ColumnLayout {
+        id: mr
+        required property var modelData
+        required property int index
+        default property alias actions: act.data
+        readonly property var lines: root.clashLines(modelData.clashes)
+        readonly property string phrase: ({ proposed: modelData.you === "requester" ? "Waiting for their answer" : "Asks for your answer",
+                                           confirmed: "Confirmed", declined: "Declined", cancelled: modelData.cancelled_by_you ? "Cancelled by you" : "Cancelled", unaccepted: "Not accepted" })[modelData.status]
+        Layout.fillWidth: true
+        spacing: 0
+        Rectangle { visible: mr.index > 0; Layout.fillWidth: true; implicitHeight: 1; color: root.t.bd }
+        GridLayout {
+            Layout.fillWidth: true; Layout.margins: 12; Layout.leftMargin: 16; Layout.rightMargin: 16
+            columns: root.compactRows ? 1 : 2; columnSpacing: 12; rowSpacing: 8
+            ColumnLayout {
+                Layout.fillWidth: true; Layout.alignment: Qt.AlignTop
+                spacing: 4
+                Flow {
+                    Layout.fillWidth: true; spacing: 6
+                    Label { text: root.who(mr.modelData.with, mr.modelData.name); textFormat: Text.PlainText; font.weight: Font.DemiBold }
+                    StatusChip { label: mr.phrase; stage: mr.modelData.status === "confirmed" ? root.t.resolved : mr.modelData.status === "proposed" ? root.t.progress : root.t.closed }
+                }
+                Label { text: root.meetTime(mr.modelData); color: root.t.muted; font.pointSize: root.smallSize }
+                Label {
+                    visible: mr.lines.length > 0
+                    Layout.fillWidth: true; wrapMode: Text.Wrap; color: root.t.warn; font.pointSize: root.smallSize
+                    text: "This time clashes. " + mr.lines.join(" ") + (mr.modelData.you === "invitee" ? " You can still accept." : "")
+                }
+            }
+            RowLayout { id: act; Layout.alignment: Qt.AlignTop | Qt.AlignRight; spacing: 8 }
+        }
+    }
+
     // ---- layout pieces ----
 
     // One tab of the StackLayout: scrolls when its content outgrows the window (30 pending
@@ -2047,8 +2108,9 @@ Item {
                         { label: "Report", icon: "report", page: "report" },
                         { label: "History", icon: "hist", page: "history" },
                         { label: "People", icon: "members", page: "people", count: root.isAdmin ? root.pending.length : 0 },   // the admin's waiting count
+                        { label: "Meetings", icon: "bell", page: "meet", count: root.meets.meetings.filter(function (m) { return m.status === "proposed" && m.you === "invitee" }).length },   // requests that wait for us
                         { label: "Places", icon: "pin", page: "places" }
-                    ].filter(function (e) { return root.approved || e.page !== "report" })   // a pending key cannot report
+                    ].filter(function (e) { return root.approved || ["report", "meet"].indexOf(e.page) < 0 })   // a pending key cannot report or meet
                     delegate: NavItem {
                         required property var modelData
                         text: modelData.label; glyph: modelData.icon
@@ -2277,6 +2339,13 @@ Item {
                 buttonIcon: site && rejected ? "" : "x"; buttonName: site && rejected ? "Start again" : "Close this message"
                 onActivated: site && rejected ? root.leave() : root.dismiss(modelData.id)
             }
+        }
+        Flash {   // the reminder of a meeting that starts soon
+            visible: root.reminder !== ""
+            tone: "warn"; icon: "bell"; lead: "Reminder."
+            text: root.reminder
+            buttonIcon: "x"; buttonName: "Close this reminder"
+            onActivated: root.reminder = ""
         }
         Flash {   // our role was revoked: by whom, when, why, and what is left
             visible: root.removed
@@ -2920,6 +2989,7 @@ Item {
                                             StatusChip { visible: root.compactRows; label: memberRow.modelData.role; stage: memberRow.elevated ? root.t.progress : root.t.closed }
                                         }
                                         Label { visible: memberRow.own; text: "you"; color: root.t.muted; font.pointSize: root.smallSize }
+                                        LinkButton { visible: !memberRow.own && root.approved; text: "1:1 meeting  ›"; Accessible.name: "Plan a 1:1 meeting with " + memberRow.person; onClicked: root.startMeet(memberRow.modelData) }
                                         Label {   // O5: a staff name counts only with the signature of an admin
                                             visible: memberRow.elevated
                                             Layout.fillWidth: true; wrapMode: Text.Wrap; color: root.t.muted; font.pointSize: root.smallSize
@@ -3724,6 +3794,181 @@ Item {
                                 }
                             }
                         }
+                    }
+                }
+                // Meetings: 1:1 with another member. Requests, a new meeting, upcoming, history, settings and backup.
+                TabPage {
+                    id: meetPage
+                    enabled: !root.syncing
+                    readonly property var target: root.meetWith
+                    readonly property string targetName: target ? root.who(target.key, target.name) : ""
+                    property int lenMin: 30
+                    property var pick: null          // the chosen slot
+                    property var view: null          // meet_slots of the target
+                    property var clash: null         // meet_check of the pick
+                    readonly property var all: root.meets.meetings || []
+                    readonly property var backup: root.meets.backup || ({})
+                    readonly property var requests: all.filter(function (m) { return m.status === "proposed" && m.you === "invitee" })
+                    readonly property var upcoming: all.filter(function (m) { return (m.status === "confirmed" || (m.status === "proposed" && m.you === "requester")) && m.end_ms > root.now * 1000 })
+                    readonly property var history: all.filter(function (m) { return requests.indexOf(m) < 0 && upcoming.indexOf(m) < 0 }).reverse()
+                    // Open slots first (8:00 to 20:00 local), then the busy ones, marked as busy.
+                    readonly property var slots: {
+                        if (!view) return []
+                        var ok = view.slots.filter(function (s) {
+                            var a = new Date(s.start_ms), b = new Date(s.end_ms)
+                            return a.getDate() === b.getDate() && a.getHours() >= 8 && (b.getHours() < 20 || (b.getHours() === 20 && b.getMinutes() === 0))
+                        })
+                        return ok.filter(function (s) { return !s.mine && !s.theirs }).slice(0, 24)
+                            .concat(ok.filter(function (s) { return s.mine || s.theirs }).slice(0, 8))
+                    }
+                    readonly property var lines: root.clashLines(clash)
+                    function load() {
+                        if (target) root.call("meet_slots", [target.key, Date.now(), lenMin], function (v) { if (v && Array.isArray(v.slots)) view = v })
+                    }
+                    function ranges(list) {
+                        return (list || []).slice(0, 6).map(function (r) { return root.meetTime(r) + (r.name ? " with " + r.name : "") }).join("; ")
+                    }
+                    onTargetChanged: { pick = null; clash = null; view = null; load() }
+                    Timer { interval: 20000; running: !!meetPage.target && root.page === "meet"; repeat: true; onTriggered: meetPage.load() }
+                    PageHead {
+                        title: "Meetings"
+                        lede: "Plan a 1:1 meeting with another member. Open People and choose 1:1 meeting. Times show in your local time."
+                    }
+                    Heading { visible: meetPage.requests.length > 0; text: "Requests" }
+                    Frame {
+                        visible: meetPage.requests.length > 0
+                        Layout.fillWidth: true; implicitHeight: reqs.implicitHeight; fill: root.t.card; edge: root.t.bd
+                        ColumnLayout {
+                            id: reqs
+                            width: parent.width; spacing: 0
+                            Repeater {
+                                model: meetPage.requests
+                                delegate: MeetRow {
+                                    id: req
+                                    ActionButton { text: "Accept"; kind: "primary"; Accessible.name: "Accept the meeting with " + root.who(req.modelData.with, req.modelData.name); onClicked: root.run("meet_accept", [req.modelData.id]) }
+                                    ActionButton { text: "Decline"; Accessible.name: "Decline the meeting with " + root.who(req.modelData.with, req.modelData.name); onClicked: root.run("meet_decline", [req.modelData.id]) }
+                                }
+                            }
+                        }
+                    }
+                    Heading { visible: !!meetPage.target; text: "New meeting with " + meetPage.targetName }
+                    ColumnLayout {
+                        visible: !!meetPage.target
+                        Layout.fillWidth: true; spacing: 8
+                        RowLayout {
+                            spacing: 12
+                            Label { text: "Length" }
+                            Segmented {
+                                name: "Length of the meeting"; options: ["30 min", "60 min", "90 min"]
+                                current: [30, 60, 90].indexOf(meetPage.lenMin)
+                                onPicked: function (i) { meetPage.lenMin = [30, 60, 90][i]; meetPage.pick = null; meetPage.clash = null; meetPage.load() }
+                            }
+                            LinkButton { text: "Close"; onClicked: root.meetWith = null }
+                        }
+                        Help {
+                            visible: !!meetPage.view
+                            text: meetPage.view && meetPage.view.shared ? meetPage.targetName + " shares free and busy times. Only times are shared, never titles."
+                                                                        : meetPage.targetName + " shares no free and busy times, so every slot of theirs looks open."
+                        }
+                        Help { visible: !!meetPage.view && meetPage.view.mine.length > 0; text: "Busy for you: " + (meetPage.view ? meetPage.ranges(meetPage.view.mine) : "") }
+                        Help { visible: !!meetPage.view && meetPage.view.theirs.length > 0; text: "Busy for them: " + (meetPage.view ? meetPage.ranges(meetPage.view.theirs) : "") }
+                        Flow {
+                            Layout.fillWidth: true; spacing: 8
+                            Repeater {
+                                model: meetPage.slots
+                                delegate: FramedButton {
+                                    required property var modelData
+                                    readonly property bool busy: modelData.mine || modelData.theirs
+                                    kind: meetPage.pick && meetPage.pick.start_ms === modelData.start_ms ? "primary" : "default"
+                                    text: root.when(modelData.start_ms / 1000, "ddd d MMM HH:mm") + (busy ? " (busy)" : "")
+                                    Accessible.name: text
+                                    onClicked: {
+                                        meetPage.pick = modelData; meetPage.clash = null
+                                        root.call("meet_check", [meetPage.target.key, modelData.start_ms, modelData.end_ms], function (c) { if (c && c.mine) meetPage.clash = c })
+                                    }
+                                }
+                            }
+                        }
+                        Help { visible: !!meetPage.view && meetPage.slots.length === 0; text: "No slots between 8:00 and 20:00 in the next 7 days." }
+                        Flash {
+                            visible: meetPage.lines.length > 0
+                            tone: "warn"; icon: "warn"; lead: "This time clashes."
+                            text: meetPage.lines.join(" ") + " You can still send the proposal."
+                        }
+                        ActionButton {
+                            visible: !!meetPage.pick
+                            text: meetPage.lines.length > 0 ? "Send anyway" : "Send proposal"; kind: "primary"
+                            onClicked: root.run("meet_propose", [meetPage.target.key, meetPage.pick.start_ms, meetPage.pick.end_ms],
+                                                function () { meetPage.pick = null; meetPage.clash = null; root.meetWith = null })
+                        }
+                    }
+                    Heading { text: "Upcoming" }
+                    Blank { visible: meetPage.upcoming.length === 0; icon: "bell"; title: "No meetings planned"; text: "Open People and choose 1:1 meeting." }
+                    Frame {
+                        visible: meetPage.upcoming.length > 0
+                        Layout.fillWidth: true; implicitHeight: ups.implicitHeight; fill: root.t.card; edge: root.t.bd
+                        ColumnLayout {
+                            id: ups
+                            width: parent.width; spacing: 0
+                            Repeater {
+                                model: meetPage.upcoming
+                                delegate: MeetRow {
+                                    id: up
+                                    ConfirmButton {
+                                        text: up.modelData.status === "confirmed" ? "Cancel meeting" : "Withdraw"; name: text + " with " + root.who(up.modelData.with, up.modelData.name)
+                                        confirmText: "Confirm"; effect: "The other person gets a signed cancel message and the time is free again."
+                                        onConfirmed: root.run("meet_cancel", [up.modelData.id])
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Heading { visible: meetPage.history.length > 0; text: "History" }
+                    Frame {
+                        visible: meetPage.history.length > 0
+                        Layout.fillWidth: true; implicitHeight: hists.implicitHeight; fill: root.t.card; edge: root.t.bd
+                        ColumnLayout {
+                            id: hists
+                            width: parent.width; spacing: 0
+                            Repeater { model: meetPage.history; delegate: MeetRow {} }
+                        }
+                    }
+                    Heading { text: "Settings" }
+                    FramedCheck {
+                        text: "Share my free and busy times with the site (times only, never titles)"
+                        Binding on checked { value: root.meets.share !== false }
+                        onToggled: root.run("meet_prefs", [checked ? 1 : 0, root.meets.lead_min])
+                    }
+                    RowLayout {
+                        spacing: 12
+                        Label { text: "Remind me" }
+                        Segmented {
+                            name: "Reminder before a meeting"; options: ["5 min", "10 min", "15 min", "30 min", "60 min"]
+                            current: [5, 10, 15, 30, 60].indexOf(root.meets.lead_min)
+                            onPicked: function (i) { root.run("meet_prefs", [root.meets.share === false ? 0 : 1, [5, 10, 15, 30, 60][i]]) }
+                        }
+                        Label { text: "before. The reminder shows only while this app is open."; color: root.t.muted; font.pointSize: root.smallSize }
+                    }
+                    Heading { text: "Backup" }
+                    Help { text: "A backup puts your meeting history in Storage. The file is encrypted with a key from your account. Meeting details never go on the chain. If Storage is not reachable, the backup is skipped and your local history stays." }
+                    Flash { visible: !!meetPage.backup.error; err: true; text: meetPage.backup.error || "" }
+                    Note {
+                        visible: !!meetPage.backup.cid
+                        text: "Last backup: " + root.when((meetPage.backup.at_ms || 0) / 1000, "d MMM HH:mm") + ". CID: " + (meetPage.backup.cid || "")
+                        font.family: "monospace"
+                    }
+                    ActionButton {
+                        text: meetPage.backup.job ? "Working: " + meetPage.backup.job + "…" : "Back up now"
+                        allowed: !meetPage.backup.job
+                        onClicked: root.run("meet_backup", [])
+                    }
+                    Help { text: "A pointer on the chain, so a new device can find the backup alone, is not part of this version. Keep the CID. On a new device, paste it here." }
+                    LabelledField {
+                        id: restoreCid
+                        label: "Restore a backup"; placeholder: "CID of the backup"; mono: true
+                        buttonText: "Restore"
+                        missing: meetPage.backup.job ? "A backup or a restore is running." : ""
+                        onSubmitted: root.run("meet_restore", [restoreCid.text])
                     }
                 }
             }
