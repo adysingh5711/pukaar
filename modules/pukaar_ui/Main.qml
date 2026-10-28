@@ -3869,6 +3869,7 @@ Item {
                     property int lenMin: 30
                     property var pick: null          // the chosen slot
                     property var view: null          // meet_slots of the target
+                    property string slotsError: ""   // why the times did not load, "" when they did
                     property var clash: null         // meet_check of the pick
                     readonly property var all: root.meets.meetings || []
                     readonly property var backup: root.meets.backup || ({})
@@ -3887,12 +3888,16 @@ Item {
                     }
                     readonly property var lines: root.clashLines(clash)
                     function load() {
-                        if (target) root.call("meet_slots", [target.key, Date.now(), lenMin], function (v) { if (v && Array.isArray(v.slots)) view = v })
+                        if (target) root.call("meet_slots", [target.key, Date.now(), lenMin], function (v) {
+                            var ok = !!v && Array.isArray(v.slots)
+                            if (ok) view = v
+                            slotsError = ok ? "" : String(typeof v === "string" ? v : "no answer").replace(/^error:\s*/, "")
+                        })
                     }
                     function ranges(list) {
                         return (list || []).slice(0, 6).map(function (r) { return root.meetTime(r) + (r.name ? " with " + r.name : "") }).join("; ")
                     }
-                    onTargetChanged: { pick = null; clash = null; view = null; load() }
+                    onTargetChanged: { pick = null; clash = null; view = null; slotsError = ""; load() }
                     Timer { interval: 20000; running: !!meetPage.target && root.page === "meet"; repeat: true; onTriggered: meetPage.load() }
                     PageHead {
                         title: "Meetings"
@@ -3929,6 +3934,7 @@ Item {
                             }
                             LinkButton { text: "Close"; onClicked: root.meetWith = null }
                         }
+                        Flash { visible: meetPage.slotsError !== ""; err: true; text: "The free times could not load: " + meetPage.slotsError }
                         Help {
                             visible: !!meetPage.view
                             text: meetPage.view && meetPage.view.shared ? meetPage.targetName + " shares free and busy times. Only times are shared, never titles."

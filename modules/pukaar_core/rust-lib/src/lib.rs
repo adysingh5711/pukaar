@@ -147,11 +147,11 @@ pub trait PukaarCoreModule: Send + 'static {
     fn meet_list(&mut self) -> String;
     /// The free/busy view for a meeting with `other_hex`: our busy ranges, theirs when they share, and the
     /// next 7 days of slots of `len_min` minutes from `from_ms`: `{"shared","mine","theirs","slots"}`.
-    fn meet_slots(&mut self, other_hex: String, from_ms: i64, len_min: i64) -> String;
+    fn meet_slots(&mut self, other_hex: String, from_ms: f64, len_min: i64) -> String;
     /// What a time runs into, in our calendar and in the summary of `other_hex`: `{"mine":[…],"theirs":[…]}`.
-    fn meet_check(&mut self, other_hex: String, start_ms: i64, end_ms: i64) -> String;
+    fn meet_check(&mut self, other_hex: String, start_ms: f64, end_ms: f64) -> String;
     /// Saves a proposal and sends it, sealed, to `other_hex`: `{"ok":true,"id":hex}`. A clash does not stop it.
-    fn meet_propose(&mut self, other_hex: String, start_ms: i64, end_ms: i64) -> String;
+    fn meet_propose(&mut self, other_hex: String, start_ms: f64, end_ms: f64) -> String;
     /// The invitee accepts a proposal that is not over. `ok` or `error: …`.
     fn meet_accept(&mut self, id_hex: String) -> String;
     /// The invitee declines a proposal: the slot is free again. `ok` or `error: …`.
@@ -910,8 +910,14 @@ fn key_arg(hex: &str) -> Result<Key, String> {
     parse_id(hex).ok_or_else(|| "That is not a 64-character hex key.".to_string())
 }
 
-fn ms_arg(v: i64) -> Result<u64, String> {
-    u64::try_from(v).map_err(|_| "That time is not valid.".to_string())
+/// A time in UTC milliseconds. The UI sends it as a JS number: a value past 32 bits reaches the core as
+/// a float (`1781234567890.0`), which an `i64` parameter refuses, so the methods take `f64`.
+fn ms_arg(v: f64) -> Result<u64, String> {
+    if v.is_finite() && v >= 0.0 {
+        Ok(v as u64)
+    } else {
+        Err("That time is not valid.".to_string())
+    }
 }
 
 /// The id of a meeting, or one of its answers: accept, decline or cancel.
@@ -1269,15 +1275,15 @@ impl PukaarCoreModule for Pukaar {
         .unwrap_or_else(err)
     }
 
-    fn meet_slots(&mut self, other_hex: String, from_ms: i64, len_min: i64) -> String {
+    fn meet_slots(&mut self, other_hex: String, from_ms: f64, len_min: i64) -> String {
         let r = (|| {
-            let (other, from, len) = (key_arg(&other_hex)?, ms_arg(from_ms)?, ms_arg(len_min)?.clamp(5, 24 * 60) * 60_000);
+            let (other, from, len) = (key_arg(&other_hex)?, ms_arg(from_ms)?, len_min.clamp(5, 24 * 60) as u64 * 60_000);
             meet(|node, m, _| Ok(m.slots_json(&node.me(), &other, from, len, &node.names, now_ms()).to_string()))
         })();
         r.unwrap_or_else(err)
     }
 
-    fn meet_check(&mut self, other_hex: String, start_ms: i64, end_ms: i64) -> String {
+    fn meet_check(&mut self, other_hex: String, start_ms: f64, end_ms: f64) -> String {
         let r = (|| {
             let (other, range) = (key_arg(&other_hex)?, (ms_arg(start_ms)?, ms_arg(end_ms)?));
             meet(|node, m, _| Ok(m.clashes_json(&node.me(), &m.clashes(&node.me(), Some(&other), range, None), &node.names).to_string()))
@@ -1285,7 +1291,7 @@ impl PukaarCoreModule for Pukaar {
         r.unwrap_or_else(err)
     }
 
-    fn meet_propose(&mut self, other_hex: String, start_ms: i64, end_ms: i64) -> String {
+    fn meet_propose(&mut self, other_hex: String, start_ms: f64, end_ms: f64) -> String {
         meet_send(
             |node, m| {
                 let to = key_arg(&other_hex)?;
@@ -1386,4 +1392,15 @@ impl PukaarCoreModule for Pukaar {
 #[no_mangle]
 pub extern "Rust" fn logos_module_install() {
     logos_install!(Pukaar);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ms_arg;
+
+    #[test]
+    fn ms_arg_takes_a_whole_float_past_32_bits() {
+        assert_eq!(ms_arg(1_781_234_567_890.0), Ok(1_781_234_567_890));
+        assert!(ms_arg(-1.0).is_err() && ms_arg(f64::NAN).is_err());
+    }
 }
