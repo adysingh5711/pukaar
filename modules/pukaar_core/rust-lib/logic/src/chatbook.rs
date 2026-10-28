@@ -122,6 +122,9 @@ pub struct Convo {
     pub last_ms: u64,
     #[serde(default)]
     pub preview: Option<String>,
+    /// Messages in the conversation, also those that the module no longer holds in memory.
+    #[serde(default, deserialize_with = "ms")]
+    pub message_count: u64,
     #[serde(default)]
     pub history_only: bool,
     #[serde(default)]
@@ -361,7 +364,8 @@ impl ChatBook {
         self.save();
     }
 
-    /// The chat list, newest first: one row per active member that we have a conversation or an unsent message with.
+    /// The chat list, newest first: one row per active member that we have a message with, or an unsent one.
+    /// A linked conversation without any message (it was only opened) is not listed.
     #[must_use]
     pub fn threads_json(
         &self,
@@ -381,11 +385,15 @@ impl ChatBook {
         people.dedup();
         let mut rows: Vec<(u64, Value)> = people
             .iter()
-            .map(|who| {
+            .filter_map(|who| {
                 let mine: Vec<&Convo> = convos
                     .iter()
                     .filter(|c| self.who_of_convo(&c.id) == Some(*who))
                     .collect();
+                let talked = mine.iter().any(|c| c.last_ms > 0 || c.message_count > 0);
+                if !talked && self.queued(who).next().is_none() {
+                    return None;
+                }
                 let newest = mine.iter().max_by_key(|c| c.last_ms);
                 let (preview, last_ms) = match (self.queued(who).last(), newest) {
                     (Some(q), _) => (format!("Not sent yet: {}", q.text), q.ts_ms),
@@ -402,7 +410,7 @@ impl ChatBook {
                     "has_address": self.latest(who).is_some(),
                     "unread": self.is_unread(who, &mine),
                 });
-                (last_ms, row)
+                Some((last_ms, row))
             })
             .collect();
         rows.sort_by_key(|r| std::cmp::Reverse(r.0));
@@ -643,6 +651,25 @@ mod tests {
     }
 
     #[test]
+    fn a_linked_conversation_without_a_message_is_not_in_the_chat_list_until_one_is_queued() {
+        let ((_, a), (_, me)) = (person(1), person(2));
+        let mut mine = book();
+        mine.link("c1", a, "addr-a");
+        let empty = [Convo {
+            id: "c1".into(),
+            last_ms: 0,
+            preview: None,
+            message_count: 0,
+            history_only: false,
+            kind: "direct".into(),
+        }];
+        let list = |b: &ChatBook| b.threads_json(&empty, &BTreeMap::new(), &[a, me], &me);
+        assert_eq!(list(&mine).as_array().unwrap().len(), 0);
+        mine.enqueue(a, "hi", NOW).unwrap();
+        assert_eq!(list(&mine).as_array().unwrap().len(), 1);
+    }
+
+    #[test]
     fn the_chat_list_shows_active_members_newest_first_and_an_unsent_message_as_the_preview() {
         let (((ka, a), (_, b)), (_, me)) = ((person(1), person(3)), person(2));
         let mut mine = book();
@@ -653,6 +680,7 @@ mod tests {
             id: id.into(),
             last_ms,
             preview: Some("hi".into()),
+            message_count: 1,
             history_only,
             kind: "direct".into(),
         };
@@ -701,6 +729,7 @@ mod tests {
             id: id.into(),
             last_ms,
             preview: None,
+            message_count: 0,
             history_only,
             kind: "direct".into(),
         };
