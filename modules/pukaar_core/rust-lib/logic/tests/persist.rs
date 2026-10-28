@@ -100,3 +100,31 @@ fn the_account_shows_before_any_site_and_stays_the_same() {
     assert_eq!(first, pukaar_logic::chain::b58(&node.account));
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn announces_survive_a_restart() {
+    use ed25519_dalek::SigningKey;
+    use pukaar_logic::fetch::Fetched;
+    use pukaar_logic::profile::Announce;
+    let dir = std::env::temp_dir().join(format!("pukaar-announces-{}", std::process::id()));
+    let site = [7; 32];
+    let k = |n: u8| SigningKey::from_bytes(&[n; 32]);
+    let (a, b) = (Announce::sign(&k(1), site, 2, "zA", [1; 32]), Announce::sign(&k(2), site, 1, "zB", [2; 32]));
+    let mut f = Fetched::default();
+    f.persist_in(&dir, &site);
+    assert!(f.note_announce(a.clone()) && f.note_announce(b.clone()));
+    assert!(!f.note_announce(Announce::sign(&k(1), site, 1, "zOld", [3; 32])), "an older one is not kept, so not saved");
+    let mut g = Fetched::default();
+    g.persist_in(&dir, &site);
+    assert_eq!((g.announces().len(), g.announces()), (2, f.announces()), "a restart keeps them");
+    assert!(g.announces().contains(&a) && g.announces().contains(&b));
+    // Another site reads nothing. A damaged file reads nothing and does not stop the node.
+    let mut other = Fetched::default();
+    other.persist_in(&dir, &[8; 32]);
+    assert!(other.announces().is_empty());
+    std::fs::write(dir.join(format!("announces-{}", hex::encode(site))), b"junk").unwrap();
+    let mut h = Fetched::default();
+    h.persist_in(&dir, &site);
+    assert!(h.announces().is_empty());
+    std::fs::remove_dir_all(dir).unwrap();
+}

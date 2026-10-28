@@ -722,6 +722,21 @@ fn the_own_announce_of_a_staff_member_is_not_used_or_refreshed() {
 }
 
 #[test]
+fn the_own_announce_of_an_admin_is_read_and_refreshed() {
+    let w = World::new();
+    pointed(&w, 4, Role::Admin, 4, "Dr Rao", 1);
+    let body = profile::Body { display_name: "Dr Rao".into(), bio: "new bio".into(), ..Default::default() };
+    let file = profile::build(&key(4), &w.site_id(), &acct(4), 2, 1, &body, None, &[pk(1)]).unwrap();
+    let bytes = profile::to_bytes(&file);
+    let a = Announce::sign(&key(4), w.site_id(), 2, &w.store.put(&bytes), sha256(&bytes));
+    assert!(w.fetched.lock().unwrap().note_announce(a));
+    read(&w);
+    assert_eq!(w.fetched.lock().unwrap().about[&pk(4)].bio, "new bio", "staff who are admins show their announce at once");
+    let (n, q) = (node(&w, 1), locked(&w));
+    assert_eq!(refresh_items(&n, &q).iter().map(|i| i.user).collect::<Vec<_>>(), vec![acct(4)], "and the next batch refreshes the pointer");
+}
+
+#[test]
 fn a_steward_cannot_set_their_own_name_but_others_can() {
     let w = World::new();
     w.put_member(&w.member(2, Role::Steward));

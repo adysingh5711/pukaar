@@ -8,7 +8,7 @@
 use crate::chain::{b58, checkpoint_pda, AccountId};
 use crate::checkpoint::checkpoint_now;
 use crate::event::{Key, Location, MAX_TEXT};
-use crate::fetch::is_staff;
+use crate::fetch::{is_staff, takes_announce};
 use crate::joinreq;
 use crate::lezkey::{derive_lez_secret, lez_account_id};
 use crate::node::{fingerprint, parse_id, Node};
@@ -432,7 +432,7 @@ pub fn refresh_items(node: &Node, q: &Queue) -> Vec<ProfReq> {
     members
         .iter()
         .filter(|m| m.status == MemberStatus::Active && m.revoked.is_none())
-        .filter(|m| !is_staff(&v_site, m)) // O5: a staff name comes from an admin, not from an announce
+        .filter(|m| takes_announce(&v_site, m)) // O5: a steward's name comes from an admin, not from an announce
         .filter_map(|m| {
             let a = announces.iter().find(|a| a.author == m.pukaar_key && a.version > m.profile_version)?;
             let item = ProfReq { user: m.user, prof: Prof { cid: a.cid.clone(), sha: a.sha256, version: a.version } };

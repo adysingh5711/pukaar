@@ -485,7 +485,9 @@ fn wire_chain(node: &mut Node, dir: &Path) {
     let chain = Chain::shared(program, node.store.site, me);
     chain.lock().unwrap().persist_in(dir); // the accounts that earlier runs read, a removed member too
     node.attach_chain(chain);
-    node.attach_fetched(Fetched::shared());
+    let fetched = Fetched::shared();
+    fetched.lock().unwrap().persist_in(dir, &node.store.site); // the announces that no admin batch sent yet
+    node.attach_fetched(fetched);
 }
 
 /// The Storage client of this module, made on the first sync. Its temp files and its data live in

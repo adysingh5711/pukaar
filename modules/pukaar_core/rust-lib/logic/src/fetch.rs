@@ -16,6 +16,7 @@
 //! gives the truth. An event, a join request and a profile announce also name accounts (`hint`).
 
 use crate::event::{sha256, Key, Location};
+use crate::persist;
 use crate::profile::{self, About, Announce, MAX_INLINE_PROFILE};
 use crate::sync::{Wire, BLOB_CHUNK, MAX_CHUNKS, MAX_FALLBACK};
 use crate::reducer::Config;
@@ -24,6 +25,7 @@ use ed25519_dalek::SigningKey;
 use pukaar_sites_rules::{Member, Rank, Site};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -159,6 +161,8 @@ pub struct Fetched {
     /// Our site keys, from the keyring. Empty when we are not in it.
     site_keys: BTreeMap<u64, Key>,
     announces: BTreeMap<Key, Announce>,
+    /// Where `announces` are saved after each change (`persist_in`).
+    announces_file: Option<PathBuf>,
     /// Blobs by CID. Every use checks the SHA-256 again, so a lying pointer cannot reuse a blob.
     cache: HashMap<String, Vec<u8>>,
     /// The newest files that we uploaded: kept in `cache` before the chain points to them, so that we
@@ -195,6 +199,7 @@ impl Default for Fetched {
             error: None,
             site_keys: BTreeMap::new(),
             announces: BTreeMap::new(),
+            announces_file: None,
             cache: HashMap::new(),
             recent: vec![],
             failed: BTreeSet::new(),
@@ -229,8 +234,30 @@ impl Fetched {
             None if self.announces.len() >= MAX_ANNOUNCES => false,
             _ => {
                 self.announces.insert(a.author, a);
+                self.save_announces();
                 true
             }
+        }
+    }
+
+    /// Keep the announces in `dir` (one file per site, like the known accounts of the chain cache) and load
+    /// what an earlier run kept. A restart then does not lose an edit that no admin batch sent yet. The file
+    /// is only a cache: each announce is checked again as it loads, and a damaged file is ignored.
+    pub fn persist_in(&mut self, dir: &Path, site: &Key) {
+        let file = dir.join(format!("announces-{}", hex::encode(site)));
+        let kept: Vec<Announce> = std::fs::read(&file).ok().and_then(|b| postcard::from_bytes(&b).ok()).unwrap_or_default();
+        for a in kept.into_iter().filter(|a| a.site == *site) {
+            self.note_announce(a);
+        }
+        self.announces_file = Some(file);
+    }
+
+    fn save_announces(&self) {
+        let Some(file) = &self.announces_file else { return };
+        let bytes = postcard::to_allocvec(&self.announces.values().collect::<Vec<_>>()).expect("postcard encode");
+        let dir = file.parent().map_or(Ok(()), std::fs::create_dir_all);
+        if let Err(e) = dir.and_then(|()| persist::write_atomic(file, &bytes)) {
+            eprintln!("pukaar: could not save the profile announces: {e}");
         }
     }
 
@@ -408,6 +435,13 @@ pub fn is_staff(site: &Site, m: &Member) -> bool {
     site.is_super(&m.user) || Rank::from(m.role) >= Rank::Steward
 }
 
+/// An announce moves the pointer of a member when readers would accept the file: a resident's own, or an
+/// admin's own (an admin who names themselves is an admin too, O5). A steward's own file needs the signature
+/// of an admin, so a steward's announce does not count.
+pub fn takes_announce(site: &Site, m: &Member) -> bool {
+    !is_staff(site, m) || site.is_super(&m.user) || Rank::from(m.role) >= Rank::Admin
+}
+
 /// The reader error for a staff profile that no admin signed (O5). It is no storage fault.
 const NOT_BY_ADMIN: &str = "a staff name needs the signature of an admin";
 
@@ -434,9 +468,9 @@ fn cycle(store: &dyn Store, chain: &SharedChain, fx: &SharedFetched, me: &Signin
     let site_hex = hex::encode(site.site_id);
     let announces = fx.lock().unwrap().announces.clone();
     // The newest profile of a member: the announce when its version is higher than the chain pointer.
-    // A staff profile counts only with the signature of an admin (O5), so a staff member's own announce is not used.
+    // A staff profile counts only with the signature of an admin (O5): a steward's own announce is not used.
     let pointer = |m: &Member| match announces.get(&m.pukaar_key) {
-        Some(a) if a.version > m.profile_version && !is_staff(&site, m) => (a.cid.clone(), a.sha256, a.version),
+        Some(a) if a.version > m.profile_version && takes_announce(&site, m) => (a.cid.clone(), a.sha256, a.version),
         _ => (m.profile_cid.clone(), m.profile_sha256, m.profile_version),
     };
     let strangers: Vec<&Announce> = announces.values().filter(|a| !members.iter().any(|m| m.pukaar_key == a.author)).collect();
