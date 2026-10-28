@@ -11,6 +11,7 @@ pub mod fetch;
 pub mod identity;
 pub mod joinreq;
 pub mod lezkey;
+pub mod meet;
 pub mod node;
 pub mod ops;
 pub mod persist;

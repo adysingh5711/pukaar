@@ -2,6 +2,7 @@
 //! events re-sends them. This is the catch-up path; Delivery's storeQuery is best-effort only.
 
 use crate::event::{sha256, Key, MAX_EVENT_BYTES};
+use crate::meet::{BusyBody, Signed, MAX_MEET_BYTES, MAX_RANGES};
 use crate::profile::{self, MAX_CID, MAX_INLINE_PROFILE};
 use crate::store::Store;
 use pukaar_sites_rules::JOIN_REQ_LEN;
@@ -73,6 +74,10 @@ pub enum Wire {
     /// site and the request id (`joinreq::sign_decline`). The joiner accepts it only for a request that it
     /// sent, from an active admin.
     JoinDecline { site: Key, request_id: Key, admin: Key, sig: Vec<u8> },
+    /// A 1:1 meeting message (propose, accept, decline, cancel) in a sealed box for one member (`meet`).
+    Meet(Vec<u8>),
+    /// A signed free/busy summary of one member: times only, no titles (`meet`).
+    Busy(Signed<BusyBody>),
 }
 
 impl Wire {
@@ -101,6 +106,8 @@ impl Wire {
                 !cid.is_empty() && cid.len() <= MAX_CID && index < total && usize::from(*total) <= MAX_CHUNKS && !bytes.is_empty() && bytes.len() <= BLOB_CHUNK
             }
             Wire::JoinDecline { sig, .. } => sig.len() == 64,
+            Wire::Meet(b) => !b.is_empty() && b.len() <= MAX_MEET_BYTES,
+            Wire::Busy(b) => b.sig.len() == 64 && b.body.ranges.len() <= MAX_RANGES,
             Wire::Heads(_) | Wire::ChainPending { .. } => true,
         };
         ok.then_some(w)

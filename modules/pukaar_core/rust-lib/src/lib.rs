@@ -9,10 +9,11 @@ mod wallet;
 mod storage;
 
 use pukaar_logic::event::{Body, Event, Key, SigningKey};
-use pukaar_logic::fetch::{sync_once, Fetched};
+use pukaar_logic::fetch::{sync_once, Fetched, Store as _};
 use pukaar_logic::identity;
 use pukaar_logic::node::{action_body, parse_id, Node};
 use pukaar_logic::lezkey::{derive_lez_secret, lez_account_id};
+use pukaar_logic::meet::{Act, Meetings};
 use pukaar_logic::persist;
 use pukaar_logic::ops::{self, Place, SuperKind};
 use pukaar_logic::queue::{self, Queue, SharedQueue};
@@ -136,6 +137,27 @@ pub trait PukaarCoreModule: Send + 'static {
     /// Admin only: send the held approvals, role changes and revokes, and the profile refreshes of the
     /// members, in batches of 10. `{"ok":true,"queued":[ids]}`.
     fn send_batch(&mut self) -> String;
+    /// 1:1 meetings of this member: `{"meetings":[…],"share":bool,"lead_min":n,"backup":{…}}`. Times are UTC ms.
+    fn meet_list(&mut self) -> String;
+    /// The free/busy view for a meeting with `other_hex`: our busy ranges, theirs when they share, and the
+    /// next 7 days of slots of `len_min` minutes from `from_ms`: `{"shared","mine","theirs","slots"}`.
+    fn meet_slots(&mut self, other_hex: String, from_ms: i64, len_min: i64) -> String;
+    /// What a time runs into, in our calendar and in the summary of `other_hex`: `{"mine":[…],"theirs":[…]}`.
+    fn meet_check(&mut self, other_hex: String, start_ms: i64, end_ms: i64) -> String;
+    /// Saves a proposal and sends it, sealed, to `other_hex`: `{"ok":true,"id":hex}`. A clash does not stop it.
+    fn meet_propose(&mut self, other_hex: String, start_ms: i64, end_ms: i64) -> String;
+    /// The invitee accepts a proposal that is not over. `ok` or `error: …`.
+    fn meet_accept(&mut self, id_hex: String) -> String;
+    /// The invitee declines a proposal: the slot is free again. `ok` or `error: …`.
+    fn meet_decline(&mut self, id_hex: String) -> String;
+    /// Either side cancels a confirmed meeting, or the requester cancels a proposal. `ok` or `error: …`.
+    fn meet_cancel(&mut self, id_hex: String) -> String;
+    /// Share the free/busy summary with the site (1) or with nobody (0), and the reminder lead time in minutes.
+    fn meet_prefs(&mut self, share: i64, lead_min: i64) -> String;
+    /// Encrypts the meeting history and uploads it to Storage in the background. `meet_list().backup` shows the result.
+    fn meet_backup(&mut self) -> String;
+    /// Downloads the backup with this CID from Storage in the background and adds the meetings that are missing.
+    fn meet_restore(&mut self, cid: String) -> String;
     fn on_context_ready(&mut self, _ctx: &RustModuleContext) {}
 }
 
@@ -148,6 +170,8 @@ include!(concat!(
 /// A peer's `ChainPending` is shown this long.
 const PEER_PENDING_FOR: Duration = Duration::from_secs(30 * 60);
 const HEADS_EVERY: Duration = Duration::from_secs(60);
+/// Our open meeting messages go out again this often (Delivery gives no acknowledgement).
+const MEET_EVERY: Duration = Duration::from_secs(300);
 const ANSWER_EVERY: Duration = Duration::from_secs(10);
 /// Received events reach the disk at most this often (see `Shared::save_due`).
 const SAVE_EVERY: Duration = Duration::from_secs(2);
@@ -205,6 +229,10 @@ struct Shared {
     queue: SharedQueue,
     /// `Wire::ChainPending` from peers: (transaction hash, kind, when). Shown, never trusted.
     peers: Vec<(Key, WriteKind, Instant)>,
+    /// The 1:1 meetings of the site of `node` (`Meetings::for_site` loads them).
+    meets: Meetings,
+    /// When we last repeated our open meeting messages.
+    last_meet: Option<Instant>,
 }
 
 impl Shared {
@@ -544,6 +572,8 @@ fn on_wire(channel: &str, bytes: &[u8]) {
         dirty,
         queue,
         peers,
+        meets,
+        dir,
         ..
     }) = g.as_mut()
     else {
@@ -600,6 +630,15 @@ fn on_wire(channel: &str, bytes: &[u8]) {
         Some(w @ (Wire::BlobReq { .. } | Wire::BlobChunk { .. })) => {
             outbox.extend(node.on_blob(&w, now() / 60).iter().map(Wire::encode));
         }
+        // A 1:1 meeting message for us, or a free/busy summary. A change of our busy ranges gives a new summary.
+        Some(Wire::Meet(sealed)) => {
+            let (site, members) = (node.store.site, node.approved_keys());
+            outbox.extend(meets.for_site(dir, &site).on_meet(&node.key, &site, &sealed, &members, now_ms()));
+        }
+        Some(Wire::Busy(b)) => {
+            let (site, members) = (node.store.site, node.approved_keys());
+            meets.for_site(dir, &site).on_busy(&site, &b, &members);
+        }
         // Only recorded: `site_info.chain.pending_peers` shows it for a while.
         Some(Wire::ChainPending { tx, kind }) => {
             peers.retain(|(t, _, at)| *t != tx && at.elapsed() < PEER_PENDING_FOR);
@@ -620,6 +659,9 @@ fn send_queued(site: &str) -> Result<(), String> {
             node: Some(node),
             outbox,
             last_heads,
+            meets,
+            last_meet,
+            dir,
             ..
         }) = g.as_mut()
         else {
@@ -628,6 +670,10 @@ fn send_queued(site: &str) -> Result<(), String> {
         if last_heads.is_none_or(|t| t.elapsed() >= HEADS_EVERY) {
             *last_heads = Some(Instant::now());
             outbox.push(heads_msg(&node.store).encode());
+        }
+        if last_meet.is_none_or(|t| t.elapsed() >= MEET_EVERY) {
+            *last_meet = Some(Instant::now());
+            outbox.extend(meets.for_site(dir, &node.store.site).resend(&node.key, &node.store.site, now_ms()));
         }
         std::mem::take(outbox)
     };
@@ -781,6 +827,68 @@ fn queued<T>(f: impl FnOnce(&Node, &mut Queue, &mut Vec<Vec<u8>>) -> Result<T, S
     node.apply_fetched();
     let mut q = sh.queue.lock().unwrap();
     f(node, &mut q, &mut sh.outbox)
+}
+
+/// Run `f` on the node and the meetings of its site. A method that sends puts the wire messages on the
+/// outbox. It never waits for Delivery or Storage.
+fn meet<T>(f: impl FnOnce(&Node, &mut Meetings, &mut Vec<Vec<u8>>) -> Result<T, String>) -> Result<T, String> {
+    let mut g = SHARED.lock().unwrap();
+    let sh = g.as_mut().ok_or("module not ready")?;
+    let node = sh.node.as_mut().ok_or(NO_SITE)?;
+    node.apply_fetched();
+    f(node, sh.meets.for_site(&sh.dir, &node.store.site), &mut sh.outbox)
+}
+
+/// `meet` for a method that sends: the reply is `ok`, or what `reply` makes of the result.
+fn meet_send<T>(f: impl FnOnce(&Node, &mut Meetings) -> Result<(T, Vec<Vec<u8>>), String>, reply: impl FnOnce(T) -> String) -> String {
+    let r = meet(|node, m, outbox| {
+        let (t, out) = f(node, m)?;
+        outbox.extend(out);
+        Ok(t)
+    });
+    flush();
+    r.map(reply).unwrap_or_else(err)
+}
+
+/// A Storage job of the meetings on a thread of its own (the UI gives a call 20 s). `finish` runs on the
+/// result and keeps it in the meetings. Only one job runs at a time.
+fn meet_job<R: Send + 'static, W: FnOnce(&'static storage::LogosStore) -> R + Send + 'static>(
+    label: &'static str,
+    start: impl FnOnce(&Node, &Meetings) -> Result<W, String>,
+    finish: impl FnOnce(&Node, &mut Meetings, R) + Send + 'static,
+) -> String {
+    let r = meet(|node, m, _| {
+        if m.job.is_some() {
+            return Err("A backup or a restore is running.".to_string());
+        }
+        let work = start(node, m)?;
+        (m.job, m.job_error) = (Some(label), None);
+        Ok((m.dir().to_path_buf(), work))
+    });
+    r.map(|(dir, work)| {
+        std::thread::spawn(move || {
+            let result = work(store(dir));
+            let _ = meet(|node, m, _| {
+                finish(node, m, result);
+                Ok(())
+            });
+        });
+        "ok".to_string()
+    })
+    .unwrap_or_else(err)
+}
+
+fn key_arg(hex: &str) -> Result<Key, String> {
+    parse_id(hex).ok_or_else(|| "That is not a 64-character hex key.".to_string())
+}
+
+fn ms_arg(v: i64) -> Result<u64, String> {
+    u64::try_from(v).map_err(|_| "That time is not valid.".to_string())
+}
+
+/// The id of a meeting, or one of its answers: accept, decline or cancel.
+fn meet_answer(id_hex: &str, act: Act) -> String {
+    meet_send(|node, m| Ok(((), m.answer(&node.key, &node.store.site, &key_arg(id_hex)?, act, now_ms())?)), |()| "ok".into())
 }
 
 #[derive(Default)]
@@ -1115,6 +1223,79 @@ impl PukaarCoreModule for Pukaar {
         publish_with(|n| n.record_anchor(&heads_json, &lez_ref, now()))
     }
 
+    fn meet_list(&mut self) -> String {
+        meet(|node, m, _| Ok(m.list_json(&node.me(), &node.names, now_ms()).to_string())).unwrap_or_else(err)
+    }
+
+    fn meet_slots(&mut self, other_hex: String, from_ms: i64, len_min: i64) -> String {
+        let r = (|| {
+            let (other, from, len) = (key_arg(&other_hex)?, ms_arg(from_ms)?, ms_arg(len_min)?.clamp(5, 24 * 60) * 60_000);
+            meet(|node, m, _| Ok(m.slots_json(&node.me(), &other, from, len, &node.names, now_ms()).to_string()))
+        })();
+        r.unwrap_or_else(err)
+    }
+
+    fn meet_check(&mut self, other_hex: String, start_ms: i64, end_ms: i64) -> String {
+        let r = (|| {
+            let (other, range) = (key_arg(&other_hex)?, (ms_arg(start_ms)?, ms_arg(end_ms)?));
+            meet(|node, m, _| Ok(m.clashes_json(&node.me(), &m.clashes(&node.me(), Some(&other), range, None), &node.names).to_string()))
+        })();
+        r.unwrap_or_else(err)
+    }
+
+    fn meet_propose(&mut self, other_hex: String, start_ms: i64, end_ms: i64) -> String {
+        meet_send(
+            |node, m| {
+                let to = key_arg(&other_hex)?;
+                let (me, members) = (node.me(), node.approved_keys());
+                if !members.contains(&me) || !members.contains(&to) || to == me {
+                    return Err("You can meet another member of this site once you are approved.".into());
+                }
+                m.propose(&node.key, &node.store.site, to, (ms_arg(start_ms)?, ms_arg(end_ms)?), now_ms())
+            },
+            |id| serde_json::json!({ "ok": true, "id": hex::encode(id) }).to_string(),
+        )
+    }
+
+    fn meet_accept(&mut self, id_hex: String) -> String {
+        meet_answer(&id_hex, Act::Accept)
+    }
+
+    fn meet_decline(&mut self, id_hex: String) -> String {
+        meet_answer(&id_hex, Act::Decline)
+    }
+
+    fn meet_cancel(&mut self, id_hex: String) -> String {
+        meet_answer(&id_hex, Act::Cancel)
+    }
+
+    fn meet_prefs(&mut self, share: i64, lead_min: i64) -> String {
+        meet_send(|node, m| Ok(((), m.set_prefs(&node.key, share != 0, u64::try_from(lead_min).unwrap_or(0), now_ms()))), |()| "ok".into())
+    }
+
+    fn meet_backup(&mut self) -> String {
+        meet_job(
+            "backing up",
+            |node, m| {
+                let bytes = m.backup_bytes(&node.key);
+                Ok(move |s: &'static storage::LogosStore| s.upload(&bytes))
+            },
+            |_, m, r| m.backup_done(r, now_ms()),
+        )
+    }
+
+    fn meet_restore(&mut self, cid: String) -> String {
+        let cid = cid.trim().to_string();
+        if cid.is_empty() {
+            return err("Type the CID of the backup.");
+        }
+        meet_job(
+            "restoring",
+            |_, _| Ok(move |s: &'static storage::LogosStore| s.download(&cid)),
+            |node, m, r| m.restore_done(&node.key, r),
+        )
+    }
+
     fn on_context_ready(&mut self, ctx: &RustModuleContext) {
         let dir = PathBuf::from(&ctx.instance_persistence_path);
         let dir_for_queue = dir.clone();
@@ -1142,6 +1323,8 @@ impl PukaarCoreModule for Pukaar {
             last_save: Instant::now(),
             queue,
             peers: vec![],
+            meets: Meetings::default(),
+            last_meet: None,
         });
     }
 }

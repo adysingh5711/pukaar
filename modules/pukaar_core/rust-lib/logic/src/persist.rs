@@ -30,7 +30,7 @@ fn remove_if_present(path: &Path) -> io::Result<()> {
     }
 }
 
-fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
+pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
     let tmp = path.with_extension("tmp");
     fs::write(&tmp, data)?;
     #[cfg(unix)]

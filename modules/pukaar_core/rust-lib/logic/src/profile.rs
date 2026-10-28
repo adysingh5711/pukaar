@@ -72,13 +72,13 @@ fn unhex<const N: usize>(s: &str) -> Result<[u8; N], String> {
 }
 
 /// nonce (24) ‖ ciphertext.
-fn encrypt(key: &Key, plain: &[u8]) -> Vec<u8> {
+pub(crate) fn encrypt(key: &Key, plain: &[u8]) -> Vec<u8> {
     let nonce = rand::<24>();
     let ct = XChaCha20Poly1305::new(key.into()).encrypt(XNonce::from_slice(&nonce), plain).expect("encrypt");
     [&nonce[..], &ct].concat()
 }
 
-fn decrypt(key: &Key, boxed: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn decrypt(key: &Key, boxed: &[u8]) -> Result<Vec<u8>, String> {
     let (nonce, ct) = boxed.split_at_checked(24).ok_or("box too short")?;
     XChaCha20Poly1305::new(key.into()).decrypt(XNonce::from_slice(nonce), ct).map_err(|_| "wrong key or damaged data".to_string())
 }

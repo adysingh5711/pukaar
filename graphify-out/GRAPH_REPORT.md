@@ -1,243 +1,526 @@
-# Graph Report - field-study  (2026-10-25)
+# Graph Report - field-study  (2026-10-28)
 
 ## Corpus Check
-- 66 files · ~113,645 words
+- 109 files · ~174,152 words
 - Verdict: corpus is large enough that graph structure adds value.
-- Unclassified: 18 file(s) not represented in the graph (top: (none) 6, .mdc 4, .lock 2)
+- Unclassified: 20 file(s) not represented in the graph (top: (none) 6, .mdc 4, .qml 3)
 
 ## Summary
-- 893 nodes · 1814 edges · 46 communities (32 shown, 14 thin omitted)
-- Extraction: 90% EXTRACTED · 10% INFERRED · 0% AMBIGUOUS · INFERRED: 175 edges (avg confidence: 0.85)
+- 2254 nodes · 5741 edges · 110 communities (87 shown, 23 thin omitted)
+- Extraction: 92% EXTRACTED · 8% INFERRED · 0% AMBIGUOUS · INFERRED: 439 edges (avg confidence: 0.85)
 - Token cost: 0 input · 0 output
 
 ## Community Hubs (Navigation)
-- Checkpoint Signing and Sync
-- Logos Runtime and Atomics
-- Location and Event Payloads
-- Node State Machine
-- Registry Agent Docs
-- Super Admin Lifecycle Tests
-- Member Lifecycle Tests
-- Store and Event Outcomes
+- Meet Protocol
+- Concurrency Primitives
+- Chain Write Operations
+- Clock and LEE Core
+- Sealed Box Encryption
+- Peer Discovery and Blob Sync
+- Program Account Checks
+- Announcements and Membership
+- Thread Sync Storage
 - Core Module API
-- Location Tests
-- Event Body Variants
-- Identity Crypto and Backup
-- Convergence and Fork Tests
-- Core Module Metadata
-- Identity Import Tests
-- Location Retirement Tests
-- UI Module Metadata
-- Checkpoint Records
-- Event Encoding
-- Persistence Layer
-- History Screen Spec
-- People Screen Spec
-- Registry Program Guest
-- Architecture Diagram
-- Board Screen Spec
-- Persistence Tests
-- Decode Errors
-- CI Workflow
-- Notice Outcomes and Roles
-- Persistence Round Trips
-- Test Site Fixtures
-- Brand Logo and Icon
-- Registry Client Generator
-- Core Build Config
-- Package Definitions
+- Agent Skills Index
+- Join Request Checks
+- Borsh Record Encoding
+- Rule Errors
+- Key Derivation and Runner
+- Membership Role Tests
+- Roles and Permissions
+- Event Body Types
+- Event Store and Forks
+- Rule Engine
+- Node Fingerprint and Sync
+- Core Library Subscriptions
+- RPC Agent Cache
+- Anchor Operations
+- Report Lifecycle
+- Approval Rule Tables
+- Config and Timing
+- Anchor Queue
+- Keyring Context
+- CMake Module Config
+- Identity Import
+- Chain Checkpoint Decoding
+- Identity Encryption
+- Profile Fetch
+- Chain Roster Persistence
+- Checkpoint Decode Fuzzing
+- Node Action Bodies
+- Chain Effects
+- Fetched Announcements
+- Test Harness Gossip
+- Publishing Helpers
+- Delivery Status
+- UI Module Config
+- UI Lifecycle
+- Local Persistence
+- State Reducer
+- Checkpoint Signing
+- Sync Delivery
+- Staff Grants and Revokes
+- Local Deploy Scripts
+- Cycle Helpers
+- Site Intents
+- Event Format Tests
+- Approval Queue
+- Role Resolution Tests
+- Store Consistency Tests
+- Meet Answer Flow
+- Testnet Scripts
+- UI Feature Docs
+- People Screen Docs
+- Roster Cache
+- Wire Protocol
+- Link State
+- Registry Checkpoints
+- Checkpoint Architecture Notes
+- Roster Queries
+- Settlement Reads
+- Issue Status
+- Heads Resend
+- Chain Role Judging Tests
+- Convergence Tests
+- LGX Build Scripts
+- Canonical Action Bodies
+- Chain Writer
+- Write Kinds
+- Action Types
+- Board UI Docs
+- Write Queue States
+- CI Pipeline
+- Anchor Application
+- Member Records
+- Blob Storage
+- Local Anchor Scripts
+- Brand Assets
+- Workspace Crates
+- Storage Direct Scripts
+- Offline Chain Mode
+- Module Build Config
+- Super Admin Actions
+- Meet Backup
+- Client Codegen
+- Local LEZ Scripts
+- Member Status
+- Testnet LEZ Scripts
+- Build Script
 - Basecamp Script
+- LGX Check Script
 - Demo Script
-- UI Screenshot Script
+- UI Screenshot Scripts
+- Chain UI Screenshots
 - Window Script
-- Example Deployment
+- Example Deployment Methods
 - Example Deployment Programs
-- Client Generator Package
-- Registry Package
+- Fastbuild Crate
+- Client Gen Crate
+- Registry Crate
 
 ## God Nodes (most connected - your core abstractions)
-1. `Node` - 96 edges
-2. `Body` - 59 edges
-3. `State` - 40 edges
-4. `Store` - 34 edges
-5. `Pukaar` - 34 edges
-6. `new_key()` - 32 edges
-7. `PukaarCoreModule` - 32 edges
-8. `now()` - 31 edges
-9. `deputy_site()` - 25 edges
-10. `apply()` - 21 edges
+1. `Node` - 107 edges
+2. `RuleError` - 76 edges
+3. `Queue` - 62 edges
+4. `Pukaar` - 50 edges
+5. `PukaarCoreModule` - 48 edges
+6. `Meetings` - 43 edges
+7. `Rank` - 42 edges
+8. `Actor` - 35 edges
+9. `locked()` - 33 edges
+10. `new_key()` - 32 edges
 
 ## Surprising Connections (you probably didn't know these)
-- `a_pseudonymous_joiner_still_shows_up_for_approval()` --calls--> `new_key()`  [INFERRED]
-  modules/pukaar_core/rust-lib/logic/tests/lifecycle.rs → modules/pukaar_core/rust-lib/logic/src/event.rs
-- `staff_are_named_and_residents_choose()` --calls--> `new_key()`  [INFERRED]
-  modules/pukaar_core/rust-lib/logic/tests/lifecycle.rs → modules/pukaar_core/rust-lib/logic/src/event.rs
-- `Generated IDL (idl/pukaar_registry.json)` --implements--> `pukaar_registry`  [INFERRED]
-  programs/pukaar_registry/README.md → README.md
-- `Pukaar app icon (bell, orange-magenta gradient, 256px)` --conceptually_related_to--> `Pukaar color logo (PNG)`  [INFERRED]
-  modules/pukaar_ui/src/icons/pukaar.png → public/brand/pukaar-logo-color.png
-- `Pukaar app icon (bell, orange-magenta gradient, 256px)` --references--> `Pukaar bell mark (hanging bell on chain link, calling/alert metaphor)`  [INFERRED]
-  modules/pukaar_ui/src/icons/pukaar.png → public/brand/pukaar-logo.svg
+- `parse()` --calls--> `request_id()`  [INFERRED]
+  modules/pukaar_core/rust-lib/logic/src/joinreq.rs → programs/pukaar_sites/rules/src/records.rs
+- `join_request_passes_the_rules_and_both_signatures_verify()` --calls--> `keys()`  [INFERRED]
+  programs/pukaar_sites/runner/src/main.rs → modules/pukaar_core/rust-lib/logic/src/joinreq.rs
+- `main()` --calls--> `keys()`  [INFERRED]
+  programs/pukaar_sites/runner/src/main.rs → modules/pukaar_core/rust-lib/logic/src/joinreq.rs
+- `run()` --calls--> `keys()`  [INFERRED]
+  programs/pukaar_sites/runner/src/main.rs → modules/pukaar_core/rust-lib/logic/src/joinreq.rs
+- `user()` --calls--> `keys()`  [INFERRED]
+  programs/pukaar_sites/runner/src/main.rs → modules/pukaar_core/rust-lib/logic/src/joinreq.rs
 
 ## Import Cycles
 - None detected.
 
 ## Hyperedges (group relationships)
 - **Rust logic crate quality checks** — github_workflows_ci_logic_job, github_workflows_ci_fuzz_smoke_job, github_workflows_ci_rust_logic_crate [EXTRACTED 1.00]
-- **Admin role change via notice and seal** — readme_super_admin, readme_admin_notice, readme_notice_seal [INFERRED 0.75]
 - **Checkpoint anchoring chain** — readme_pukaar_core, readme_checkpoint_merkle_root, readme_pukaar_registry, readme_lez [INFERRED 0.75]
+- **Admin role change via notice and seal** — readme_super_admin, readme_admin_notice, readme_notice_seal [INFERRED 0.75]
 - **Tamper-evidence via signed events and fork proofs** — readme_signed_event_envelope, readme_fork_proof, readme_fork_resolution_lowest_id [INFERRED 0.75]
 - **Pukaar bell logo variants** — modules_pukaar_ui_src_icons_pukaar_app_icon, public_brand_pukaar_logo_color_logo, public_brand_pukaar_logo_color_svg_logo, public_brand_pukaar_logo_logo, public_brand_pukaar_logo_svg_logo [INFERRED 0.85]
 
-## Communities (46 total, 14 thin omitted)
+## Communities (110 total, 23 thin omitted)
 
-### Community 0 - "Checkpoint Signing and Sync"
-Cohesion: 0.05
-Nodes (56): new_key(), sign(), ANSWERERS, DELIVERY_CFG, heads_msg(), lost_node(), MAX_RESEND, resend() (+48 more)
-
-### Community 1 - "Logos Runtime and Atomics"
-Cohesion: 0.05
-Nodes (34): T, advance(), ANSWER_EVERY, create_and_listen(), delivered(), delivered_once(), delivery_status(), DELIVERY_TIMEOUT (+26 more)
-
-### Community 2 - "Location and Event Payloads"
+### Community 0 - "Meet Protocol"
 Cohesion: 0.06
-Nodes (47): Location, issue_json(), location_json(), notice_json(), place_change_json(), removed_json(), revocation_json(), stage() (+39 more)
+Nodes (50): a_clash_is_named_and_does_not_block_the_proposal(), a_decline_frees_the_slot_and_a_cancel_reaches_the_other_side(), a_newer_summary_wins_and_an_old_one_is_ignored(), a_stranger_a_forgery_and_the_wrong_reader_change_nothing(), Act, Accept, Cancel, Decline (+42 more)
 
-### Community 3 - "Node State Machine"
+### Community 1 - "Concurrency Primitives"
 Cohesion: 0.08
-Nodes (18): action_body(), body_text(), CONFIRM_WAIT_H, deadline(), fingerprint(), HEADS_TO_SETTLE, kind_name(), merge() (+10 more)
+Nodes (59): sha256(), Poll, Included, Pending, Rejected, a_balance_that_drops_after_prepare_is_caught_at_the_send(), a_balance_under_the_floor_holds_the_write_with_the_reason(), a_big_profile_goes_by_cid_only() (+51 more)
 
-### Community 4 - "Registry Agent Docs"
+### Community 2 - "Chain Write Operations"
+Cohesion: 0.07
+Nodes (56): Location, accounts_follow_the_runner_order(), anchor(), apply_place_op(), approve_batch(), approve_batch_names_the_requester_and_the_claims(), auth(), BATCH (+48 more)
+
+### Community 3 - "Clock and LEE Core"
+Cohesion: 0.06
+Nodes (43): by_hand(), Ctx, Ctx<'a>, nonempty(), pda(), plan(), probe(), set_pointer() (+35 more)
+
+### Community 4 - "Sealed Box Encryption"
+Cohesion: 0.11
+Nodes (51): seal(), sealed_box_round_trip_wrong_key_and_libsodium(), x25519_public(), a_full_profile_fits_the_inline_cap(), add_seats(), add_site_wrap(), ANNOUNCE_DOMAIN, announce_signs_verifies_and_rejects_tampering() (+43 more)
+
+### Community 5 - "Peer Discovery and Blob Sync"
+Cohesion: 0.12
+Nodes (37): a_blob_that_does_not_match_the_chain_hash_is_not_used_and_is_fetched_again(), a_file_of_100_kb_comes_in_chunks_and_reassembles(), a_flood_of_requests_gets_few_answers(), a_join_request_and_an_announce_name_accounts_to_read(), a_keyring_entry_that_lies_about_its_key_is_ignored(), a_lying_author_account_is_rejected(), a_removal_reason_comes_from_details_and_must_match_its_hash(), acct() (+29 more)
+
+### Community 6 - "Program Account Checks"
+Cohesion: 0.12
+Nodes (39): A, a_call_from_another_program_is_refused(), a_stale_or_future_clock_claim_fails(), a_wrong_member_pda_is_refused(), anchor_needs_an_active_member(), approve_batch_negatives(), approve_batch_writes_members_and_site(), auth() (+31 more)
+
+### Community 7 - "Announcements and Membership"
+Cohesion: 0.10
+Nodes (45): a_forged_or_unsolicited_decline_is_ignored(), a_join_and_an_inline_profile_reach_an_admin_who_approves_with_no_download(), a_join_request_is_signed_twice_and_kept(), a_new_site_has_its_files_and_the_first_profile_behind_it(), a_promotion_queues_the_signed_name_with_the_role_change(), a_record_that_is_anchored_already_is_refused_before_anything_is_queued(), a_removed_member_gets_a_reason_and_no_storage_error(), a_removed_member_stays_in_the_removed_list_after_the_keyring_rotates() (+37 more)
+
+### Community 8 - "Thread Sync Storage"
+Cohesion: 0.08
+Nodes (28): base(), CALL, CHUNK, Client, config_gets_own_data_dir_and_free_ports(), env_override_wins_and_bad_json_is_an_error(), Events, keep_file() (+20 more)
+
+### Community 10 - "Agent Skills Index"
 Cohesion: 0.05
 Nodes (41): AI agent skills index, basecamp skill, lez-framework-template skill, lez-template skill, lgs-cli skill, Anchored checkpoint (checkpoint_json), First anchor record (localnet), Program ID 23365d87...0890 (+33 more)
 
-### Community 5 - "Super Admin Lifecycle Tests"
-Cohesion: 0.15
-Nodes (37): profile(), a_backdated_act_after_the_seal_is_rejected(), a_cancelled_notice_changes_nothing(), a_notice_keeps_admin_powers_until_the_deadline(), a_past_notice_deadline_means_now(), a_remove_outcome_revokes_the_admin(), a_residents_seal_is_rejected(), a_seal_before_the_deadline_is_rejected() (+29 more)
-
-### Community 6 - "Member Lifecycle Tests"
+### Community 11 - "Join Request Checks"
 Cohesion: 0.09
-Nodes (31): a_pseudonymous_joiner_still_shows_up_for_approval(), a_removal_shows_as_removed_only_once_its_cooldown_is_over(), a_revoke_is_kept_with_who_when_and_why_until_a_new_grant(), an_event_over_the_size_cap_is_refused(), an_oversize_genesis_is_refused(), an_oversize_hindi_report_is_refused_and_nothing_is_inserted(), an_oversize_note_is_refused(), an_unanswered_report_has_no_ack_or_claim_time() (+23 more)
+Nodes (27): build(), built_request_parses_and_passes_the_rules(), check_decline(), DECLINE_DOMAIN, decline_message(), keys(), sign_decline(), sizes_are_162_and_290() (+19 more)
 
-### Community 7 - "Store and Event Outcomes"
-Cohesion: 0.13
-Nodes (12): Accept, Duplicate, Fork, New, Pending, Rejected, has_id(), hold() (+4 more)
-
-### Community 9 - "Location Tests"
-Cohesion: 0.13
-Nodes (24): a_code_that_was_ever_used_cannot_be_added_again(), a_location_pending_removal_cannot_be_edited(), a_location_with_any_report_cannot_be_removed_even_when_resolved(), a_never_used_location_enters_pending_removal(), a_new_location_is_added_and_listed(), a_report_on_a_location_pending_removal_is_rejected_and_kept(), a_report_racing_a_remove_converges_on_every_replica(), a_retired_never_used_location_can_be_removed_and_undo_makes_it_active() (+16 more)
-
-### Community 10 - "Event Body Variants"
+### Community 12 - "Borsh Record Encoding"
 Cohesion: 0.08
-Nodes (26): Body, Acknowledge, AdminNotice, AdminNoticeCancel, AdminNoticeEndNow, Checkpoint, ClaimResolved, CloseWontfix (+18 more)
+Nodes (29): parse(), ACCOUNT_ID_PREFIX, Attestation, check_join_request(), CID_MAX, GATE_NATIVE, GATE_NFT, GATE_TOKEN (+21 more)
 
-### Community 11 - "Identity Crypto and Backup"
+### Community 13 - "Rule Errors"
+Cohesion: 0.05
+Nodes (40): RuleError, AlreadyAnchored, AlreadyMember, AlreadySuperAdmin, BadBalance, BadCid, BadJoinRequest, BadMerkle (+32 more)
+
+### Community 14 - "Key Derivation and Runner"
+Cohesion: 0.14
+Nodes (18): clock_ms(), Cx, hex32(), id_env(), join_request(), join_request_passes_the_rules_and_both_signatures_verify(), Keys, main() (+10 more)
+
+### Community 15 - "Membership Role Tests"
+Cohesion: 0.21
+Nodes (19): a_removed_member_cannot_act_until_approved_again(), a_super_admin_adds_one_more_member_and_no_third(), acct(), adds_over_the_limit_keep_the_first(), claim(), mutual_removal_keeps_the_first(), non_admins_cannot_approve(), only_a_super_admin_grants_or_changes_the_admin_role() (+11 more)
+
+### Community 16 - "Roles and Permissions"
+Cohesion: 0.20
+Nodes (32): check_cid(), active_rank(), Actor, allow(), apply_approve(), apply_approve_site(), apply_create(), apply_revoke() (+24 more)
+
+### Community 17 - "Event Body Types"
+Cohesion: 0.07
+Nodes (30): Body, Acknowledge, Checkpoint, ClaimResolved, CloseWontfix, Comment, Confirm, MarkDuplicate (+22 more)
+
+### Community 18 - "Event Store and Forks"
+Cohesion: 0.13
+Nodes (11): Accept, Duplicate, Fork, New, Pending, Rejected, has_id(), hold() (+3 more)
+
+### Community 19 - "Rule Engine"
+Cohesion: 0.09
+Nodes (28): apply(), apply_effect(), check_balance(), check_clock(), check_ed25519(), check_probe(), checkpoint_seed(), CLOCK_TOLERANCE_MS (+20 more)
+
+### Community 20 - "Node Fingerprint and Sync"
+Cohesion: 0.11
+Nodes (8): fingerprint(), Node, last_anchor(), on_decline(), pending_rows(), refresh_items(), remember_known(), status()
+
+### Community 21 - "Core Library Subscriptions"
+Cohesion: 0.09
+Nodes (23): advance(), ANSWER_EVERY, chain_tick(), create_and_listen(), delivered(), delivered_once(), DELIVERY_TIMEOUT, env_or() (+15 more)
+
+### Community 22 - "RPC Agent Cache"
+Cohesion: 0.11
+Nodes (21): a_node_reads_roles_lists_and_identity_from_the_cache(), balance(), CLAIM_MARGIN_MS, claim_ms(), clock_ms(), FLOOR_LEPTA, get_account(), HttpRpc (+13 more)
+
+### Community 23 - "Anchor Operations"
+Cohesion: 0.12
+Nodes (24): about_text(), anchor(), anchor_plan(), anchor_push(), anchor_read(), AnchorPlan, create_site(), join() (+16 more)
+
+### Community 24 - "Report Lifecycle"
+Cohesion: 0.12
+Nodes (22): stage(), an_oversize_hindi_report_is_refused_and_nothing_is_inserted(), an_oversize_note_is_refused(), an_unanswered_report_has_no_ack_or_claim_time(), anchored_checkpoint_shows_in_timeline(), claim_reopen_claim_confirm(), finished_cards_carry_no_pending_next_step(), forbidden_transitions_are_inert_and_visible() (+14 more)
+
+### Community 25 - "Approval Rule Tables"
+Cohesion: 0.12
+Nodes (23): A, approve_item_table(), ASHA, check_join_request_table(), create_args(), create_makes_the_creator_super_admin_and_first_member(), create_table(), D (+15 more)
+
+### Community 26 - "Config and Timing"
+Cohesion: 0.12
+Nodes (8): an_unreachable_node_is_an_error_not_a_hang(), GAS_LIMIT, imported_key_gives_the_account_of_lezkey(), POLL, seed_key(), SEND, temp(), WalletWriter
+
+### Community 27 - "Anchor Queue"
+Cohesion: 0.12
+Nodes (5): AnchorNote, Queue, RevokeReq, tick(), request_id()
+
+### Community 28 - "Keyring Context"
+Cohesion: 0.20
+Nodes (15): build(), confirm(), effect_on_chain(), Entry, Env, fetch_blob(), need_site(), open_ring() (+7 more)
+
+### Community 29 - "CMake Module Config"
+Cohesion: 0.08
+Nodes (26): category, extra_include_dirs, extra_link_libraries, extra_sources, find_packages, codegen, rust, dependencies (+18 more)
+
+### Community 30 - "Identity Import"
+Cohesion: 0.15
+Nodes (18): import_into(), copy_all(), a_failed_import_writes_nothing(), a_peer_naming_a_later_seq_keeps_us_waiting(), a_restored_node_refuses_to_publish_until_its_history_is_back(), heads(), import_into_a_fresh_device_gives_an_empty_node_with_the_same_identity(), import_is_refused_when_a_site_exists() (+10 more)
+
+### Community 31 - "Chain Checkpoint Decoding"
+Cohesion: 0.19
+Nodes (19): check_version(), checkpoint_pda(), decode_checkpoint(), decode_member(), decode_site(), decodes_the_real_site_account(), member(), member_pda() (+11 more)
+
+### Community 32 - "Identity Encryption"
 Cohesion: 0.11
 Nodes (16): cipher(), export_identity(), import_identity(), MIN_PASSWORD, NONCE, PREFIX, SALT, VERSION (+8 more)
 
-### Community 12 - "Convergence and Fork Tests"
-Cohesion: 0.15
-Nodes (12): genesis_from_json(), gossip(), a_forked_author_converges_to_one_branch_in_any_delivery_order(), after_losing_a_fork_our_next_event_builds_on_the_winner(), any_delivery_order_gives_the_same_state(), random_action(), replay(), Rng (+4 more)
+### Community 33 - "Profile Fetch"
+Cohesion: 0.10
+Nodes (18): about_of(), account(), clean_about(), DETAILS_SCHEMA, is_staff(), MAX_ABOUT, MAX_ANNOUNCES, MAX_ASKED (+10 more)
 
-### Community 13 - "Core Module Metadata"
-Cohesion: 0.08
-Nodes (23): category, extra_include_dirs, extra_link_libraries, extra_sources, find_packages, codegen, rust, dependencies (+15 more)
-
-### Community 14 - "Identity Import Tests"
+### Community 34 - "Chain Roster Persistence"
 Cohesion: 0.17
-Nodes (16): import_into(), a_failed_import_writes_nothing(), a_peer_naming_a_later_seq_keeps_us_waiting(), a_restored_node_refuses_to_publish_until_its_history_is_back(), heads(), import_into_a_fresh_device_gives_an_empty_node_with_the_same_identity(), import_is_refused_when_a_site_exists(), note() (+8 more)
+Nodes (6): Chain, key(), now_ms(), people_lists_have_the_shape_of_main_qml(), rank_name(), refresh_fills_the_roster()
 
-### Community 15 - "Location Retirement Tests"
-Cohesion: 0.17
-Nodes (17): a_reopen_cannot_bring_an_issue_back_onto_a_retired_location(), a_report_on_a_retired_location_is_rejected_and_kept(), a_report_racing_a_retire_converges_on_every_replica(), act(), an_admin_retires_a_location_with_no_open_issues(), claim(), confirm(), is_retired() (+9 more)
+### Community 35 - "Checkpoint Decode Fuzzing"
+Cohesion: 0.12
+Nodes (7): a_blob_is_kept_only_when_hash_and_signature_hold(), an_inline_profile_has_a_cap_and_a_bigger_file_is_not_a_blob(), announce(), blob_of(), every_message_kind_round_trips(), garbage_is_rejected(), size_limits_hold()
 
-### Community 16 - "UI Module Metadata"
+### Community 36 - "Node Action Bodies"
+Cohesion: 0.14
+Nodes (11): action_body(), body_text(), CONFIRM_WAIT_H, deadline(), HEADS_TO_SETTLE, kind_name(), past(), Restore (+3 more)
+
+### Community 37 - "Chain Effects"
 Cohesion: 0.09
-Nodes (21): category, extra_include_dirs, extra_link_libraries, extra_sources, find_packages, dependencies, description, display_name (+13 more)
+Nodes (21): Effect, Anchor, AnchorSigner, Approve, ApproveSite, BalanceAtLeast, ClockIs, CreateMember (+13 more)
 
-### Community 17 - "Checkpoint Records"
-Cohesion: 0.21
+### Community 38 - "Fetched Announcements"
+Cohesion: 0.14
+Nodes (3): Fetched, Partial, Announce
+
+### Community 39 - "Test Harness Gossip"
+Cohesion: 0.20
+Nodes (15): comment(), equip(), gossip(), node(), roles_key(), second_device(), Site, with() (+7 more)
+
+### Community 40 - "Publishing Helpers"
+Cohesion: 0.14
+Nodes (9): err(), now(), on_wire(), publish(), publish_with(), save(), start_site(), wire_chain() (+1 more)
+
+### Community 41 - "Delivery Status"
+Cohesion: 0.23
+Nodes (8): delivery_status(), flush(), id_reply(), now_ms(), queued(), queued_reply(), read_with_queue(), write_tick()
+
+### Community 42 - "UI Module Config"
+Cohesion: 0.10
+Nodes (20): category, extra_include_dirs, extra_link_libraries, extra_sources, find_packages, dependencies, description, display_name (+12 more)
+
+### Community 43 - "UI Lifecycle"
+Cohesion: 0.16
+Nodes (4): later(), place(), Pukaar, read()
+
+### Community 44 - "Local Persistence"
+Cohesion: 0.20
+Nodes (13): account_b58(), join_site(), leave(), LEFT, left_list(), load(), load_or_create_key(), remove_if_present() (+5 more)
+
+### Community 45 - "State Reducer"
+Cohesion: 0.23
+Nodes (12): issue_json(), apply(), CheckpointRecord, Config, Issue, issue_of(), not_permitted(), Progress (+4 more)
+
+### Community 46 - "Checkpoint Signing"
+Cohesion: 0.20
 Nodes (10): Checkpoint, checkpoint_now(), CP_DOMAIN, cp_message(), leaf(), merkle_root(), n_events(), root_for() (+2 more)
 
-### Community 18 - "Event Encoding"
-Cohesion: 0.15
-Nodes (10): decode(), DOMAIN, Event, location_texts(), MAX_EVENT_BYTES, MAX_TEXT, OTHER_LOCATION, Unsigned (+2 more)
+### Community 47 - "Sync Delivery"
+Cohesion: 0.14
+Nodes (15): ANSWERERS, BLOB_CHUNK, DELIVERY_CFG, lost_node(), MAX_CHUNKS, MAX_FALLBACK, MAX_RESEND, MAX_WIRE_BYTES (+7 more)
 
-### Community 19 - "Persistence Layer"
+### Community 48 - "Staff Grants and Revokes"
 Cohesion: 0.27
-Nodes (10): join_site(), leave(), LEFT, left_list(), load_or_create_key(), remove_if_present(), RESTORING, save() (+2 more)
+Nodes (12): parse_id(), drop_held(), grant(), push_staff_name(), reject(), revoke(), send_batch(), set_staff_name() (+4 more)
 
-### Community 20 - "History Screen Spec"
+### Community 49 - "Local Deploy Scripts"
+Cohesion: 0.24
+Nodes (16): deploy(), expect(), fail(), LEE_WALLET_HOME_DIR, mem(), neg(), new_account(), NOW() (+8 more)
+
+### Community 50 - "Cycle Helpers"
+Cohesion: 0.22
+Nodes (6): clean(), cycle(), Details, fetch_cycle(), Store, sync_once()
+
+### Community 51 - "Site Intents"
+Cohesion: 0.12
+Nodes (14): Intent, Anchor, Approve, CreateSite, Details, Places, Publish, Revoke (+6 more)
+
+### Community 52 - "Event Format Tests"
+Cohesion: 0.30
+Nodes (12): new_key(), every_text_is_capped_on_receipt(), GOLDEN_REPORT, only_issue_events_and_checkpoints_are_bodies(), report(), round_trip(), size_limits(), tampered_byte_fails_signature() (+4 more)
+
+### Community 53 - "Approval Queue"
+Cohesion: 0.15
+Nodes (12): ApproveReq, KEEP_DONE, LAND_WINDOW_MS, MAX_REJECTED, MAX_REQUESTS, PREP_WINDOW_MS, Prof, ProfReq (+4 more)
+
+### Community 54 - "Role Resolution Tests"
+Cohesion: 0.26
+Nodes (10): at_most_one_refresh_per_ten_seconds(), role_is_the_newest_known_at_any_block(), lamport_must_increase_along_a_chain(), out_of_order_events_wait_then_apply(), resend_is_capped(), branch(), chain(), event() (+2 more)
+
+### Community 55 - "Store Consistency Tests"
+Cohesion: 0.26
+Nodes (8): a_displaced_branch_and_its_descendants_become_evidence(), an_event_for_another_site_is_rejected(), equivocation_is_caught(), held_ids(), store_with(), the_alternatives_cap_keeps_the_lowest_ids_in_any_order(), the_lower_id_wins_whichever_arrives_first(), twins()
+
+### Community 56 - "Meet Answer Flow"
+Cohesion: 0.21
+Nodes (5): key_arg(), meet(), meet_answer(), meet_send(), ms_arg()
+
+### Community 57 - "Testnet Scripts"
+Cohesion: 0.29
+Nodes (13): bal(), check(), die(), fin(), LEE_WALLET_HOME_DIR, log(), mem(), PUKAAR_PAYER (+5 more)
+
+### Community 58 - "UI Feature Docs"
 Cohesion: 0.14
 Nodes (14): History filters (search, place, status, when, only my reports), History screen (resolved/closed archive), History table grouped by month with closing notes, Anchored integrity banner with Open Integrity link, Nothing is deleted; issues can be reopened, SLA target breach warnings (acknowledged/fixed late), One-line description, minimal-effort reporting, Place picker list grouped by type with search and group filter (+6 more)
 
-### Community 21 - "People Screen Spec"
+### Community 59 - "People Screen Docs"
 Cohesion: 0.15
 Nodes (14): People screen (07-people.png), Members list with role chips and actions, Role hierarchy: Resident, Steward, Admin, Super admin, Super admin chip and Transfer super admin, Waiting for approval section with fingerprint, Places and Change log screen (08-places-change-log.png), Change log table (When, Place, Action, By, Reason), Nothing is deleted: retire/hide keeps signed history (+6 more)
 
-### Community 22 - "Registry Program Guest"
+### Community 60 - "Roster Cache"
+Cohesion: 0.26
+Nodes (9): b58(), a_failed_read_keeps_the_old_cache(), a_promoted_or_revoked_author_is_judged_by_the_newest_role(), a_site_that_is_not_on_the_chain_is_an_error(), acct(), edit(), Fake, lez_text_and_balance_read() (+1 more)
+
+### Community 61 - "Wire Protocol"
+Cohesion: 0.15
+Nodes (11): Wire, BlobChunk, BlobReq, Busy, ChainPending, Event, JoinDecline, JoinReq (+3 more)
+
+### Community 62 - "Link State"
+Cohesion: 0.15
+Nodes (7): Link, Down, Listening, Open, Started, Starting, Shared
+
+### Community 63 - "Registry Checkpoints"
 Cohesion: 0.17
 Nodes (4): anchor(), CheckpointRecord, anchor(), CheckpointRecord
 
-### Community 23 - "Architecture Diagram"
+### Community 64 - "Checkpoint Architecture Notes"
 Cohesion: 0.18
 Nodes (13): Checkpoint, CheckpointRecord PDAs, Content topic /pukaar/1/site-<site_hex>/proto, delivery_module, LEZ, Logos Basecamp 0.3.1, Peer device, pukaar_core (+5 more)
 
-### Community 24 - "Board Screen Spec"
+### Community 66 - "Settlement Reads"
+Cohesion: 0.27
+Nodes (5): body_of(), claimed(), read_site(), Reads, SHORT_OF_FUNDS
+
+### Community 67 - "Issue Status"
+Cohesion: 0.18
+Nodes (8): Status, Acknowledged, AwaitingConfirmation, ClosedWontfix, ConfirmedResolved, Duplicate, InProgress, Open
+
+### Community 68 - "Heads Resend"
+Cohesion: 0.35
+Nodes (9): heads_msg(), resend(), to_resend(), to_resend_own(), Heads, a_behind_store_catches_up_from_heads(), a_join_published_while_delivery_was_down_still_reaches_the_admin(), a_peer_on_the_losing_branch_gets_the_winner_even_when_ahead() (+1 more)
+
+### Community 69 - "Chain Role Judging Tests"
+Cohesion: 0.33
+Nodes (8): a_checkpoint_from_a_non_member_is_rejected_too(), a_resident_who_is_not_the_reporter_votes_and_staff_do_not(), an_author_who_was_not_a_member_at_the_chain_block_is_rejected_and_kept(), as_rank(), only_staff_acknowledge_claim_and_close(), report(), the_chain_block_decides_not_the_arrival_time(), why()
+
+### Community 70 - "Convergence Tests"
+Cohesion: 0.38
+Nodes (5): a_forked_author_converges_to_one_branch_in_any_delivery_order(), any_delivery_order_gives_the_same_state(), random_action(), replay(), Rng
+
+### Community 71 - "LGX Build Scripts"
+Cohesion: 0.40
+Nodes (8): busy(), fail(), heartbeat(), out(), run_module(), say(), build-lgx.sh script, status()
+
+### Community 72 - "Canonical Action Bodies"
+Cohesion: 0.20
+Nodes (3): canonical(), save_then_load_gives_the_same_state(), view()
+
+### Community 73 - "Chain Writer"
+Cohesion: 0.24
+Nodes (6): ChainWriter, KeyState, Failed, Ready, Unknown, send()
+
+### Community 74 - "Write Kinds"
+Cohesion: 0.20
+Nodes (9): WriteKind, Anchor, Approve, CreateSite, Revoke, SetProfile, SetRole, SetSite (+1 more)
+
+### Community 75 - "Action Types"
+Cohesion: 0.20
+Nodes (10): Action, Anchor, Approve, Revoke, SetProfile, SetRole, SetSite, SuperAdminAdd (+2 more)
+
+### Community 76 - "Board UI Docs"
 Cohesion: 0.22
 Nodes (10): Board kanban columns (Reported, In progress, Resolved, Closed without fix), Older fixed issues, nothing deleted (History link), Overdue and unacknowledged warnings on report cards, Sidebar nav (Board, Report, History, People, Places) with ward selector and delivery status, Report detail side panel with steward actions, Not available to you explainer for disabled actions, Why it isn't closed yet: 3-step closure checklist, Reporter confirmation flow (Confirm it's fixed or Reopen with reason) (+2 more)
 
-### Community 26 - "Decode Errors"
+### Community 77 - "Write Queue States"
 Cohesion: 0.22
-Nodes (9): DecodeError, BadDomain, BadKey, BadSig, BadVersion, Malformed, TextTooLong, TooLarge (+1 more)
+Nodes (9): St, Done, Held, Landed, Preparing, Queued, Rejected, Sending (+1 more)
 
-### Community 27 - "CI Workflow"
+### Community 78 - "CI Pipeline"
 Cohesion: 0.32
 Nodes (8): CI Workflow (ci), cargo-fuzz decode target (60s), cargo test + clippy -D warnings, fuzz-smoke job, logic job, modules metadata.json version consistency, modules/pukaar_core/rust-lib/logic, version job
 
-### Community 28 - "Notice Outcomes and Roles"
-Cohesion: 0.25
-Nodes (7): NoticeOutcome, Remove, Steward, Role, Admin, Resident, Steward
+### Community 79 - "Anchor Application"
+Cohesion: 0.39
+Nodes (6): anchor_writes_once(), apply_anchor(), check_anchor(), CheckpointRecord, rec(), record_round_trip_is_168_bytes()
 
-### Community 29 - "Persistence Round Trips"
+### Community 80 - "Member Records"
+Cohesion: 0.29
+Nodes (8): member_record(), member_seed(), member_written_once(), sha(), JOIN_BATCH, PLACE_REMOVAL, ROSTER, SITE_ID
+
+### Community 82 - "Local Anchor Scripts"
 Cohesion: 0.38
-Nodes (7): load(), copy_all(), second_device(), the_syncing_flag_survives_a_restart_and_clears_on_disk(), a_name_the_admin_gives_a_resident_shows_on_both_sides_until_they_change_it(), fork_evidence_survives_a_restart_whatever_the_file_order(), save_then_load_gives_the_same_state()
+Nodes (6): deploy(), LEE_WALLET_HOME_DIR, new_account(), PUKAAR_PAYER, PUKAAR_PROGRAM_ID, local-anchor.sh script
 
-### Community 30 - "Test Site Fixtures"
-Cohesion: 0.52
-Nodes (3): genesis(), Site, with()
-
-### Community 31 - "Brand Logo and Icon"
+### Community 83 - "Brand Assets"
 Cohesion: 0.47
 Nodes (6): Pukaar app icon (bell, orange-magenta gradient, 256px), Pukaar color logo (PNG), Pukaar color logo (SVG), Pukaar mono logo (PNG, dark bell), Pukaar mono logo (SVG, dark bell), Pukaar bell mark (hanging bell on chain link, calling/alert metaphor)
 
-### Community 33 - "Core Build Config"
-Cohesion: 0.67
-Nodes (3): pukaar_core CMakeLists.txt, LogosModule.cmake helper, metadata.json
+### Community 84 - "Workspace Crates"
+Cohesion: 0.33
+Nodes (6): pukaar_core, pukaar_logic, pukaar_logic-fuzz, pukaar_sites_guest, pukaar_sites_rules, pukaar_sites_runner
 
-### Community 34 - "Package Definitions"
+### Community 85 - "Storage Direct Scripts"
+Cohesion: 0.53
+Nodes (5): log_after(), pid_of(), refuse_if_running(), storage-direct.sh script, since()
+
+### Community 87 - "Module Build Config"
+Cohesion: 0.50
+Nodes (4): LogosModule.cmake, pukaar_core CMake module, metadata.json, Rust crate (rust-lib)
+
+### Community 88 - "Super Admin Actions"
+Cohesion: 0.50
+Nodes (4): SuperKind, Add, Remove, Transfer
+
+### Community 91 - "Local LEZ Scripts"
+Cohesion: 0.50
+Nodes (3): LEE_WALLET_HOME_DIR, LEZ_HOMES, lez-local.sh script
+
+### Community 93 - "Member Status"
 Cohesion: 0.67
-Nodes (3): pukaar_core, pukaar_logic, pukaar_logic-fuzz
+Nodes (3): MemberStatus, Active, Removed
 
 ## Knowledge Gaps
-- **188 isolated node(s):** `name`, `display_name`, `version`, `type`, `interface` (+183 more)
-  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 297 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
-- **14 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **449 isolated node(s):** `name`, `display_name`, `version`, `type`, `interface` (+444 more)
+  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 707 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
+- **23 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `Node` connect `Node State Machine` to `Logos Runtime and Atomics`, `Super Admin Lifecycle Tests`, `Member Lifecycle Tests`, `Store and Event Outcomes`, `Location Tests`, `Identity Crypto and Backup`, `Convergence and Fork Tests`, `Identity Import Tests`, `Location Retirement Tests`, `Checkpoint Records`, `Persistence Layer`, `Persistence Tests`, `Persistence Round Trips`, `Test Site Fixtures`?**
-  _High betweenness centrality (0.333) - this node is a cross-community bridge._
+- **Why does `Node` connect `Node Fingerprint and Sync` to `Chain Write Operations`, `Peer Discovery and Blob Sync`, `Core Library Subscriptions`, `RPC Agent Cache`, `Anchor Operations`, `Report Lifecycle`, `Identity Import`, `Identity Encryption`, `Node Action Bodies`, `Fetched Announcements`, `Publishing Helpers`, `Delivery Status`, `UI Lifecycle`, `Local Persistence`, `State Reducer`, `Checkpoint Signing`, `Staff Grants and Revokes`, `Meet Answer Flow`, `Link State`, `Chain Role Judging Tests`, `Convergence Tests`, `Canonical Action Bodies`, `Meet Backup`?**
+  _High betweenness centrality (0.144) - this node is a cross-community bridge._
 - **What connects `name`, `display_name`, `version` to the rest of the system?**
-  _188 weakly-connected nodes found - possible documentation gaps or missing edges._
-- **Should `Checkpoint Signing and Sync` be split into smaller, more focused modules?**
-  _Cohesion score 0.05158324821246169 - nodes in this community are weakly interconnected._
-- **Why does `Body` connect `Event Body Variants` to `Checkpoint Signing and Sync`, `Logos Runtime and Atomics`, `Location and Event Payloads`, `Node State Machine`, `Super Admin Lifecycle Tests`, `Convergence and Fork Tests`, `Location Retirement Tests`, `Event Encoding`, `Notice Outcomes and Roles`, `Test Site Fixtures`?**
-  _High betweenness centrality (0.101) - this node is a cross-community bridge._
-- **Should `Logos Runtime and Atomics` be split into smaller, more focused modules?**
-  _Cohesion score 0.0531883632089333 - nodes in this community are weakly interconnected._
-- **Why does `Store` connect `Store and Event Outcomes` to `Checkpoint Signing and Sync`, `Checkpoint Records`, `Node State Machine`?**
-  _High betweenness centrality (0.096) - this node is a cross-community bridge._
-- **Should `Location and Event Payloads` be split into smaller, more focused modules?**
-  _Cohesion score 0.061754385964912284 - nodes in this community are weakly interconnected._
+  _449 weakly-connected nodes found - possible documentation gaps or missing edges._
+- **Should `Meet Protocol` be split into smaller, more focused modules?**
+  _Cohesion score 0.05504950495049505 - nodes in this community are weakly interconnected._
+- **Why does `Queue` connect `Anchor Queue` to `Concurrency Primitives`, `Settlement Reads`, `Announcements and Membership`, `Chain Writer`, `Delivery Status`, `Staff Grants and Revokes`, `Blob Storage`, `Node Fingerprint and Sync`, `Approval Queue`, `Core Library Subscriptions`, `Anchor Operations`, `Keyring Context`?**
+  _High betweenness centrality (0.047) - this node is a cross-community bridge._
+- **Should `Concurrency Primitives` be split into smaller, more focused modules?**
+  _Cohesion score 0.08122036693465265 - nodes in this community are weakly interconnected._
+- **Why does `Rank` connect `Test Harness Gossip` to `Roster Queries`, `Settlement Reads`, `Chain Roster Persistence`, `Node Action Bodies`, `Chain Write Operations`, `Chain Role Judging Tests`, `Convergence Tests`, `Program Account Checks`, `Clock and LEE Core`, `State Reducer`, `Membership Role Tests`, `Staff Grants and Revokes`, `Roles and Permissions`, `Node Fingerprint and Sync`?**
+  _High betweenness centrality (0.043) - this node is a cross-community bridge._
+- **Should `Chain Write Operations` be split into smaller, more focused modules?**
+  _Cohesion score 0.07080745341614907 - nodes in this community are weakly interconnected._
