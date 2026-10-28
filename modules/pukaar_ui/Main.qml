@@ -57,11 +57,18 @@ Item {
     property var chat: ({ threads: [], known: [], chat: ({}) })   // chat_threads
     property string chatWith: ""         // the member whose thread is open, "" = none
     property var chatMessages: []        // chat_messages of chatWith, oldest first
-    function applyChat(c) { if (c && Array.isArray(c.threads)) chat = c }
+    function applyChat(c) {
+        if (!c || !Array.isArray(c.threads)) return
+        chat = c
+        // the open thread is read: clear its dot (the next poll shows the new flag)
+        if (page === "messages" && c.threads.some(function (t) { return t.key === chatWith && t.unread }))
+            call("chat_mark_read", [chatWith], function () {})
+    }
     function applyChatMessages(v) { if (v && Array.isArray(v.messages)) chatMessages = v.messages }
     function openChat(key) {
         chatWith = key; chatMessages = []; seen["chat_messages"] = ""      // the poll must apply the reply even when it equals the last one
         call("chat_messages", [key], applyChatMessages)
+        poll("chat_threads", [], applyChat)      // fresh `known` and `unread` for the thread that opens
         openPage("messages")
     }
     function chatTime(ms) {
@@ -819,7 +826,8 @@ Item {
         property bool current: false
         property bool compact: false
         property int count: 0
-        readonly property string waiting: count > 0 ? ", " + count + " waiting" : ""
+        property bool dot: false      // something new, no number (unread messages)
+        readonly property string waiting: count > 0 ? ", " + count + " waiting" : dot ? ", unread" : ""
         readonly property color ink: current ? root.t.sbActFg : root.t.sbFg
         readonly property color iconInk: current ? root.t.sbActIcon : root.t.sbIcon
         Layout.fillWidth: true
@@ -842,6 +850,12 @@ Item {
                 y: nav.compact ? 2 : (parent.height - height) / 2
                 Label { id: pill; anchors.centerIn: parent; text: nav.count; color: root.t.onPrimary; font.pointSize: root.smallSize; font.weight: Font.DemiBold }
             }
+            Rectangle {   // the unread dot: right of the label, or the rail icon's top-right corner
+                visible: nav.dot && nav.count === 0
+                width: 10; height: 10; radius: 5; color: root.t.primary
+                x: parent.width - width - (nav.compact ? 6 : 14)
+                y: nav.compact ? 6 : (parent.height - height) / 2
+            }
         }
         contentItem: Item {
             implicitHeight: nav.compact ? 0 : lines.implicitHeight
@@ -849,7 +863,7 @@ Item {
             Column {
                 id: lines
                 visible: !nav.compact
-                x: 32; width: parent.width - 32 - (nav.count > 0 ? 36 : 0); anchors.verticalCenter: parent.verticalCenter
+                x: 32; width: parent.width - 32 - (nav.count > 0 || nav.dot ? 36 : 0); anchors.verticalCenter: parent.verticalCenter
                 Label { width: parent.width; text: nav.text; color: nav.ink; elide: Text.ElideRight; font.weight: nav.current ? Font.DemiBold : Font.Medium }
             }
         }
@@ -2065,6 +2079,9 @@ Item {
     }
 
     Timer { interval: 2000; running: true; repeat: true; triggeredOnStart: true; onTriggered: root.refresh() }
+    // The Messages tab dot needs the chat list when the page is not open: refresh() reads it only on the Messages page, every 2 s.
+    // A slow poll here, because chat_threads asks the chat module.
+    Timer { interval: 20000; running: root.inSite && root.approved && root.page !== "messages"; repeat: true; triggeredOnStart: true; onTriggered: root.poll("chat_threads", [], root.applyChat) }
 
     Rectangle { anchors.fill: parent; color: root.t.page }     // the page never shows the host's window colour
 
@@ -2134,7 +2151,7 @@ Item {
                         { label: "Report", icon: "report", page: "report" },
                         { label: "History", icon: "hist", page: "history" },
                         { label: "People", icon: "members", page: "people", count: root.isAdmin ? root.pending.length : 0 },   // the admin's waiting count
-                        { label: "Messages", icon: "cmt", page: "messages" },
+                        { label: "Messages", icon: "cmt", page: "messages", dot: root.chat.unread === true && root.page !== "messages" },
                         { label: "Meetings", icon: "bell", page: "meet", count: root.meets.meetings.filter(function (m) { return m.status === "proposed" && m.you === "invitee" }).length },   // requests that wait for us
                         { label: "Places", icon: "pin", page: "places" }
                     ].filter(function (e) { return root.approved || ["report", "meet", "messages"].indexOf(e.page) < 0 })   // a pending key cannot report, meet or message
@@ -2142,7 +2159,7 @@ Item {
                         required property var modelData
                         text: modelData.label; glyph: modelData.icon
                         current: root.page === modelData.page || (modelData.page === "people" && root.page === "member"); compact: !sidebar.open
-                        count: modelData.count || 0
+                        count: modelData.count || 0; dot: !!modelData.dot
                         onClicked: root.openPage(modelData.page)
                     }
                 }
@@ -3021,6 +3038,7 @@ Item {
                                             text: "View profile  ›"; Accessible.name: "Open the profile of " + memberRow.person
                                             onClicked: root.showMember(memberRow.modelData.key)
                                         }
+                                        LinkButton { visible: !memberRow.own && root.approved; text: "Message  ›"; Accessible.name: "Message " + memberRow.person; onClicked: root.openChat(memberRow.modelData.key) }
                                         LinkButton { visible: !memberRow.own && root.approved; text: "1:1 meeting  ›"; Accessible.name: "Plan a 1:1 meeting with " + memberRow.person; onClicked: root.startMeet(memberRow.modelData) }
                                         Label {   // O5: a staff name counts only with the signature of an admin
                                             visible: memberRow.elevated
@@ -4132,6 +4150,7 @@ Item {
                         visible: memberPage.ok && !memberPage.v.removed
                         spacing: 12
                         ActionButton { visible: memberPage.ok && memberPage.v.own; text: "Edit your profile"; kind: "primary"; onClicked: root.openPage("profile") }
+                        ActionButton { visible: memberPage.ok && !memberPage.v.own && root.approved; text: "Message"; onClicked: root.openChat(root.viewKey) }
                         ActionButton { visible: memberPage.ok && !memberPage.v.own && root.approved; text: "Plan a 1:1 meeting"; onClicked: root.startMeet(memberPage.v) }
                     }
                 }
@@ -4241,7 +4260,7 @@ Item {
                                     LinkButton { visible: !chatPage.twoPane; text: "‹  Back"; Accessible.name: "Back to the chats"; onClicked: root.chatWith = "" }
                                     Label { Layout.fillWidth: true; elide: Text.ElideRight; textFormat: Text.PlainText; font.weight: Font.DemiBold; font.pointSize: root.baseSize * 16 / 14; text: chatPage.currentName }
                                 }
-                                Help { visible: !chatPage.hasAddress; text: "Their chat address has not arrived yet. Your message is kept and goes out when it does." }
+                                Help { visible: !chatPage.hasAddress; text: "Their chat address has not arrived yet. Your message waits in the queue and goes out when it arrives." }
                                 ListView {
                                     id: thread
                                     Layout.fillWidth: true; Layout.fillHeight: true
