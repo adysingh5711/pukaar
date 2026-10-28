@@ -1,7 +1,7 @@
 {
   "name": "pukaar_ui",
   "display_name": "Pukaar",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "ui_qml",
   "category": "civic",
   "description": "Report, track and confirm fixes at your site",
