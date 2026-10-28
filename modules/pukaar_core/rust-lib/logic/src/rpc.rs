@@ -255,9 +255,9 @@ impl Chain {
         true
     }
 
-    /// The chain role of an author at `block`. ponytail: the roster holds only the newest state
-    /// and the app has no block times, so every block gets the newest known role. A member who is
-    /// revoked now loses the old events too. The anchor-bound rule of O10 (2.5) fixes that.
+    /// The chain role of an author. O10 (user decision): the newest role on the chain counts for every
+    /// block, so `block` is not used. A member who is revoked now loses the old events too, and a
+    /// promoted member gets the new rank for them. No anchor rule: an anchor costs its own transaction.
     pub fn role_at(&self, who: &Key, _block: u64) -> Option<Rank> {
         self.roster.role_of(who, now_ms())
     }
@@ -459,6 +459,44 @@ mod tests {
         for block in [0, 1, 99, 100, 101, u64::MAX] {
             assert_eq!(c.role_at(&key(2), block), Some(Rank::Admin), "block {block}");
             assert_eq!(c.role_at(&key(3), block), None, "block {block}");
+        }
+    }
+
+    /// Change the record of test user `n` that the fake chain serves.
+    fn edit(f: &Fake, n: u8, change: impl Fn(&mut Member)) {
+        let p = program();
+        let at = b58(&member_pda(&p, &site_id(), &acct(n)));
+        let mut m = crate::chain::decode_member(&shard_of(&f.accounts.lock().unwrap()[&at], &p).unwrap()).unwrap();
+        change(&mut m);
+        let json = format!(r#"{{"jsonrpc":"2.0","id":1,"result":{{"nonce":0,"data":{{"shards":{{"{}":{:?}}}}}}}}}"#, b58(&p), m.encode());
+        f.accounts.lock().unwrap().insert(at, json);
+    }
+
+    /// O10 (user decision): the newest role on the chain counts for every event, old or new.
+    #[test]
+    fn a_promoted_or_revoked_author_is_judged_by_the_newest_role() {
+        use crate::event::Body;
+        let (c, f) = (chain(), fake());
+        edit(&f, 2, |m| m.role = pukaar_sites_rules::Role::Resident);
+        refresh(&c, &f); // block 100: t2 is a resident
+        let mut n = crate::node::Node::join(ed25519_dalek::SigningKey::from_bytes(&[2; 32]), site_id());
+        n.attach_chain(c.clone());
+        n.config = crate::reducer::Config { categories: vec!["water".into()], max_open_per_author: 5, ..Default::default() };
+        n.locations = vec![crate::event::Location { code: "W-01".into(), label: "Tap".into(), group: "Water".into() }];
+        let issue = n.publish(Body::Report { category: "water".into(), location: "W-01".into(), landmark: String::new(), text: "leak".into() }, 10).unwrap().id;
+        let old = n.publish(Body::Acknowledge { issue, note: "on it".into(), eta_h: 1 }, 11).unwrap(); // signed at block 100
+        assert!(n.state().rejected[&old.id].contains("only stewards"), "a resident cannot acknowledge");
+        *f.block.lock().unwrap() = Some(200);
+        edit(&f, 2, |m| m.role = pukaar_sites_rules::Role::Steward);
+        refresh(&c, &f);
+        assert!(!n.state().rejected.contains_key(&old.id), "promoted: the old event counts with the newest role");
+        *f.block.lock().unwrap() = Some(300);
+        let revoke = pukaar_sites_rules::Revocation { by: acct(1), at_ms: 1, reason_sha256: [0; 32] };
+        edit(&f, 2, |m| m.revoked = Some(revoke.clone()));
+        refresh(&c, &f);
+        assert!(n.state().rejected[&old.id].contains("not an approved member"), "revoked: every old event is rejected");
+        for block in [0, 100, 299, 300, u64::MAX] {
+            assert_eq!(c.lock().unwrap().role_of_author(&key(2), Some(&acct(2)), block), None, "block {block}");
         }
     }
 
