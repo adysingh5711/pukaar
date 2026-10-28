@@ -147,6 +147,20 @@ pub struct Member {
     pub last_req_nonce: u64,
 }
 
+/// The backup pointer of one member: where the encrypted meetings backup is in Storage. One record per
+/// (site, user), at a fixed address. Each backup overwrites it. It names no meeting.
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct BackupPointer {
+    pub version: u8,
+    pub site_id: [u8; 32],
+    pub user: AccountId,
+    pub cid: String,
+    pub sha256: [u8; 32],
+    /// 1 for the first backup, +1 for each overwrite.
+    pub rev: u64,
+    pub updated_at_ms: u64,
+}
+
 impl Site {
     pub fn encode(&self) -> Vec<u8> {
         borsh::to_vec(self).expect("borsh serialization is infallible")
@@ -163,6 +177,17 @@ impl Site {
 }
 
 impl Member {
+    pub fn encode(&self) -> Vec<u8> {
+        borsh::to_vec(self).expect("borsh serialization is infallible")
+    }
+
+    /// `None` unless `bytes` is exactly one record.
+    pub fn decode(bytes: &[u8]) -> Option<Self> {
+        borsh::from_slice(bytes).ok()
+    }
+}
+
+impl BackupPointer {
     pub fn encode(&self) -> Vec<u8> {
         borsh::to_vec(self).expect("borsh serialization is infallible")
     }
@@ -190,6 +215,7 @@ pub mod seed {
     pub const SITE: &[u8] = b"pukaar/site/v1";
     pub const MEMBER: &[u8] = b"pukaar/member/v1";
     pub const ROSTER: &[u8] = b"pukaar/roster/v1";
+    pub const BACKUP: &[u8] = b"pukaar/backup/v1";
     /// Reserved for P3 (`anchor_requests`).
     pub const JOIN_BATCH: &[u8] = b"pukaar/joinbatch/v1";
     /// Reserved for P4 (place removal).
@@ -206,6 +232,10 @@ pub mod seed {
 
     pub fn member(site_id: &[u8; 32], user: &AccountId) -> [u8; 32] {
         sha(&[MEMBER, site_id, user])
+    }
+
+    pub fn backup(site_id: &[u8; 32], user: &AccountId) -> [u8; 32] {
+        sha(&[BACKUP, site_id, user])
     }
 
     pub fn roster(site_id: &[u8; 32], page: u32) -> [u8; 32] {

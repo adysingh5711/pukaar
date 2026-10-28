@@ -50,6 +50,7 @@ pub enum Instruction {
     SuperAdminAdd(SuperAdminIx),
     SuperAdminRemove(SuperAdminIx),
     SuperAdminTransfer(SuperAdminIx),
+    SetBackup(SetBackupIx),
 }
 
 /// What the plan hands to `apply` for one account. New variants are appended, never reordered.
@@ -94,6 +95,10 @@ pub enum Effect {
     SuperRemove { site_id: [u8; 32], actor: Actor, target: AccountId, now_ms: u64 },
     SuperTransfer { site_id: [u8; 32], actor: Actor, target: AccountId, now_ms: u64 },
     Promote { actor: Actor, now_ms: u64 },
+    /// Guard on the signer's `Member`: active in the site, and the signer's own record.
+    BackupSigner { site_id: [u8; 32], signer: AccountId, now_ms: u64 },
+    /// Make or overwrite the backup pointer of `user`.
+    SetBackup { site_id: [u8; 32], user: AccountId, cid: String, sha256: [u8; 32], now_ms: u64 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

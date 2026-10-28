@@ -147,6 +147,14 @@ for who in t5 t3; do   # t5 never joined, t3 was revoked
   expect "anchor by $who wrote no checkpoint" "$(R get-checkpoint "$SITE" "$ROOT")" 'no record'
 done
 
+echo "--- 9. backup pointer: made by the first backup, overwritten at the same address by the next"
+tx t1 set-backup "$SITE" backupone
+expect "set_backup makes the record" "$(R get-backup "$SITE" t1)" 'cid: "backupone"' 'rev: 1,'
+tx t1 set-backup "$SITE" backuptwo
+expect "set_backup overwrites the same record" "$(R get-backup "$SITE" t1)" 'cid: "backuptwo"' 'rev: 2,'
+neg "backup by a non-member" t5 set-backup "$SITE" backupx
+expect "backup by a non-member wrote no pointer" "$(R get-backup "$SITE" t5)" 'None'
+
 echo "--- failed-tx fees at gas_limit ${GAS_LIMIT:-500000}: ${FEES[*]}"
 echo "=== $PASS PASS, $FAIL FAIL (site $SITE, program $HEADER)"
 [ "$FAIL" -eq 0 ]

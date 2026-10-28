@@ -150,6 +150,33 @@ pub fn check_anchor_signer(m: &Member, rec: &CheckpointRecord, signer: &AccountI
     Ok(())
 }
 
+/// Apply of the signer's `Member` for `set_backup`: an active member of the site, and the signer.
+pub fn check_backup_signer(m: &Member, site_id: &[u8; 32], signer: &AccountId, now_ms: u64) -> Result<(), RuleError> {
+    if m.site_id != *site_id || m.user != *signer {
+        return Err(RuleError::WrongRecord);
+    }
+    active_rank(m, now_ms).map(|_| ())
+}
+
+/// Apply of the backup pointer of the signer: the first backup makes the record, each later one overwrites the
+/// CID in the same record. Only the signer's own account is planned, so no one writes the pointer of another.
+pub fn apply_set_backup(
+    pre: Option<BackupPointer>,
+    site_id: &[u8; 32],
+    user: &AccountId,
+    cid: &str,
+    sha256: [u8; 32],
+    now_ms: u64,
+) -> Result<BackupPointer, RuleError> {
+    check_cid(cid)?;
+    let rev = match &pre {
+        Some(p) if p.site_id != *site_id || p.user != *user => return Err(RuleError::WrongRecord),
+        Some(p) => p.rev.saturating_add(1),
+        None => 1,
+    };
+    Ok(BackupPointer { version: RECORD_VERSION, site_id: *site_id, user: *user, cid: cid.into(), sha256, rev, updated_at_ms: now_ms })
+}
+
 // ---- create_site ----
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]

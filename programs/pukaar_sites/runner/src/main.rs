@@ -14,7 +14,7 @@ use hkdf::Hkdf;
 use lee::{AccountId, PrivateKey, ProgramShardSelector, PublicKey, Signature};
 use lee_core::program::PdaSeed;
 use pukaar_sites_rules::{
-    AnchorIx, ApproveBatchIx, ApproveEntry, ApproveItem, Auth, CheckpointRecord, CreateSite, CreateSiteIx, GateConfig, Instruction, JOIN_REQ_LEN,
+    AnchorIx, ApproveBatchIx, BackupPointer, SetBackupIx, ApproveEntry, ApproveItem, Auth, CheckpointRecord, CreateSite, CreateSiteIx, GateConfig, Instruction, JOIN_REQ_LEN,
     JoinBody, Member, ProfileItem, Rank, RevokeBatchIx, RevokeItem, Role, RoleItem, SetPointerIx, SetProfileBatchIx, SetRoleBatchIx, Site,
     SuperAdminIx, checkpoint_seed, member_seed, merkle_leaf, sample_probe, seed,
 };
@@ -34,10 +34,12 @@ Instructions (the signer is PUKAAR_SIGNER; the payer pays):
   set-details|set-places|set-keyring <site> <cid>         the SHA-256 is random test bytes
   super-add|super-remove|super-transfer <site> <user>
   anchor <site> <heads_root_hex> [n_events]               the signer must be an active member
+  set-backup <site> <cid>                                 the signer's own backup pointer: made, or overwritten with the new CID
 Reads and tools:
   get-site <site> [user]      Site, and the Member of `user` if given
   get-member <site> <user>
   get-checkpoint <site> <heads_root_hex>
+  get-backup <site> <user>    the backup pointer of `user` (default: the signer)
   build-join-request <tN|seed_hex> <site> [nonce=<n>] [valid=<ms>]   prints the 290-byte request as hex
   member-key <tN>             prints the LEZ private key (hex) and account id, for `wallet account import public`
   clock                       chain time in ms
@@ -173,6 +175,10 @@ impl Cx {
 
     fn member_pda(&self, site_id: &[u8; 32], user: &AccountId) -> AccountId {
         pda(&self.program, seed::member(site_id, &user.into_value()))
+    }
+
+    fn backup_pda(&self, site_id: &[u8; 32], user: &AccountId) -> AccountId {
+        pda(&self.program, seed::backup(site_id, &user.into_value()))
     }
 
     async fn site(&self, site_id: &[u8; 32]) -> Result<Option<Site>> {
@@ -422,6 +428,15 @@ async fn run(cx: &Cx, cmd: &str, args: &[String]) -> Result<()> {
             };
             let ix = Instruction::Anchor(AnchorIx { record, now_ms: cx.auth(h, args).await?.now_ms });
             cx.send(vec![cx.member_pda(&h, &cx.signer), cp], ix, args).await
+        }
+        "set-backup" => {
+            let ix = SetBackupIx { site_id: h, now_ms: cx.auth(h, args).await?.now_ms, cid: rest.first().context("missing <cid>")?.to_string(), sha256: rnd() };
+            cx.send(vec![cx.member_pda(&h, &cx.signer), cx.backup_pda(&h, &cx.signer)], Instruction::SetBackup(ix), args).await
+        }
+        "get-backup" => {
+            let who = rest.first().map_or(Ok(cx.signer), |u| user(u))?;
+            println!("{:?}", BackupPointer::decode(&cx.shard(cx.backup_pda(&h, &who)).await?));
+            Ok(())
         }
         "get-site" => {
             let site = cx.site(&h).await?;

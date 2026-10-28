@@ -7,6 +7,7 @@
 //!   create_site   signer, Site, creator Member, clock                            (4)
 //!   set_details, set_places, set_keyring, super_admin_remove
 //!                 signer, Site, signer Member, clock                             (4)
+//!   set_backup    signer, signer Member, backup pointer, clock                   (4)
 //!   approve_batch, set_role_batch, revoke_batch, set_profile_batch
 //!                 the four above + one Member per target (the signer's own once) (4 + N)
 //!   super_admin_add, super_admin_transfer: the four above + the target Member    (5)
@@ -196,6 +197,14 @@ fn plan(input: &PlanInput, instruction: Instruction) -> Plan {
                 let m = c.member(&ix.auth.site_id, &i.user);
                 c.plan.effect(&m, &Effect::SetProfile { actor, cid: i.cid, sha256: i.sha256, version: i.version, now_ms: ix.auth.now_ms });
             }
+        }
+        Instruction::SetBackup(SetBackupIx { site_id, now_ms, cid, sha256 }) => {
+            let signer = c.signer().into_value();
+            c.clock(now_ms);
+            let m = c.member(&site_id, &signer);
+            c.plan.effect(&m, &Effect::BackupSigner { site_id, signer, now_ms });
+            let p = c.pda_acct(seed::backup(&site_id, &signer), "backup PDA");
+            c.plan.effect(&p, &Effect::SetBackup { site_id, user: signer, cid, sha256, now_ms });
         }
         Instruction::SuperAdminAdd(ix) => {
             let (actor, site, target) = super_admin(&mut c, &ix, true);

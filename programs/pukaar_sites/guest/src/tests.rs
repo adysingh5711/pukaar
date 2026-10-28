@@ -211,6 +211,7 @@ fn instruction_indices_are_stable() {
     let sa = SuperAdminIx { auth: auth(Rank::SuperAdmin), target: h(1) };
     assert_eq!(b(&Instruction::SuperAdminAdd(sa.clone())), 10);
     assert_eq!(b(&Instruction::SuperAdminTransfer(sa)), 12);
+    assert_eq!(b(&Instruction::SetBackup(SetBackupIx { site_id: site_id(), now_ms: 0, cid: "c".into(), sha256: h(1) })), 13);
 }
 
 #[test]
@@ -491,6 +492,63 @@ fn anchor_needs_an_active_member() {
     let other = Instruction::Anchor(AnchorIx { record: CheckpointRecord { heads_root: h(9), ..CheckpointRecord::decode(&c.shards[&(cp, PROGRAM)]).unwrap() }, now_ms: NOW });
     let cp2 = derive(checkpoint_seed(&site_id(), &h(9)));
     fails(&mut c, vec![signer_meta(R2), prog(member_acct(R2)), prog(cp2), clock_meta()], other, "not active");
+}
+
+fn backup_acct(n: u8) -> AccountId {
+    derive(seed::backup(&site_id(), &user(n).into_value()))
+}
+
+/// signer, signer Member, backup pointer, clock (the order of `anchor`).
+fn backup_call(signer: u8, pointer: u8, cid: &str, sha: u8) -> (Vec<AccountMeta>, Instruction) {
+    let accounts = vec![signer_meta(signer), prog(member_acct(signer)), prog(backup_acct(pointer)), clock_meta()];
+    (accounts, Instruction::SetBackup(SetBackupIx { site_id: site_id(), now_ms: NOW, cid: cid.into(), sha256: h(sha) }))
+}
+
+#[test]
+fn a_backup_overwrites_the_same_record_of_the_member() {
+    let mut c = Chain::full();
+    let rec = |c: &Chain, n: u8| BackupPointer::decode(&c.shards[&(backup_acct(n), PROGRAM)]).unwrap();
+    let (a, ix) = backup_call(R1, R1, "cidone", 1);
+    c.send(a, ix).unwrap();
+    assert_eq!((rec(&c, R1).cid.as_str(), rec(&c, R1).rev, rec(&c, R1).user), ("cidone", 1, user(R1).into_value()));
+    // the second backup: same address, new CID, the count grows
+    let (a, ix) = backup_call(R1, R1, "cidtwo", 2);
+    c.send(a, ix).unwrap();
+    assert_eq!((rec(&c, R1).cid.as_str(), rec(&c, R1).sha256, rec(&c, R1).rev), ("cidtwo", h(2), 2));
+    // one record for each (site, user): R2 starts its own, R1 is untouched
+    let (a, ix) = backup_call(R2, R2, "cidthree", 3);
+    c.send(a, ix).unwrap();
+    assert_eq!((rec(&c, R1).cid.as_str(), rec(&c, R2).cid.as_str()), ("cidtwo", "cidthree"));
+}
+
+#[test]
+fn a_backup_has_negatives() {
+    let mut c = Chain::full();
+    // the pointer of another member is not the signer's: the plan finds no such account
+    let (a, ix) = backup_call(R1, R2, "cidone", 1);
+    fails(&mut c, a, ix, "missing account");
+    // a stranger has no Member record
+    let (a, ix) = backup_call(OUT, OUT, "cidone", 1);
+    fails(&mut c, a, ix, "no record");
+    // a CID is letters and digits
+    let (a, ix) = backup_call(R1, R1, "bad cid!", 1);
+    fails(&mut c, a, ix, "CID");
+    // a removed member
+    let revoke = Instruction::RevokeBatch(RevokeBatchIx {
+        auth: auth(Rank::Admin),
+        keyring_cid: "k3".into(),
+        keyring_sha256: h(1),
+        items: vec![RevokeItem { user: user(R2).into_value(), reason_sha256: h(1) }],
+    });
+    c.send(role_accounts(D, &[R2]), revoke).unwrap();
+    let (a, ix) = backup_call(R2, R2, "cidone", 1);
+    fails(&mut c, a, ix, "not active");
+    // a claim far ahead of the clock
+    let (a, mut ix) = backup_call(R1, R1, "cidone", 1);
+    if let Instruction::SetBackup(b) = &mut ix {
+        b.now_ms = NOW + 10 * 60 * 1000;
+    }
+    fails(&mut c, a, ix, "ahead of the clock");
 }
 
 #[cfg(feature = "probe")]

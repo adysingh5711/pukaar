@@ -102,6 +102,15 @@ pub struct SetProfileBatchIx {
     pub items: Vec<ProfileItem>,
 }
 
+/// `set_backup`: the signer's own pointer. No rank is claimed: any active member may back up.
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct SetBackupIx {
+    pub site_id: [u8; 32],
+    pub now_ms: u64,
+    pub cid: String,
+    pub sha256: [u8; 32],
+}
+
 /// `super_admin_add`, `super_admin_remove` and `super_admin_transfer`.
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct SuperAdminIx {
@@ -163,6 +172,11 @@ pub fn apply_site_effect(effect: &Effect, pre: &[u8]) -> Result<Option<Vec<u8>>,
         }
         Effect::SetProfile { actor, cid, sha256, version, now_ms } => {
             write_member(apply_set_profile(&member(pre)?, cid, *sha256, *version, actor, *now_ms))
+        }
+        Effect::BackupSigner { site_id, signer, now_ms } => check_backup_signer(&member(pre)?, site_id, signer, *now_ms).map(|()| None),
+        Effect::SetBackup { site_id, user, cid, sha256, now_ms } => {
+            let old = if pre.is_empty() { None } else { Some(BackupPointer::decode(pre).ok_or(RuleError::NoRecord)?) };
+            apply_set_backup(old, site_id, user, cid, *sha256, *now_ms).map(|p| Some(p.encode()))
         }
         Effect::SuperAdd { site_id, actor, target, now_ms } => write_site(apply_super_admin_add(&site(pre, site_id)?, actor, target, *now_ms)),
         Effect::SuperRemove { site_id, actor, target, now_ms } => {
