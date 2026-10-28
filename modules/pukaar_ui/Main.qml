@@ -4073,6 +4073,7 @@ Item {
                         var ok = view.slots.filter(function (s) {
                             var a = new Date(s.start_ms), b = new Date(s.end_ms)
                             return a.getDate() === b.getDate() && a.getHours() >= 8 && (b.getHours() < 20 || (b.getHours() === 20 && b.getMinutes() === 0))
+                    readonly property var others: root.approved ? root.members.filter(function (m) { return m.key !== root.me.key }) : []   // who we can plan with
                         })
                         return ok.filter(function (s) { return !s.mine && !s.theirs }).slice(0, 24)
                             .concat(ok.filter(function (s) { return s.mine || s.theirs }).slice(0, 8))
@@ -4126,7 +4127,7 @@ Item {
                     Timer { interval: 20000; running: !!meetPage.target && root.page === "meet"; repeat: true; onTriggered: meetPage.load() }
                     PageHead {
                         title: "Meetings"
-                        lede: "Plan a 1:1 meeting with another member. Open People and choose 1:1 meeting. Times show in your local time."
+                        lede: "Plan a 1:1 meeting with another member: choose who below, or use 1:1 meeting in People. Times show in your local time."
                     }
                     Heading { visible: meetPage.requests.length > 0; text: "Requests" }
                     Frame {
@@ -4156,6 +4157,26 @@ Item {
                                 name: "Length of the meeting"; options: ["30 min", "60 min", "90 min"]
                                 current: [30, 60, 90].indexOf(meetPage.lenMin)
                                 onPicked: function (i) { meetPage.setLen([30, 60, 90][i]) }
+                    Heading { text: "Who" }
+                    Label {
+                        visible: meetPage.others.length === 0
+                        Layout.fillWidth: true; wrapMode: Text.Wrap; color: root.t.muted
+                        text: root.approved ? "No other members yet." : "You can plan a meeting once you have a role."
+                    }
+                    Flow {
+                        Layout.fillWidth: true; spacing: 8
+                        Repeater {
+                            model: meetPage.others
+                            delegate: ActionButton {
+                                id: whoBtn
+                                required property var modelData
+                                text: root.who(modelData.key, modelData.name)
+                                kind: meetPage.target && meetPage.target.key === modelData.key ? "primary" : "default"
+                                Accessible.name: "Plan a 1:1 meeting with " + text
+                                onClicked: root.meetWith = modelData
+                            }
+                        }
+                    }
                             }
                             LinkButton { text: "Close"; onClicked: root.meetWith = null }
                         }
@@ -4227,7 +4248,7 @@ Item {
                         }
                     }
                     Heading { text: "Upcoming" }
-                    Blank { visible: meetPage.upcoming.length === 0; icon: "bell"; title: "No meetings planned"; text: "Open People and choose 1:1 meeting." }
+                    Blank { visible: meetPage.upcoming.length === 0; icon: "bell"; title: "No meetings planned"; text: "Choose who above, or use 1:1 meeting in People." }
                     Frame {
                         visible: meetPage.upcoming.length > 0
                         Layout.fillWidth: true; implicitHeight: ups.implicitHeight; fill: root.t.card; edge: root.t.bd
