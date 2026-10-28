@@ -7,9 +7,10 @@
 use crate::event::{decode, Id};
 use crate::node::{Node, Restore};
 use ed25519_dalek::SigningKey;
+use serde::{de::DeserializeOwned, Serialize};
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Present (holding the restore time, u64 LE) while a restored identity waits for its history.
 const RESTORING: &str = "restoring";
@@ -21,6 +22,49 @@ fn left_list(dir: &Path, site: &Id) -> (Vec<u8>, bool) {
     let left = fs::read(dir.join(LEFT)).unwrap_or_default();
     let named = left.chunks(32).any(|s| s == site);
     (left, named)
+}
+
+/// A JSON file of one site in the data folder (`<PREFIX>-<site>.json`): the meetings, the chat addresses.
+/// The file is the source of truth; a file that cannot be read gives the default.
+pub trait SiteFile: Sized + Serialize + DeserializeOwned + Default {
+    const PREFIX: &'static str;
+
+    /// Remember where the file lives (the fields are not saved).
+    fn bind(&mut self, dir: PathBuf, site: Id);
+    fn site(&self) -> Id;
+    fn folder(&self) -> &Path;
+
+    #[must_use]
+    fn load(dir: &Path, site: Id) -> Self {
+        let mut s: Self = fs::read(path_of::<Self>(dir, &site)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        s.bind(dir.to_path_buf(), site);
+        s
+    }
+
+    /// `self` when it is the file of `site`, else the file of `site` loaded in its place.
+    fn for_site(&mut self, dir: &Path, site: &Id) -> &mut Self {
+        if self.site() != *site {
+            *self = Self::load(dir, *site);
+        }
+        self
+    }
+
+    fn save(&self) {
+        if self.folder().as_os_str().is_empty() {
+            return; // not loaded from a folder (a test)
+        }
+        let r = serde_json::to_vec(self).map_err(io::Error::other).and_then(|b| {
+            fs::create_dir_all(self.folder())?;
+            write_atomic(&path_of::<Self>(self.folder(), &self.site()), &b)
+        });
+        if let Err(e) = r {
+            eprintln!("pukaar: could not save {}: {e}", Self::PREFIX);
+        }
+    }
+}
+
+fn path_of<T: SiteFile>(dir: &Path, site: &Id) -> PathBuf {
+    dir.join(format!("{}-{}.json", T::PREFIX, hex::encode(site)))
 }
 
 fn remove_if_present(path: &Path) -> io::Result<()> {

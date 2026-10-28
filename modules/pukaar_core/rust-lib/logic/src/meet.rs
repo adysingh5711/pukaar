@@ -10,7 +10,7 @@
 
 use crate::event::{sha256, Key};
 use crate::lezkey::{open, seal, x25519_public};
-use crate::persist::write_atomic;
+use crate::persist::SiteFile;
 use crate::profile::{decrypt, encrypt};
 use crate::sync::Wire;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
@@ -126,12 +126,12 @@ impl<T: Serialize> Signed<T> {
         [domain, &site[..], &postcard::to_allocvec(body).expect("postcard encode")].concat()
     }
 
-    fn new(key: &SigningKey, domain: &[u8], site: &Key, body: T) -> Self {
+    pub(crate) fn new(key: &SigningKey, domain: &[u8], site: &Key, body: T) -> Self {
         let sig = key.sign(&Self::message(domain, site, &body)).to_bytes().to_vec();
         Signed { body, sig }
     }
 
-    fn check(&self, domain: &[u8], site: &Key, from: &Key) -> bool {
+    pub(crate) fn check(&self, domain: &[u8], site: &Key, from: &Key) -> bool {
         let (Ok(vk), Ok(sig)) = (VerifyingKey::from_bytes(from), <[u8; 64]>::try_from(&self.sig[..])) else { return false };
         vk.verify_strict(&Self::message(domain, site, &self.body), &ed25519_dalek::Signature::from_bytes(&sig)).is_ok()
     }
@@ -190,6 +190,22 @@ pub struct Meetings {
     pub job_error: Option<String>,
 }
 
+impl SiteFile for Meetings {
+    const PREFIX: &'static str = "meetings";
+
+    fn bind(&mut self, dir: PathBuf, site: Key) {
+        (self.dir, self.site) = (dir, site);
+    }
+
+    fn site(&self) -> Key {
+        self.site
+    }
+
+    fn folder(&self) -> &Path {
+        &self.dir
+    }
+}
+
 impl Default for Meetings {
     fn default() -> Self {
         Meetings {
@@ -213,42 +229,9 @@ fn id_hex(id: &Key) -> String {
 }
 
 impl Meetings {
-    fn path(dir: &Path, site: &Key) -> PathBuf {
-        dir.join(format!("meetings-{}.json", hex::encode(site)))
-    }
-
-    /// Read the file of `site`. A file that cannot be read gives an empty list.
-    #[must_use]
-    pub fn load(dir: &Path, site: Key) -> Meetings {
-        let mut m: Meetings = std::fs::read(Self::path(dir, &site)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
-        (m.site, m.dir) = (site, dir.to_path_buf());
-        m
-    }
-
     #[must_use]
     pub fn dir(&self) -> &Path {
         &self.dir
-    }
-
-    /// `self` when it is the meetings of `site`, else the file of `site` loaded in its place.
-    pub fn for_site(&mut self, dir: &Path, site: &Key) -> &mut Meetings {
-        if self.site != *site {
-            *self = Meetings::load(dir, *site);
-        }
-        self
-    }
-
-    fn save(&self) {
-        if self.dir.as_os_str().is_empty() {
-            return; // not loaded from a folder (a test)
-        }
-        let r = serde_json::to_vec(self).map_err(std::io::Error::other).and_then(|b| {
-            std::fs::create_dir_all(&self.dir)?;
-            write_atomic(&Self::path(&self.dir, &self.site), &b)
-        });
-        if let Err(e) = r {
-            eprintln!("pukaar: could not save the meetings: {e}");
-        }
     }
 
     fn find(&self, id: &Key) -> Option<&Meeting> {

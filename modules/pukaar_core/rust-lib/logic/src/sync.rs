@@ -1,6 +1,7 @@
 //! Anti-entropy: every node broadcasts its heads every 60 s; whoever holds newer
 //! events re-sends them. This is the catch-up path; Delivery's storeQuery is best-effort only.
 
+use crate::chatbook::{AddrMsg, MAX_ADDR};
 use crate::event::{sha256, Key, MAX_EVENT_BYTES};
 use crate::fetch::MAX_ANNOUNCES;
 use crate::meet::{BusyBody, Signed, MAX_MEET_BYTES, MAX_RANGES};
@@ -82,6 +83,8 @@ pub enum Wire {
     /// "Send me the profile announces that I lack": the (author, version) of each announce that the sender holds.
     /// A peer answers with `ProfileAnnounce` for each one that is newer or missing (`Fetched::answer_announces`).
     AnnounceReq(Vec<(Key, u64)>),
+    /// A member's signed chat address (`chatbook`). Held when it comes from an active member.
+    ChatAddr(AddrMsg),
 }
 
 impl Wire {
@@ -113,6 +116,7 @@ impl Wire {
             Wire::Meet(b) => !b.is_empty() && b.len() <= MAX_MEET_BYTES,
             Wire::Busy(b) => b.sig.len() == 64 && b.body.ranges.len() <= MAX_RANGES,
             Wire::AnnounceReq(held) => held.len() <= MAX_ANNOUNCES,
+            Wire::ChatAddr(a) => a.sig.len() == 64 && !a.body.addr.is_empty() && a.body.addr.len() <= MAX_ADDR,
             Wire::Heads(_) | Wire::ChainPending { .. } => true,
         };
         ok.then_some(w)
