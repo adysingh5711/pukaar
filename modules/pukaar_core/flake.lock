@@ -1,5 +1,29 @@
 {
   "nodes": {
+    "chat_module": {
+      "inputs": {
+        "logos-delivery-module": [
+          "delivery_module"
+        ],
+        "logos-module-builder": [
+          "logos-module-builder"
+        ]
+      },
+      "locked": {
+        "lastModified": 1790696142,
+        "narHash": "sha256-gfxbwt7Xk2UpL77ku4OYVxJdo/dMcPilxwzn0TArizc=",
+        "owner": "logos-co",
+        "repo": "logos-chat-module",
+        "rev": "5053dd5062817f34a93055435781c1c448c7ce6c",
+        "type": "github"
+      },
+      "original": {
+        "owner": "logos-co",
+        "ref": "v0.3.0",
+        "repo": "logos-chat-module",
+        "type": "github"
+      }
+    },
     "crane": {
       "locked": {
         "lastModified": 1780532242,
@@ -65411,6 +65435,7 @@
     },
     "root": {
       "inputs": {
+        "chat_module": "chat_module",
         "delivery_module": "delivery_module",
         "logos-module-builder": "logos-module-builder_12",
         "nixpkgs": [

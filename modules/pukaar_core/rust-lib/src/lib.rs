@@ -5,6 +5,7 @@
 //! rust-lib/Cargo.toml); this file only moves bytes between that crate, the
 //! disk and Delivery.
 
+mod chat;
 mod wallet;
 mod storage;
 
@@ -165,6 +166,9 @@ pub trait PukaarCoreModule: Send + 'static {
     /// Reads the CID of your backup from the chain (a typed `cid` is used only when the chain has none), downloads it
     /// from Storage in the background and adds the meetings that are missing.
     fn meet_restore(&mut self, cid: String) -> String;
+    /// Starts `chat_module` on the Delivery preset `logos.dev` and reads its installation address (a new one at each start).
+    /// Safe to call again: `{"address", "delivery", "detail", "adopted", "preset"}`, or `error: …`.
+    fn chat_start(&mut self) -> String;
     fn on_context_ready(&mut self, _ctx: &RustModuleContext) {}
 }
 
@@ -1337,6 +1341,10 @@ impl PukaarCoreModule for Pukaar {
                 }
             },
         )
+    }
+
+    fn chat_start(&mut self) -> String {
+        chat::start().map_or_else(err, |v| v.to_string())
     }
 
     fn meet_restore(&mut self, cid: String) -> String {

@@ -27,6 +27,12 @@
       url = "github:logos-co/logos-storage-module/v3.0.2";
       inputs.logos-module-builder.follows = "logos-module-builder";
     };
+    # Private 1:1 chat (chat-module.md). It shares our builder and delivery_module, so the lock stays small.
+    chat_module = {
+      url = "github:logos-co/logos-chat-module/v0.3.0";
+      inputs.logos-module-builder.follows = "logos-module-builder";
+      inputs.logos-delivery-module.follows = "delivery_module";
+    };
     nixpkgs.follows = "logos-module-builder/nixpkgs";
   };
 

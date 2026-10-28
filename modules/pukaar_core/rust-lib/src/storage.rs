@@ -97,7 +97,7 @@ fn payload(ev: &EventData) -> Option<Value> {
 }
 
 /// `{"success", "value", "error"}` is the answer of a `result` method. Anything else is the value.
-fn value_of(v: Value) -> Result<Value, String> {
+pub(crate) fn value_of(v: Value) -> Result<Value, String> {
     match v.get("success") {
         Some(Value::Bool(false)) => Err(v["error"].as_str().unwrap_or("refused").to_string()),
         Some(_) => Ok(v.get("value").cloned().unwrap_or(Value::Null)),
@@ -109,7 +109,7 @@ fn truthy(v: &Value) -> bool {
     matches!(v, Value::Bool(true)) || matches!(v.get("value"), Some(Value::Bool(true)))
 }
 
-fn call(p: &PluginProxy, method: &str, args: Value, limit: Duration) -> Result<Value, String> {
+pub(crate) fn call(p: &PluginProxy, method: &str, args: Value, limit: Duration) -> Result<Value, String> {
     let r = p.call_json_with_timeout(method, &args, limit).map_err(|e: LogosError| format!("{method}: {e}"))?;
     value_of(r).map_err(|e| format!("{method}: {e}"))
 }
