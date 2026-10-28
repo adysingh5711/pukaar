@@ -490,7 +490,7 @@ impl ChatBook {
                 }
                 let newest = mine.iter().max_by_key(|c| c.last_ms);
                 let (preview, last_ms) = match (self.queued(who).last(), newest) {
-                    (Some(q), _) => (format!("Not sent yet: {}", q.text), q.ts_ms),
+                    (Some(q), _) => (format!("Sending: {}", q.text), q.ts_ms),
                     (None, Some(c)) => (c.preview.clone().unwrap_or_default(), c.last_ms),
                     (None, None) => (String::new(), 0),
                 };
@@ -621,7 +621,7 @@ impl ChatBook {
         self.groups.iter().filter_map(move |id| {
             let c = convos.iter().find(|c| c.id == *id)?;
             let (preview, last_ms) = match self.queued_group(id).last() {
-                Some(q) => (format!("Not sent yet: {}", q.text), q.ts_ms),
+                Some(q) => (format!("Sending: {}", q.text), q.ts_ms),
                 None => (c.preview.clone().unwrap_or_default(), c.last_ms),
             };
             let (members, pending, _) = self.rosters.get(id).copied().unwrap_or_default();
@@ -1028,7 +1028,7 @@ mod tests {
             [hex::encode(b), hex::encode(a)],
             "the unsent message is the newest activity; a chat of another app is not shown"
         );
-        assert_eq!(rows[0]["preview"], "Not sent yet: wait");
+        assert_eq!(rows[0]["preview"], "Sending: wait");
         assert_eq!(
             (rows[1]["name"].as_str(), rows[1]["history_only"].clone()),
             (Some("Asha"), json!(true))

@@ -1649,6 +1649,7 @@ Item {
                 font.bold: flash.bold; color: flash.err && flash.bold ? root.t.danger : root.t.fg
                 text: (flash.lead ? "<b><font color='" + flash.ink[2] + "'>" + root.esc(flash.lead) + "</font></b> " : "") + root.esc(flash.text)
             }
+            LinkButton { Layout.alignment: Qt.AlignTop; text: "Copy"; Accessible.name: "Copy this message"; onClicked: root.copyText(flash.said) }
             ConfirmButton {
                 visible: flash.buttonText !== "" || flash.buttonIcon !== ""
                 Layout.alignment: Qt.AlignTop
@@ -2406,6 +2407,7 @@ Item {
                         Label { text: root.when(item.modelData.ms / 1000, "HH:mm"); color: root.t.muted; font.pointSize: root.smallSize }
                         Note { text: item.modelData.text; color: root.t.fg }
                     }
+                    LinkButton { Layout.alignment: Qt.AlignTop; text: "Copy"; Accessible.name: "Copy this notice"; onClicked: root.copyText(item.modelData.text) }
                     LinkButton {
                         Layout.alignment: Qt.AlignTop
                         text: "Dismiss"; Accessible.name: "Dismiss this notice"
@@ -4341,8 +4343,6 @@ Item {
                         var key = root.chatWith
                         root.run("chat_send", [key, draft.text.trim()], function (r) {
                             draft.clear()
-                            if (r && r.sent === false)
-                                root.notice = "Your message is saved and not sent yet. " + (r.why || "") + " It goes out by itself as soon as it can."
                             root.call("chat_messages", [key], root.applyChatMessages)
                         })
                     }
@@ -4596,7 +4596,7 @@ Item {
                                                 Label { Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText; color: root.t.fg; text: bubble.modelData.content }
                                                 Label {
                                                     font.pointSize: root.smallSize; color: root.t.muted
-                                                    text: bubble.modelData.queued ? "Not sent yet" : root.chatTime(bubble.modelData.ts_ms) + (bubble.mine ? " · sent" : "")
+                                                    text: bubble.modelData.queued ? "Sending…" : root.chatTime(bubble.modelData.ts_ms) + (bubble.mine ? " · sent" : "")
                                                 }
                                             }
                                         }
