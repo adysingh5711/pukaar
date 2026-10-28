@@ -512,7 +512,7 @@ pub(crate) fn joiner(w: &World, n: u8, role: u8) -> ApproveReq {
 /// `cached` false: only the announce arrived, so an approval must download the file from Storage.
 pub(crate) fn joiner_with(w: &World, n: u8, role: u8, cached: bool) -> ApproveReq {
     let request = joinreq::build(&key(n), &derive_lez_secret(&[n; 32]), w.site_id(), 1, T0 + REQUEST_VALID_MS).to_vec();
-    let body = profile::Body { display_name: "Ravi".into(), bio: String::new(), experience: String::new() };
+    let body = profile::Body { display_name: "Ravi".into(), ..Default::default() };
     let file = profile::build(&key(n), &w.site_id(), &acct(n), 1, 1, &body, None, &[pk(1)]).unwrap();
     let bytes = profile::to_bytes(&file);
     let cid = w.store.put(&bytes);
@@ -637,7 +637,7 @@ fn a_dead_storage_gives_up_after_five_tries() {
 fn a_profile_is_sealed_uploaded_and_announced() {
     let w = World::new();
     crate::rpc::refresh(&w.chain, &*w.rpc);
-    let id = w.push(Intent::Publish { name: "Asha".into(), version: 3, bio: "nurse".into(), experience: "10 years".into() }, St::Preparing, vec![]);
+    let id = w.push(Intent::Publish { name: "Asha".into(), version: 3, bio: "nurse".into(), experience: "10 years".into(), socials: vec![] }, St::Preparing, vec![]);
     // We are a member, so we wait up to a minute for the site key.
     w.tick(T0 + 1_000);
     let e = w.entry(id);
@@ -665,7 +665,7 @@ fn a_big_profile_goes_by_cid_only() {
     crate::rpc::refresh(&w.chain, &*w.rpc);
     // 3-byte characters: 500 + 500 of them, hex-encoded and sealed, are far over the inline cap.
     let (bio, experience) = ("ह".repeat(500), "ह".repeat(500));
-    let id = w.push(Intent::Publish { name: "Asha".into(), version: 3, bio, experience }, St::Preparing, vec![]);
+    let id = w.push(Intent::Publish { name: "Asha".into(), version: 3, bio, experience, socials: vec![] }, St::Preparing, vec![]);
     w.tick(T0 + 61_000);
     assert_eq!(w.entry(id).state, St::Done);
     let out = w.out.lock().unwrap();
@@ -808,7 +808,7 @@ fn a_saved_profile_job_without_bio_still_loads() {
     // writes.json of an earlier build: no bio, no experience.
     let old = r#"{"Publish":{"name":"Asha","version":3}}"#;
     let i: Intent = serde_json::from_str(old).unwrap();
-    assert_eq!(i, Intent::Publish { name: "Asha".into(), version: 3, bio: String::new(), experience: String::new() });
+    assert_eq!(i, Intent::Publish { name: "Asha".into(), version: 3, bio: String::new(), experience: String::new(), socials: vec![] });
 }
 
 // ---- the now_ms claim ----

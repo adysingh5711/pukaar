@@ -15,6 +15,7 @@ use pukaar_logic::node::{action_body, parse_id, Node};
 use pukaar_logic::lezkey::{derive_lez_secret, lez_account_id};
 use pukaar_logic::meet::{Act, Meetings};
 use pukaar_logic::persist;
+use pukaar_logic::profile;
 use pukaar_logic::ops::{self, Place, SuperKind};
 use pukaar_logic::queue::{self, Queue, SharedQueue};
 use pukaar_logic::reducer::Rank;
@@ -57,9 +58,10 @@ pub trait PukaarCoreModule: Send + 'static {
     /// Stop waiting for a restored identity's history (allowed 10 min after the restore).
     fn skip_history_sync(&mut self) -> String;
     /// Seals and uploads the profile and announces it to the site: members see it at once. The chain
-    /// pointer follows at the next admin `send_batch`. `{"ok":true,"queued":id}`. `bio` and
-    /// `experience` are optional: a call with the name only keeps working, and clears both.
-    fn set_profile(&mut self, display_name: String, bio: Option<String>, experience: Option<String>) -> String;
+    /// pointer follows at the next admin `send_batch`. `{"ok":true,"queued":id}`. `bio`, `experience` and
+    /// `socials` are optional: a call with the name only keeps working, and clears all three. `socials` is
+    /// JSON, at most 4 pairs: `[["github","github.com/asha"]]`. Labels: website, github, x, linkedin, other.
+    fn set_profile(&mut self, display_name: String, bio: Option<String>, experience: Option<String>, socials: Option<String>) -> String;
     /// Admin only. Signs the display name of a steward or an admin and queues the chain pointer at once
     /// (one fee, no batch). Readers accept a staff name only with the signature of an admin.
     /// `{"ok":true,"queued":id}`. A super admin names another admin, an admin names stewards and itself.
@@ -1054,10 +1056,13 @@ impl PukaarCoreModule for Pukaar {
             .unwrap_or_else(err)
     }
 
-    fn set_profile(&mut self, display_name: String, bio: Option<String>, experience: Option<String>) -> String {
+    fn set_profile(&mut self, display_name: String, bio: Option<String>, experience: Option<String>, socials: Option<String>) -> String {
         // Members read the new profile as soon as it is in Storage and announced. The chain pointer
         // follows at the next admin batch.
-        let r = queued(|node, q, _| ops::set_profile(node, q, &display_name, bio.as_deref().unwrap_or(""), experience.as_deref().unwrap_or(""), now_ms()));
+        let r = queued(|node, q, _| {
+            let socials = profile::socials_from_json(socials.as_deref().unwrap_or(""))?;
+            ops::set_profile(node, q, &display_name, bio.as_deref().unwrap_or(""), experience.as_deref().unwrap_or(""), &socials, now_ms())
+        });
         flush();
         id_reply(r)
     }

@@ -12,7 +12,7 @@ use crate::fetch::is_staff;
 use crate::joinreq;
 use crate::lezkey::{derive_lez_secret, lez_account_id};
 use crate::node::{fingerprint, parse_id, Node};
-use crate::profile;
+use crate::profile::{self, About};
 use crate::sync::Wire;
 use crate::queue::{ApproveReq, Blob, Intent, Prof, ProfReq, Queue, RevokeReq, St, REQUEST_VALID_MS};
 use crate::rpc::{self, get_account, rank_name, Rpc};
@@ -107,7 +107,7 @@ pub fn new_site(key: &SigningKey, g: &Genesis) -> Result<NewSite, String> {
 pub fn create_site(node: &Node, q: &mut Queue, ns: NewSite, admin_name: &str, now: u64) -> u64 {
     let id = q.push(ns.site_id, Intent::CreateSite { salt: ns.salt, pukaar_key: node.me() }, St::Preparing, ns.blobs, now);
     let version = next_version(node, q);
-    q.push(ns.site_id, Intent::Publish { name: admin_name.into(), version, bio: String::new(), experience: String::new() }, St::Preparing, vec![], now);
+    q.push(ns.site_id, Intent::Publish { name: admin_name.into(), version, bio: String::new(), experience: String::new(), socials: vec![] }, St::Preparing, vec![], now);
     id
 }
 
@@ -119,9 +119,9 @@ pub fn join(node: &Node, q: &mut Queue, now: u64) -> (Vec<u8>, u64) {
     let version = next_version(node, q);
     // A first join has no name. A new request keeps the name and the texts that we know of ourselves.
     let me = node.me();
-    let (bio, experience) = node.about.get(&me).cloned().unwrap_or_default();
+    let About { bio, experience, socials } = node.about.get(&me).cloned().unwrap_or_default();
     let name = node.names.get(&me).cloned().unwrap_or_default();
-    let id = q.push(node.store.site, Intent::Publish { name, version, bio, experience }, St::Preparing, vec![], now);
+    let id = q.push(node.store.site, Intent::Publish { name, version, bio, experience, socials }, St::Preparing, vec![], now);
     (req, id)
 }
 
@@ -150,18 +150,18 @@ fn about_text(what: &str, text: &str) -> Result<String, String> {
     Ok(t)
 }
 
-pub fn set_profile(node: &Node, q: &mut Queue, display_name: &str, bio: &str, experience: &str, now: u64) -> Result<u64, String> {
+pub fn set_profile(node: &Node, q: &mut Queue, display_name: &str, bio: &str, experience: &str, socials: &[profile::Social], now: u64) -> Result<u64, String> {
     let name: String = display_name.chars().filter(|c| !c.is_control()).collect::<String>().trim().to_string();
     if name.chars().count() > 64 {
         return Err("too long: keep the name under 64 characters".into());
     }
-    let (bio, experience) = (about_text("bio", bio)?, about_text("experience", experience)?);
+    let (bio, experience, socials) = (about_text("bio", bio)?, about_text("experience", experience)?, profile::socials(socials)?);
     // O5: readers ignore the own name of a steward, so refuse it here instead of saving a name nobody sees.
     if view(node).is_ok_and(|v| v.mine == Some(Rank::Steward)) {
         return Err(STAFF_NAME.into());
     }
     let version = next_version(node, q);
-    Ok(q.push(node.store.site, Intent::Publish { name, version, bio, experience }, St::Preparing, vec![], now))
+    Ok(q.push(node.store.site, Intent::Publish { name, version, bio, experience, socials }, St::Preparing, vec![], now))
 }
 
 /// The text when a steward tries to set their own name (O5).

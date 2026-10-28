@@ -16,7 +16,7 @@
 //! gives the truth. An event, a join request and a profile announce also name accounts (`hint`).
 
 use crate::event::{sha256, Key, Location};
-use crate::profile::{self, Announce, MAX_INLINE_PROFILE};
+use crate::profile::{self, About, Announce, MAX_INLINE_PROFILE};
 use crate::sync::{Wire, BLOB_CHUNK, MAX_CHUNKS, MAX_FALLBACK};
 use crate::reducer::Config;
 use crate::rpc::{refresh, Rpc, SharedChain};
@@ -147,8 +147,8 @@ pub struct Fetched {
     pub retired: Vec<Location>,
     /// The display name of each member, by Pukaar key.
     pub names: BTreeMap<Key, String>,
-    /// The bio and the experience of each member, by Pukaar key.
-    pub about: BTreeMap<Key, (String, String)>,
+    /// The bio, the experience and the links of each member, by Pukaar key.
+    pub about: BTreeMap<Key, About>,
     /// Staff members whose name carries the signature of an admin (O5).
     pub signed: BTreeSet<Key>,
     /// The removal reasons, by SHA-256 of the text.
@@ -397,8 +397,10 @@ fn clean_about(text: &str) -> String {
     text.chars().filter(|c| *c == '\n' || !c.is_control()).take(MAX_ABOUT).collect::<String>().trim().to_string()
 }
 
-fn about_of(b: &profile::Body) -> (String, String) {
-    (clean_about(&b.bio), clean_about(&b.experience))
+/// The links that do not pass `profile::social` are dropped: a peer wrote them, so nothing is trusted.
+fn about_of(b: &profile::Body) -> About {
+    let socials = b.socials.iter().filter_map(|(l, u)| profile::social(l, u).ok()).take(profile::MAX_SOCIALS).collect();
+    About { bio: clean_about(&b.bio), experience: clean_about(&b.experience), socials }
 }
 
 /// Steward or above, super admins included.

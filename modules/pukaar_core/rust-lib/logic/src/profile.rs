@@ -1,6 +1,6 @@
 //! The member profile file and the site keyring (port-plan "Cross-cutting work", Encryption).
 //!
-//! `profile.json` holds {display_name, bio, experience} encrypted with XChaCha20-Poly1305 under a
+//! `profile.json` holds {display_name, bio, experience, socials} encrypted with XChaCha20-Poly1305 under a
 //! random content key. The author signs the header with ed25519. The content key is wrapped in
 //! `wraps`, which the signature does not cover: a symmetric wrap under the site key of `key_epoch`
 //! (`to` = "site"), or a sealed box to the X25519 key of one admin (`to` = hex Pukaar key).
@@ -19,17 +19,72 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
-pub const SCHEMA: &str = "pukaar.member.profile/2";
+pub const SCHEMA: &str = "pukaar.member.profile/3";
+/// The schema before links: a reader still opens these files. The signature domain is the schema of the file.
+pub const SCHEMA_V2: &str = "pukaar.member.profile/2";
+const READS: [&str; 2] = [SCHEMA, SCHEMA_V2];
 pub const KEYRING_SCHEMA: &str = "pukaar.keyring/1";
 const SITE: &str = "site";
 
 pub type Key = [u8; 32];
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Body {
     pub display_name: String,
     pub bio: String,
     pub experience: String,
+    /// Links as (label, address). Added in schema /3: a /2 file has none and a file without links omits it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub socials: Vec<Social>,
+}
+
+/// A link: (label, address without the scheme). See `social`.
+pub type Social = (String, String);
+
+/// What a member shows besides the name, as the readers keep it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct About {
+    pub bio: String,
+    pub experience: String,
+    pub socials: Vec<Social>,
+}
+
+pub const SOCIAL_LABELS: [&str; 5] = ["website", "github", "x", "linkedin", "other"];
+pub const MAX_SOCIALS: usize = 4;
+/// Shorter than a full address on purpose: with 4 links, 500 + 500 characters of text and 3 admin
+/// wraps the file stays under `MAX_INLINE_PROFILE` (the test `a_full_profile_fits_the_inline_cap`).
+pub const MAX_SOCIAL_URL: usize = 30;
+
+/// One link, cleaned: a known label (any case), and an address of printable ASCII with no scheme (a leading
+/// `http://` or `https://` is dropped; the UI opens `https://` + address after the member confirms).
+pub fn social(label: &str, url: &str) -> Result<Social, String> {
+    let label = label.trim().to_ascii_lowercase();
+    if !SOCIAL_LABELS.contains(&label.as_str()) {
+        return Err(format!("unknown link label {label}: use {}", SOCIAL_LABELS.join(", ")));
+    }
+    let url = url.trim();
+    let lower = url.to_ascii_lowercase();
+    let url = ["https://", "http://"].iter().find(|p| lower.starts_with(*p)).map_or(url, |p| &url[p.len()..]);
+    if url.is_empty() || url.len() > MAX_SOCIAL_URL || !url.bytes().all(|b| b.is_ascii_graphic()) || url.contains("://") {
+        return Err(format!("a {label} link needs 1 to {MAX_SOCIAL_URL} characters, no spaces, no scheme"));
+    }
+    Ok((label, url.to_string()))
+}
+
+/// `[["github","github.com/asha"]]` as the UI sends it. Nothing is cleaned here: `socials` does that.
+pub fn socials_from_json(json: &str) -> Result<Vec<Social>, String> {
+    if json.trim().is_empty() {
+        return Ok(vec![]);
+    }
+    serde_json::from_str(json).map_err(|_| "links must be a list of [label, address] pairs".to_string())
+}
+
+/// The links of a profile that a member writes: at most `MAX_SOCIALS`, each one valid.
+pub fn socials(list: &[Social]) -> Result<Vec<Social>, String> {
+    if list.len() > MAX_SOCIALS {
+        return Err(format!("too many links: keep them to {MAX_SOCIALS}"));
+    }
+    list.iter().map(|(l, u)| social(l, u)).collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -87,7 +142,7 @@ pub(crate) fn decrypt(key: &Key, boxed: &[u8]) -> Result<Vec<u8>, String> {
 fn sig_message(e: &Envelope) -> Result<Vec<u8>, String> {
     let ct = hex::decode(&e.ciphertext).map_err(|_| "bad ciphertext hex")?;
     Ok([
-        SCHEMA.as_bytes(),
+        e.schema.as_bytes(),
         &[0],
         &unhex::<32>(&e.site_id)?,
         &unhex::<32>(&e.user)?,
@@ -143,20 +198,23 @@ pub fn to_bytes(e: &Envelope) -> Vec<u8> {
     serde_json::to_vec(e).expect("json")
 }
 
-/// The version rule of the file: a reader accepts only the schema it knows.
+/// The version rule of the file: a reader accepts only the schemas it knows (`READS`).
 pub fn from_bytes(b: &[u8]) -> Result<Envelope, String> {
     let e: Envelope = serde_json::from_slice(b).map_err(|e| format!("bad profile: {e}"))?;
-    if e.schema != SCHEMA {
-        return Err(format!("unsupported profile schema {}", e.schema));
-    }
+    known(&e)?;
     Ok(e)
+}
+
+fn known(e: &Envelope) -> Result<(), String> {
+    if READS.contains(&e.schema.as_str()) {
+        return Ok(());
+    }
+    Err(format!("unsupported profile schema {}", e.schema))
 }
 
 /// The author signature. Anyone can check it, no key needed.
 pub fn verify(e: &Envelope) -> Result<(), String> {
-    if e.schema != SCHEMA {
-        return Err(format!("unsupported profile schema {}", e.schema));
-    }
+    known(e)?;
     let vk = VerifyingKey::from_bytes(&unhex(&e.pukaar_key)?).map_err(|_| "bad author key")?;
     let sig = Signature::from_bytes(&unhex(&e.sig_ed)?);
     vk.verify_strict(&sig_message(e)?, &sig).map_err(|_| "bad profile signature".to_string())
@@ -357,7 +415,7 @@ mod tests {
     const USER: Key = [0xBB; 32];
 
     fn body() -> Body {
-        Body { display_name: "Asha".into(), bio: "nurse".into(), experience: "10 years".into() }
+        Body { display_name: "Asha".into(), bio: "nurse".into(), experience: "10 years".into(), ..Default::default() }
     }
 
     /// Site with an admin (seed 1), members 2 and 3 in epoch 1.
@@ -461,7 +519,7 @@ mod tests {
         assert!(newest(&all, &SITE_ID, &[1; 32], &pk(2)).is_none(), "other user");
         // An unknown schema is refused on read.
         let mut j: serde_json::Value = serde_json::from_slice(&to_bytes(&all[0])).unwrap();
-        j["schema"] = "pukaar.member.profile/3".into();
+        j["schema"] = "pukaar.member.profile/4".into();
         assert!(from_bytes(&serde_json::to_vec(&j).unwrap()).unwrap_err().contains("unsupported"));
         let mut k = serde_json::to_value(&site().1).unwrap();
         k["schema"] = "pukaar.keyring/2".into();
@@ -500,12 +558,46 @@ mod tests {
 
     #[test]
     fn a_full_profile_fits_the_inline_cap() {
-        // The most that the UI allows: 64 name, 500 bio and 500 experience characters, 3 admin wraps.
-        let long = Body { display_name: "n".repeat(64), bio: "b".repeat(500), experience: "e".repeat(500) };
+        // The most that the UI allows: 64 name, 500 bio and 500 experience characters, 4 links, 3 admin wraps.
+        let socials = (0..MAX_SOCIALS).map(|_| ("linkedin".to_string(), "u".repeat(MAX_SOCIAL_URL))).collect();
+        let long = Body { display_name: "n".repeat(64), bio: "b".repeat(500), experience: "e".repeat(500), socials };
         let admins = [pk(1), pk(2), pk(3)];
         let e = build(&sk(4), &SITE_ID, &USER, 1, 1, &long, Some(&[7; 32]), &admins).unwrap();
         let n = to_bytes(&e).len();
-        assert!(n <= MAX_INLINE_PROFILE, "{n} bytes: measured 3658 on 2026-10-27");
+        assert!(n <= MAX_INLINE_PROFILE, "{n} bytes: measured 3658 without links on 2026-10-27");
+    }
+
+    #[test]
+    fn a_v2_file_still_reads_and_a_new_file_is_v3() {
+        // The fixed file is schema /2 (no links): it verifies under its own domain and opens.
+        let old = from_bytes(VECTOR.as_bytes()).unwrap();
+        assert_eq!(old.schema, SCHEMA_V2);
+        assert!(open(&old, &sk(1), &BTreeMap::new()).unwrap().socials.is_empty());
+        // A new file is /3, carries links and round-trips. A /3 file with a /2 domain does not verify.
+        let (keys, _) = site();
+        let with = Body { socials: vec![("github".into(), "github.com/asha".into())], ..body() };
+        let e = build(&sk(2), &SITE_ID, &USER, 1, 1, &with, Some(&keys[&1]), &[]).unwrap();
+        assert_eq!(e.schema, SCHEMA);
+        let e = from_bytes(&to_bytes(&e)).unwrap();
+        assert_eq!(open(&e, &sk(3), &keys).unwrap(), with);
+        let mut t = e;
+        t.schema = SCHEMA_V2.into();
+        assert!(verify(&t).is_err());
+    }
+
+    #[test]
+    fn links_are_cleaned_and_limited() {
+        let ok = |l: &str, u: &str| social(l, u).unwrap();
+        assert_eq!(ok(" GitHub ", "https://github.com/asha"), ("github".into(), "github.com/asha".into()));
+        assert_eq!(ok("x", "HTTP://x.com/a"), ("x".into(), "x.com/a".into()));
+        for (l, u) in [("mastodon", "a.b"), ("website", ""), ("website", "https://"), ("website", "a b.c"), ("website", "ftp://a.b"), ("website", "é.com"), ("website", &"u".repeat(MAX_SOCIAL_URL + 1))] {
+            assert!(social(l, u).is_err(), "{l} {u}");
+        }
+        let five: Vec<_> = (0..=MAX_SOCIALS).map(|i| ("other".to_string(), format!("a{i}.com"))).collect();
+        assert!(socials(&five).is_err(), "too many");
+        assert_eq!(socials(&five[..MAX_SOCIALS]).unwrap().len(), MAX_SOCIALS);
+        assert_eq!(socials_from_json(r#"[["x","x.com/a"]]"#).unwrap(), [("x".to_string(), "x.com/a".to_string())]);
+        assert!(socials_from_json("{").is_err() && socials_from_json(" ").unwrap().is_empty());
     }
 
     #[test]

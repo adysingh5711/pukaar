@@ -136,7 +136,7 @@ impl World {
 
     /// A profile of user `n` named "User n", sealed under the site key of epoch 1.
     fn profile(&self, n: u8) -> (String, [u8; 32]) {
-        let body = profile::Body { display_name: format!("User{n}"), bio: format!("bio{n}"), experience: format!("exp{n}") };
+        let body = profile::Body { display_name: format!("User{n}"), bio: format!("bio{n}"), experience: format!("exp{n}"), ..Default::default() };
         let e = profile::build(&sk(n), &SITE, &acct(n), 1, 1, &body, Some(&self.keys[&1]), &[]).unwrap();
         self.put(&profile::to_bytes(&e))
     }
@@ -406,7 +406,7 @@ fn an_announce_with_a_higher_version_shows_the_newer_name() {
     w.sync(&mut n, &c, &f);
     assert_eq!(names(&info(&n)), ["User1", "User2", "User3"]);
     // User 3 edits the name. The chain pointer still holds version 1: the announce is newer.
-    let body = profile::Body { display_name: "Asha K".into(), bio: String::new(), experience: String::new() };
+    let body = profile::Body { display_name: "Asha K".into(), ..Default::default() };
     let e = profile::build(&sk(3), &SITE, &acct(3), 2, 1, &body, Some(&w.keys[&1]), &[]).unwrap();
     let (cid, sha) = w.put(&profile::to_bytes(&e));
     assert!(n.on_announce(Announce::sign(&sk(3), SITE, 2, &cid, sha)));

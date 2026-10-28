@@ -145,11 +145,13 @@ pub enum Intent {
     Publish {
         name: String,
         version: u64,
-        /// Older `writes.json` files have none of these two.
+        /// Older `writes.json` files have none of these three.
         #[serde(default)]
         bio: String,
         #[serde(default)]
         experience: String,
+        #[serde(default)]
+        socials: Vec<profile::Social>,
     },
 }
 
@@ -851,7 +853,7 @@ fn prepare(env: &Env, e: &mut Entry) -> Result<(), String> {
                 let next = profile::rotate(&e.site, &mut keys, &staying)?;
                 e.blobs = vec![Blob::new(profile::keyring_to_bytes(&next))];
             }
-            Intent::Publish { name, version, bio, experience } => return prepare_publish(env, e, profile::Body { display_name: name, bio, experience }, version),
+            Intent::Publish { name, version, bio, experience, socials } => return prepare_publish(env, e, profile::Body { display_name: name, bio, experience, socials }, version),
             // The other writes carry no file, or their files were made with the entry (create_site).
             _ => {}
         }
@@ -902,8 +904,8 @@ fn prepare_staff_name(env: &Env, e: &mut Entry, user: AccountId, key: Key, name:
     let site = need_site(env, e)?;
     let (_, keys) = open_ring(env, &site)?;
     let newest = *keys.get(&site.key_epoch).ok_or("we hold no site key of the current epoch")?;
-    let (bio, experience) = env.fetched.lock().unwrap().about.get(&key).cloned().unwrap_or_default();
-    let body = profile::Body { display_name: name, bio, experience };
+    let about = env.fetched.lock().unwrap().about.get(&key).cloned().unwrap_or_default();
+    let body = profile::Body { display_name: name, bio: about.bio, experience: about.experience, socials: about.socials };
     let file = profile::build(env.key, &e.site, &user, version, site.key_epoch, &body, Some(&newest), &[])?;
     e.blobs = vec![Blob::new(profile::to_bytes(&file))];
     if upload_all(env, e)? {

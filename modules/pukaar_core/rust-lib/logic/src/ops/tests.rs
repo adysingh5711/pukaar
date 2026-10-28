@@ -168,7 +168,7 @@ fn a_join_and_an_inline_profile_reach_an_admin_who_approves_with_no_download() {
     let site = w.site_id();
     // The joiner (key 4) sends a signed request and its profile file. Its Storage CID is in no store.
     let request = joinreq::build(&key(4), &derive_lez_secret(&[4; 32]), site, NOW, NOW + REQUEST_VALID_MS).to_vec();
-    let body = profile::Body { display_name: "Ravi".into(), bio: "nurse".into(), experience: "10 years".into() };
+    let body = profile::Body { display_name: "Ravi".into(), bio: "nurse".into(), experience: "10 years".into(), ..Default::default() };
     let file = profile::build(&key(4), &site, &acct(4), 1, 1, &body, None, &[pk(1)]).unwrap();
     let bytes = profile::to_bytes(&file);
     let announce = Announce::sign(&key(4), site, 1, "zNotInAnyStore", crate::event::sha256(&bytes));
@@ -286,7 +286,7 @@ fn send_batch_takes_the_held_writes_and_the_member_refreshes() {
     let mut q = locked(&w);
     assert_eq!(send_batch(&n, &mut q, NOW).unwrap_err(), "nothing waits for a batch");
     // Member 2 announces a profile (version 2) that the chain does not hold.
-    let body = profile::Body { display_name: "Ravi".into(), bio: String::new(), experience: String::new() };
+    let body = profile::Body { display_name: "Ravi".into(), ..Default::default() };
     let file = profile::build(&key(2), &w.site_id(), &acct(2), 2, 1, &body, None, &[pk(1)]).unwrap();
     let bytes = profile::to_bytes(&file);
     let cid = w.store.put(&bytes);
@@ -316,17 +316,22 @@ fn profile_versions_only_grow() {
         Intent::Publish { name, version, .. } => (name.clone(), *version),
         _ => panic!(),
     };
-    let a = set_profile(&n, &mut q, " Asha\u{7} ", "", "", NOW).unwrap();
-    let b = set_profile(&n, &mut q, "Asha K", "", "", NOW).unwrap();
+    let a = set_profile(&n, &mut q, " Asha\u{7} ", "", "", &[], NOW).unwrap();
+    let b = set_profile(&n, &mut q, "Asha K", "", "", &[], NOW).unwrap();
     assert_eq!((v(&q, a), v(&q, b)), (("Asha".into(), 1), ("Asha K".into(), 2)));
-    assert!(set_profile(&n, &mut q, &"x".repeat(65), "", "", NOW).unwrap_err().contains("too long"));
+    assert!(set_profile(&n, &mut q, &"x".repeat(65), "", "", &[], NOW).unwrap_err().contains("too long"));
     // The bio and the experience travel with the name, cleaned, and have a cap of their own.
-    let c = set_profile(&n, &mut q, "Asha", " nurse\u{7}\nnights ", "10 years", NOW).unwrap();
+    let c = set_profile(&n, &mut q, "Asha", " nurse\u{7}\nnights ", "10 years", &[], NOW).unwrap();
     let e = q.entries.iter().find(|e| e.id == c).unwrap();
     assert!(matches!(&e.intent, Intent::Publish { bio, experience, .. } if bio == "nurse\nnights" && experience == "10 years"));
-    assert!(set_profile(&n, &mut q, "Asha", &"x".repeat(501), "", NOW).unwrap_err().contains("bio"));
-    assert!(set_profile(&n, &mut q, "Asha", "", &"x".repeat(501), NOW).unwrap_err().contains("experience"));
-    q.entries.retain(|e| e.id != c);
+    assert!(set_profile(&n, &mut q, "Asha", &"x".repeat(501), "", &[], NOW).unwrap_err().contains("bio"));
+    assert!(set_profile(&n, &mut q, "Asha", "", &"x".repeat(501), &[], NOW).unwrap_err().contains("experience"));
+    // Links are cleaned like the texts and refused when they are not known labels.
+    let d = set_profile(&n, &mut q, "Asha", "", "", &[("GitHub".into(), "https://github.com/a".into())], NOW).unwrap();
+    let e = q.entries.iter().find(|e| e.id == d).unwrap();
+    assert!(matches!(&e.intent, Intent::Publish { socials, .. } if *socials == [("github".to_string(), "github.com/a".to_string())]));
+    assert!(set_profile(&n, &mut q, "Asha", "", "", &[("blog".into(), "a.b".into())], NOW).is_err());
+    q.entries.retain(|e| e.id != c && e.id != d);
     assert_eq!(q.entries.len(), 2);
     assert_eq!(q.entries[0].state, St::Preparing);
 }
@@ -653,7 +658,7 @@ use pukaar_sites_rules::Instruction;
 
 /// Member `n` with `role`, whose chain pointer is a profile file signed by user `signer`.
 fn pointed(w: &World, n: u8, role: Role, signer: u8, name: &str, version: u64) {
-    let body = profile::Body { display_name: name.into(), bio: String::new(), experience: String::new() };
+    let body = profile::Body { display_name: name.into(), ..Default::default() };
     let file = profile::build(&key(signer), &w.site_id(), &acct(n), version, 1, &body, None, &[pk(1)]).unwrap();
     let bytes = profile::to_bytes(&file);
     let mut m = w.member(n, role);
@@ -716,10 +721,10 @@ fn a_steward_cannot_set_their_own_name_but_others_can() {
     w.put_member(&w.member(2, Role::Steward));
     w.put_member(&w.member(3, Role::Resident));
     let mut q = locked(&w);
-    assert_eq!(set_profile(&node(&w, 2), &mut q, "Boss", "", "", NOW).unwrap_err(), STAFF_NAME);
+    assert_eq!(set_profile(&node(&w, 2), &mut q, "Boss", "", "", &[], NOW).unwrap_err(), STAFF_NAME);
     assert!(q.entries.is_empty(), "nothing is queued");
-    set_profile(&node(&w, 3), &mut q, "Asha", "", "", NOW).unwrap();
-    set_profile(&node(&w, 1), &mut q, "Admin", "", "", NOW).unwrap();
+    set_profile(&node(&w, 3), &mut q, "Asha", "", "", &[], NOW).unwrap();
+    set_profile(&node(&w, 1), &mut q, "Admin", "", "", &[], NOW).unwrap();
     assert_eq!(q.entries.len(), 2);
 }
 

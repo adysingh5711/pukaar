@@ -8,7 +8,7 @@ use crate::event::{
 };
 use crate::fetch::SharedFetched;
 use crate::lezkey::{derive_lez_secret, lez_account_id};
-use crate::profile::Announce;
+use crate::profile::{About, Announce};
 use crate::reducer::{issue_of, reduce, Config, Issue, RoleFn, State, Status};
 use crate::rpc::{rank_name, SharedChain};
 use crate::store::{Accept, Store};
@@ -69,7 +69,7 @@ pub struct Node {
     pub retired: Vec<Location>,
     pub names: BTreeMap<Key, String>, // from the profiles
     /// The bio and the experience of each member, from the profiles.
-    pub about: BTreeMap<Key, (String, String)>,
+    pub about: BTreeMap<Key, About>,
     /// Staff members whose name an admin signed (O5).
     pub signed: std::collections::BTreeSet<Key>,
     /// The text of each removal reason, by the SHA-256 of the text (from details.json).
@@ -321,8 +321,9 @@ impl Node {
             "role": role.map(rank_name),
             "super_admin": role == Some(Rank::SuperAdmin),
             "name": self.names.get(&me),
-            "bio": self.about.get(&me).map(|a| &a.0),
-            "experience": self.about.get(&me).map(|a| &a.1),
+            "bio": self.about.get(&me).map(|a| &a.bio),
+            "experience": self.about.get(&me).map(|a| &a.experience),
+            "socials": self.about.get(&me).map(|a| &a.socials),
             "revoked": self.chain.as_ref().and_then(|c| c.lock().unwrap().revocation_of(&me, &self.names)).map(|r| self.with_reason(r)),
             // 2.3b: "requested" once a join request of ours is known
             "pending": "none",
