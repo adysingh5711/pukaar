@@ -4,7 +4,7 @@ use super::*;
 use crate::event::Body;
 use crate::fetch::{Details, Places, DETAILS_SCHEMA};
 use crate::node::Node;
-use crate::profile::Announce;
+use crate::profile::{About, Announce};
 use crate::queue::tests::{acct, joiner_with, key, joiner, pk, World, PROGRAM, T0};
 use crate::sync::Wire;
 use crate::reducer::Config;
@@ -316,21 +316,21 @@ fn profile_versions_only_grow() {
         Intent::Publish { name, version, .. } => (name.clone(), *version),
         _ => panic!(),
     };
-    let a = set_profile(&n, &mut q, " Asha\u{7} ", "", "", &[], NOW).unwrap();
-    let b = set_profile(&n, &mut q, "Asha K", "", "", &[], NOW).unwrap();
+    let a = set_profile(&n, &mut q, " Asha\u{7} ", &About::default(), NOW).unwrap();
+    let b = set_profile(&n, &mut q, "Asha K", &About::default(), NOW).unwrap();
     assert_eq!((v(&q, a), v(&q, b)), (("Asha".into(), 1), ("Asha K".into(), 2)));
-    assert!(set_profile(&n, &mut q, &"x".repeat(65), "", "", &[], NOW).unwrap_err().contains("too long"));
+    assert!(set_profile(&n, &mut q, &"x".repeat(65), &About::default(), NOW).unwrap_err().contains("too long"));
     // The bio and the experience travel with the name, cleaned, and have a cap of their own.
-    let c = set_profile(&n, &mut q, "Asha", " nurse\u{7}\nnights ", "10 years", &[], NOW).unwrap();
+    let c = set_profile(&n, &mut q, "Asha", &About { bio: " nurse\u{7}\nnights ".into(), experience: "10 years".into(), ..Default::default() }, NOW).unwrap();
     let e = q.entries.iter().find(|e| e.id == c).unwrap();
     assert!(matches!(&e.intent, Intent::Publish { bio, experience, .. } if bio == "nurse\nnights" && experience == "10 years"));
-    assert!(set_profile(&n, &mut q, "Asha", &"x".repeat(501), "", &[], NOW).unwrap_err().contains("bio"));
-    assert!(set_profile(&n, &mut q, "Asha", "", &"x".repeat(501), &[], NOW).unwrap_err().contains("experience"));
+    assert!(set_profile(&n, &mut q, "Asha", &About { bio: "x".repeat(501), ..Default::default() }, NOW).unwrap_err().contains("bio"));
+    assert!(set_profile(&n, &mut q, "Asha", &About { experience: "x".repeat(501), ..Default::default() }, NOW).unwrap_err().contains("experience"));
     // Links are cleaned like the texts and refused when they are not known labels.
-    let d = set_profile(&n, &mut q, "Asha", "", "", &[("GitHub".into(), "https://github.com/a".into())], NOW).unwrap();
+    let d = set_profile(&n, &mut q, "Asha", &About { socials: vec![("GitHub".into(), "https://github.com/a".into())], private: true, ..Default::default() }, NOW).unwrap();
     let e = q.entries.iter().find(|e| e.id == d).unwrap();
-    assert!(matches!(&e.intent, Intent::Publish { socials, .. } if *socials == [("github".to_string(), "github.com/a".to_string())]));
-    assert!(set_profile(&n, &mut q, "Asha", "", "", &[("blog".into(), "a.b".into())], NOW).is_err());
+    assert!(matches!(&e.intent, Intent::Publish { socials, private: true, .. } if *socials == [("github".to_string(), "github.com/a".to_string())]));
+    assert!(set_profile(&n, &mut q, "Asha", &About { socials: vec![("blog".into(), "a.b".into())], ..Default::default() }, NOW).is_err());
     q.entries.retain(|e| e.id != c && e.id != d);
     assert_eq!(q.entries.len(), 2);
     assert_eq!(q.entries[0].state, St::Preparing);
@@ -742,10 +742,10 @@ fn a_steward_cannot_set_their_own_name_but_others_can() {
     w.put_member(&w.member(2, Role::Steward));
     w.put_member(&w.member(3, Role::Resident));
     let mut q = locked(&w);
-    assert_eq!(set_profile(&node(&w, 2), &mut q, "Boss", "", "", &[], NOW).unwrap_err(), STAFF_NAME);
+    assert_eq!(set_profile(&node(&w, 2), &mut q, "Boss", &About::default(), NOW).unwrap_err(), STAFF_NAME);
     assert!(q.entries.is_empty(), "nothing is queued");
-    set_profile(&node(&w, 3), &mut q, "Asha", "", "", &[], NOW).unwrap();
-    set_profile(&node(&w, 1), &mut q, "Admin", "", "", &[], NOW).unwrap();
+    set_profile(&node(&w, 3), &mut q, "Asha", &About::default(), NOW).unwrap();
+    set_profile(&node(&w, 1), &mut q, "Admin", &About::default(), NOW).unwrap();
     assert_eq!(q.entries.len(), 2);
 }
 
@@ -920,7 +920,11 @@ fn the_anchor_that_this_device_saw_replaces_an_older_one_in_site_info() {
 
 /// What the member page of `who` gets from the node of member 1, after the fetchers ran.
 fn page(w: &World, who: u8) -> Value {
-    let mut n = node(w, 1);
+    page_as(w, 1, who)
+}
+
+fn page_as(w: &World, viewer: u8, who: u8) -> Value {
+    let mut n = node(w, viewer);
     n.apply_fetched();
     serde_json::from_str(&n.member_profile_json(&hexk(who)).unwrap()).unwrap()
 }
@@ -928,7 +932,7 @@ fn page(w: &World, who: u8) -> Value {
 #[test]
 fn a_member_page_has_the_profile_the_role_the_joining_time_and_the_pointer_state() {
     let w = World::new();
-    let body = profile::Body { display_name: "Asha".into(), bio: "nurse".into(), experience: "10 years".into(), socials: vec![("github".into(), "github.com/asha".into()), ("blog".into(), "bad".into())] };
+    let body = profile::Body { display_name: "Asha".into(), bio: "nurse".into(), experience: "10 years".into(), socials: vec![("github".into(), "github.com/asha".into()), ("blog".into(), "bad".into())], ..Default::default() };
     pointed_with(&w, 2, Role::Resident, 2, &body, 1, 1_700_000_000_000);
     read(&w);
     let v = page(&w, 2);
@@ -958,4 +962,22 @@ fn a_member_page_says_loading_none_or_removed() {
     let (loading, removed) = (page(&w, 2), page(&w, 3));
     assert_eq!((loading["state"].as_str(), loading["name"].is_null()), (Some("loading"), true));
     assert_eq!((removed["state"].as_str(), removed["removed"].as_bool(), removed["role"].is_null()), (Some("none"), Some(true), true));
+}
+
+#[test]
+fn a_private_profile_shows_other_members_the_name_and_role_only() {
+    let w = World::new();
+    let body = profile::Body { display_name: "Asha".into(), bio: "nurse".into(), socials: vec![("github".into(), "github.com/asha".into())], private: true, ..Default::default() };
+    pointed_with(&w, 2, Role::Resident, 2, &body, 1, 1_700_000_000_000);
+    read(&w);
+    let seen = page(&w, 2);
+    assert_eq!((seen["name"].as_str(), seen["role"].as_str(), seen["state"].as_str(), seen["private"].as_bool()), (Some("Asha"), Some("Resident"), Some("private"), Some(true)));
+    assert!(seen["bio"].is_null() && seen["socials"].is_null(), "nothing of the profile leaves the node");
+    // The owner still sees it all, and edits it from there.
+    let own = page_as(&w, 2, 2);
+    assert_eq!((own["state"].as_str(), own["bio"].as_str(), own["private"].as_bool()), (Some("ready"), Some("nurse"), Some(true)));
+    let mut n = node(&w, 2);
+    n.apply_fetched();
+    let me: Value = serde_json::from_str(&n.identity_json()).unwrap();
+    assert_eq!((me["bio"].as_str(), me["private"].as_bool()), (Some("nurse"), Some(true)));
 }

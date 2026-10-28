@@ -61,7 +61,8 @@ pub trait PukaarCoreModule: Send + 'static {
     /// pointer follows at the next admin `send_batch`. `{"ok":true,"queued":id}`. `bio`, `experience` and
     /// `socials` are optional: a call with the name only keeps working, and clears all three. `socials` is
     /// JSON, at most 4 pairs: `[["github","github.com/asha"]]`. Labels: website, github, x, linkedin, other.
-    fn set_profile(&mut self, display_name: String, bio: Option<String>, experience: Option<String>, socials: Option<String>) -> String;
+    /// `private` is "1" to show other members the name and the role only (the app hides the rest), or empty.
+    fn set_profile(&mut self, display_name: String, bio: Option<String>, experience: Option<String>, socials: Option<String>, private: Option<String>) -> String;
     /// Admin only. Signs the display name of a steward or an admin and queues the chain pointer at once
     /// (one fee, no batch). Readers accept a staff name only with the signature of an admin.
     /// `{"ok":true,"queued":id}`. A super admin names another admin, an admin names stewards and itself.
@@ -1074,12 +1075,13 @@ impl PukaarCoreModule for Pukaar {
             .unwrap_or_else(err)
     }
 
-    fn set_profile(&mut self, display_name: String, bio: Option<String>, experience: Option<String>, socials: Option<String>) -> String {
+    fn set_profile(&mut self, display_name: String, bio: Option<String>, experience: Option<String>, socials: Option<String>, private: Option<String>) -> String {
         // Members read the new profile as soon as it is in Storage and announced. The chain pointer
         // follows at the next admin batch.
         let r = queued(|node, q, _| {
             let socials = profile::socials_from_json(socials.as_deref().unwrap_or(""))?;
-            ops::set_profile(node, q, &display_name, bio.as_deref().unwrap_or(""), experience.as_deref().unwrap_or(""), &socials, now_ms())
+            let about = profile::About { bio: bio.unwrap_or_default(), experience: experience.unwrap_or_default(), socials, private: private.as_deref() == Some("1") };
+            ops::set_profile(node, q, &display_name, &about, now_ms())
         });
         flush();
         id_reply(r)

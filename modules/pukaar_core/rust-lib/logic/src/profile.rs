@@ -36,6 +36,10 @@ pub struct Body {
     /// Links as (label, address). Added in schema /3: a /2 file has none and a file without links omits it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub socials: Vec<Social>,
+    /// The member keeps the bio, the experience and the links from other members. The file is sealed under the
+    /// site key, so this is a promise that this app keeps (it shows the name and the role only), not a lock.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub private: bool,
 }
 
 /// A link: (label, address without the scheme). See `social`.
@@ -47,6 +51,8 @@ pub struct About {
     pub bio: String,
     pub experience: String,
     pub socials: Vec<Social>,
+    /// See `Body::private`.
+    pub private: bool,
 }
 
 pub const SOCIAL_LABELS: [&str; 5] = ["website", "github", "x", "linkedin", "other"];
@@ -560,7 +566,7 @@ mod tests {
     fn a_full_profile_fits_the_inline_cap() {
         // The most that the UI allows: 64 name, 500 bio and 500 experience characters, 4 links, 3 admin wraps.
         let socials = (0..MAX_SOCIALS).map(|_| ("linkedin".to_string(), "u".repeat(MAX_SOCIAL_URL))).collect();
-        let long = Body { display_name: "n".repeat(64), bio: "b".repeat(500), experience: "e".repeat(500), socials };
+        let long = Body { display_name: "n".repeat(64), bio: "b".repeat(500), experience: "e".repeat(500), socials, private: true };
         let admins = [pk(1), pk(2), pk(3)];
         let e = build(&sk(4), &SITE_ID, &USER, 1, 1, &long, Some(&[7; 32]), &admins).unwrap();
         let n = to_bytes(&e).len();

@@ -461,7 +461,7 @@ fn clean_about(text: &str) -> String {
 /// The links that do not pass `profile::social` are dropped: a peer wrote them, so nothing is trusted.
 fn about_of(b: &profile::Body) -> About {
     let socials = b.socials.iter().filter_map(|(l, u)| profile::social(l, u).ok()).take(profile::MAX_SOCIALS).collect();
-    About { bio: clean_about(&b.bio), experience: clean_about(&b.experience), socials }
+    About { bio: clean_about(&b.bio), experience: clean_about(&b.experience), socials, private: b.private }
 }
 
 /// Steward or above, super admins included.

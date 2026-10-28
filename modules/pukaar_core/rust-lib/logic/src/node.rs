@@ -336,14 +336,19 @@ impl Node {
             (c.member_by_key(&key).ok_or("not a member of this site")?, c.role_at(&key, 0))
         };
         let announced = self.fetched.as_ref().and_then(|f| f.lock().unwrap().announce_of(&key)).map(|a| a.version).filter(|v| *v > m.profile_version);
+        // A private profile shows other members the name and the role only: its texts do not leave this call.
+        let own = key == self.me();
         let about = self.about.get(&key);
+        let hidden = !own && about.is_some_and(|a| a.private);
+        let about = about.filter(|_| !hidden);
         let state = match (about, m.profile_cid.is_empty() && announced.is_none()) {
+            _ if hidden => "private",
             (Some(_), _) => "ready",
             (None, true) => "none",
             (None, false) => "loading",
         };
         Ok(json!({
-            "key": hex::encode(key), "fingerprint": fingerprint(&key), "own": key == self.me(),
+            "key": hex::encode(key), "fingerprint": fingerprint(&key), "own": own, "private": self.about.get(&key).is_some_and(|a| a.private),
             "name": self.names.get(&key), "role": rank.map(rank_name), "super_admin": rank == Some(Rank::SuperAdmin),
             "name_signed_by_admin": self.signed.contains(&key),
             "removed": m.status == MemberStatus::Removed || m.revoked.is_some(),
@@ -368,6 +373,7 @@ impl Node {
             "bio": self.about.get(&me).map(|a| &a.bio),
             "experience": self.about.get(&me).map(|a| &a.experience),
             "socials": self.about.get(&me).map(|a| &a.socials),
+            "private": self.about.get(&me).map(|a| a.private),
             "revoked": self.chain.as_ref().and_then(|c| c.lock().unwrap().revocation_of(&me, &self.names)).map(|r| self.with_reason(r)),
             // 2.3b: "requested" once a join request of ours is known
             "pending": "none",
