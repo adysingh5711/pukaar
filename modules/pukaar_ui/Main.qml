@@ -76,12 +76,21 @@ Item {
         if (page === "messages" && c.threads.some(function (t) { return t.key === chatWith && t.unread }))
             call("chat_mark_read", [chatWith], function () {})
     }
-    function applyChatMessages(v) { if (v && Array.isArray(v.messages)) chatMessages = v.messages }
-    function applyGroupInfo(v) { if (v && Array.isArray(v.members)) groupInfo = v }
+    // A reply is for the chat that asked. One that lands after the user switched to another chat is kept for later and not
+    // shown (it used to flash the old chat before the new one came). The last messages of each chat show at once on a switch.
+    property var chatCache: ({})
+    function applyChatMessages(key) {
+        return function (v) {
+            if (!v || !Array.isArray(v.messages)) return
+            chatCache[key] = v.messages
+            if (key === chatWith) chatMessages = v.messages
+        }
+    }
+    function applyGroupInfo(key) { return function (v) { if (key === chatWith && v && Array.isArray(v.members)) groupInfo = v } }
     function openChat(key) {
-        chatWith = key; chatMessages = []; seen["chat_messages"] = ""      // the poll must apply the reply even when it equals the last one
+        chatWith = key; chatMessages = chatCache[key] || []; seen["chat_messages"] = ""      // the poll must apply the reply even when it equals the last one
         groupInfo = ({ members: [] }); seen["chat_group_info"] = ""
-        call("chat_messages", [key], applyChatMessages)
+        call("chat_messages", [key], applyChatMessages(key))
         poll("chat_threads", [], applyChat)      // fresh `known` and `unread` for the thread that opens
         openPage("messages")
     }
@@ -328,8 +337,8 @@ Item {
         if (page === "member" && viewKey) steps.push(["member_profile", [viewKey], applyViewed])
         if (page === "messages" && approved) {
             steps.push(["chat_threads", [], applyChat])
-            if (chatWith) steps.push(["chat_messages", [chatWith], applyChatMessages])
-            if (chatWith && chatGroup) steps.push(["chat_group_info", [chatWith], applyGroupInfo])
+            if (chatWith) steps.push(["chat_messages", [chatWith], applyChatMessages(chatWith)])
+            if (chatWith && chatGroup) steps.push(["chat_group_info", [chatWith], applyGroupInfo(chatWith)])
         }
         // only refresh the pane that is still open (a reply landing after Close must not reopen it)
         if (selected) {
@@ -4445,7 +4454,7 @@ Item {
                         var key = root.chatWith
                         root.run("chat_send", [key, draft.text.trim()], function (r) {
                             draft.clear()
-                            root.call("chat_messages", [key], root.applyChatMessages)
+                            root.call("chat_messages", [key], root.applyChatMessages(key))
                         })
                     }
                     function createGroup() {
@@ -4461,7 +4470,7 @@ Item {
                         root.run("chat_group_add", [convo, Object.keys(addPick.picked).join(",")], function () {
                             addPick.clear()
                             root.notice = "The members are added. They join within a minute or two."
-                            root.call("chat_group_info", [convo], root.applyGroupInfo)
+                            root.call("chat_group_info", [convo], root.applyGroupInfo(convo))
                         })
                     }
                     PageHead {
@@ -4604,7 +4613,15 @@ Item {
                                     Icon { visible: root.chatGroup; name: "members"; size: 18; color: root.t.muted }
                                     ColumnLayout {
                                         Layout.fillWidth: true; spacing: 0
-                                        Label { Layout.fillWidth: true; elide: Text.ElideRight; textFormat: Text.PlainText; font.weight: Font.DemiBold; font.pointSize: root.baseSize * 16 / 14; text: chatPage.currentName }
+                                        Label {   // in a chat with a person, the name opens their profile
+                                            id: chatTitle
+                                            Layout.fillWidth: true; elide: Text.ElideRight; textFormat: Text.PlainText; font.weight: Font.DemiBold; font.pointSize: root.baseSize * 16 / 14; text: chatPage.currentName
+                                            color: !root.chatGroup && titleHover.hovered ? root.t.accent : root.t.fg
+                                            font.underline: !root.chatGroup && titleHover.hovered
+                                            Accessible.name: root.chatGroup ? text : "Open the profile of " + text
+                                            HoverHandler { id: titleHover; enabled: !root.chatGroup; cursorShape: Qt.PointingHandCursor }
+                                            TapHandler { enabled: !root.chatGroup; onTapped: root.showMember(root.chatWith) }
+                                        }
                                         Label {
                                             visible: root.chatGroup
                                             Layout.fillWidth: true; elide: Text.ElideRight; font.pointSize: root.smallSize; color: root.t.muted
@@ -4643,10 +4660,21 @@ Item {
                                         Layout.preferredHeight: Math.min(contentHeight, 150)
                                         clip: true
                                         model: root.groupInfo.members || []
-                                        delegate: Label {
+                                        delegate: RowLayout {
+                                            id: person
                                             required property var modelData
-                                            width: ListView.view.width; elide: Text.ElideRight; textFormat: Text.PlainText; color: root.t.fg
-                                            text: (modelData.me ? "You" : root.who(modelData.key, modelData.name)) + (modelData.pending ? " (joining)" : "")
+                                            // a member of the site that is not us: the key is a site member's key (not a bare chat address)
+                                            readonly property bool canDm: !modelData.me && root.members.some(function (m) { return m.key === modelData.key })
+                                            width: ListView.view.width; spacing: 8
+                                            Label {
+                                                Layout.fillWidth: true; elide: Text.ElideRight; textFormat: Text.PlainText; color: root.t.fg
+                                                text: (person.modelData.me ? "You" : root.who(person.modelData.key, person.modelData.name)) + (person.modelData.pending ? " (joining)" : "")
+                                            }
+                                            LinkButton {
+                                                visible: person.canDm
+                                                text: "Message"; Accessible.name: "Message " + root.who(person.modelData.key, person.modelData.name)
+                                                onClicked: root.openChat(person.modelData.key)
+                                            }
                                         }
                                     }
                                     Label { visible: !chatPage.readOnly; font.weight: Font.DemiBold; text: "Add members" }
