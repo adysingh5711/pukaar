@@ -1,8 +1,13 @@
 //! Anti-entropy: every node broadcasts its heads every 60 s; whoever holds newer
 //! events re-sends them. This is the catch-up path; Delivery's storeQuery is best-effort only.
 
-use crate::event::{sha256, Key};
+use crate::chatbook::{AddrMsg, MAX_ADDR};
+use crate::event::{sha256, Key, MAX_EVENT_BYTES};
+use crate::fetch::MAX_ANNOUNCES;
+use crate::meet::{BusyBody, Signed, MAX_MEET_BYTES, MAX_RANGES};
+use crate::profile::{self, MAX_CID, MAX_INLINE_PROFILE};
 use crate::store::Store;
+use pukaar_sites_rules::JOIN_REQ_LEN;
 use serde::{Deserialize, Serialize};
 
 // ponytail: fixed batch; a ~300-event site catches up in 2 pulls. Page by author if logs grow past ~10k.
@@ -19,12 +24,67 @@ pub const ANSWERERS: usize = 3;
 pub const DELIVERY_CFG: &str =
     r#"{"mode":"Edge","preset":"logos.dev","channelsOverrides":{"sdsCausalHistorySize":0}}"#;
 
-/// What goes on the site channel. `Heads` is unsigned: lying about heads only
-/// changes what gets re-sent, and re-sends are capped.
+/// The kind of a chain write that a `Wire::ChainPending` names. APPEND-ONLY, like `Wire`.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WriteKind {
+    CreateSite,
+    Approve,
+    SetRole,
+    Revoke,
+    SetProfile,
+    SuperAdmin,
+    Anchor,
+    /// `set_details`, `set_places` or `set_keyring`.
+    SetSite,
+}
+
+/// A wire message is an event (at most `MAX_EVENT_BYTES`) or a `ProfileBlob` (an announce of at most
+/// about 300 bytes and a file of at most `MAX_INLINE_PROFILE`) plus a few bytes of framing.
+pub const MAX_WIRE_BYTES: usize = MAX_INLINE_PROFILE + 512;
+const _: () = assert!(MAX_EVENT_BYTES + 16 <= MAX_WIRE_BYTES);
+
+/// A site file that travels over Delivery when Storage cannot connect (`BlobReq`, `BlobChunk`): the
+/// bytes of one chunk, the largest file and so the most chunks. A chunk with its CID and framing is
+/// about 3.2 KB, under `MAX_WIRE_BYTES`. The same size as a profile file, which Delivery already carries.
+pub const BLOB_CHUNK: usize = 3000;
+pub const MAX_FALLBACK: usize = 256 * 1024;
+pub const MAX_CHUNKS: usize = MAX_FALLBACK.div_ceil(BLOB_CHUNK);
+
+/// What goes on the site channel. Only `Event` is signed as a log entry. `Heads` is unsigned:
+/// lying about heads only changes what gets re-sent, and re-sends are capped. APPEND-ONLY: postcard
+/// encodes the variant index.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub enum Wire {
     Event(Vec<u8>),
     Heads(Vec<(Key, u64)>),
+    /// A signed join request, `JOIN_REQ_LEN` (290) bytes. Admins queue it for the next batch.
+    JoinReq(Vec<u8>),
+    /// A member's signed announce of a new profile file (see `profile::Announce`).
+    ProfileAnnounce(profile::Announce),
+    /// A chain write is on its way: peers show a pending chip. `tx` is the transaction hash.
+    ChainPending { tx: Key, kind: WriteKind },
+    /// The announce and the signed profile file itself (at most `MAX_INLINE_PROFILE` bytes), so that an
+    /// admin can approve without a download from the Storage node of the author. A file over the cap
+    /// is not sent this way: the author sends `ProfileAnnounce` and readers download by CID.
+    ProfileBlob { announce: profile::Announce, file: Vec<u8> },
+    /// "Who holds this file?" for a site file whose Storage download failed. Not trusted: the answer
+    /// is checked against `sha256`, the value that the chain holds.
+    BlobReq { cid: String, sha256: Key },
+    /// Chunk `index` of `total` of the file that `BlobReq` named. The receiver checks the whole file.
+    BlobChunk { cid: String, sha256: Key, index: u16, total: u16, bytes: Vec<u8> },
+    /// An admin turned a join request down. `sig` (64 bytes) is the ed25519 signature of `admin` over the
+    /// site and the request id (`joinreq::sign_decline`). The joiner accepts it only for a request that it
+    /// sent, from an active admin.
+    JoinDecline { site: Key, request_id: Key, admin: Key, sig: Vec<u8> },
+    /// A 1:1 meeting message (propose, accept, decline, cancel) in a sealed box for one member (`meet`).
+    Meet(Vec<u8>),
+    /// A signed free/busy summary of one member: times only, no titles (`meet`).
+    Busy(Signed<BusyBody>),
+    /// "Send me the profile announces that I lack": the (author, version) of each announce that the sender holds.
+    /// A peer answers with `ProfileAnnounce` for each one that is newer or missing (`Fetched::answer_announces`).
+    AnnounceReq(Vec<(Key, u64)>),
+    /// A member's signed chat address (`chatbook`). Held when it comes from an active member.
+    ChatAddr(AddrMsg),
 }
 
 impl Wire {
@@ -32,9 +92,34 @@ impl Wire {
     pub fn encode(&self) -> Vec<u8> {
         postcard::to_allocvec(self).expect("postcard encode")
     }
+
+    /// `None` for junk: bad framing, trailing bytes, or a size outside the limits of its kind.
     #[must_use]
     pub fn decode(b: &[u8]) -> Option<Wire> {
-        postcard::from_bytes(b).ok()
+        if b.len() > MAX_WIRE_BYTES {
+            return None;
+        }
+        let (w, tail): (Wire, &[u8]) = postcard::take_from_bytes(b).ok()?;
+        if !tail.is_empty() {
+            return None;
+        }
+        let ok = match &w {
+            Wire::Event(e) => e.len() <= MAX_EVENT_BYTES,
+            Wire::JoinReq(r) => r.len() == JOIN_REQ_LEN,
+            Wire::ProfileAnnounce(a) => a.well_formed(),
+            Wire::ProfileBlob { announce, file } => announce.well_formed() && !file.is_empty() && file.len() <= MAX_INLINE_PROFILE,
+            Wire::BlobReq { cid, .. } => !cid.is_empty() && cid.len() <= MAX_CID,
+            Wire::BlobChunk { cid, index, total, bytes, .. } => {
+                !cid.is_empty() && cid.len() <= MAX_CID && index < total && usize::from(*total) <= MAX_CHUNKS && !bytes.is_empty() && bytes.len() <= BLOB_CHUNK
+            }
+            Wire::JoinDecline { sig, .. } => sig.len() == 64,
+            Wire::Meet(b) => !b.is_empty() && b.len() <= MAX_MEET_BYTES,
+            Wire::Busy(b) => b.sig.len() == 64 && b.body.ranges.len() <= MAX_RANGES,
+            Wire::AnnounceReq(held) => held.len() <= MAX_ANNOUNCES,
+            Wire::ChatAddr(a) => a.sig.len() == 64 && !a.body.addr.is_empty() && a.body.addr.len() <= MAX_ADDR,
+            Wire::Heads(_) | Wire::ChainPending { .. } => true,
+        };
+        ok.then_some(w)
     }
 }
 

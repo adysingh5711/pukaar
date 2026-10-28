@@ -27,6 +27,8 @@ Window {
     readonly property var superJobs: [["superadmin2", "people"], ["superadmin2", "profile"], ["notice", "people"], ["noticed", "board"],
                                       ["noticed", "people"], ["demoted", "people"],
                                       ["superadmin", "people", [["memberRow-adadad", "change"], ["memberRow-a1a1a1", "transfer"]], "panels"]]
+    // Another member's page (viewer, member): full profile with links, a steward (name and role only), a removed member, and our own.
+    readonly property var memberJobs: [["resident", "admin"], ["resident", "steward"], ["admin", "gone"], ["resident", "resident"], ["resident", "r2"]]
     readonly property var revokeJobs: [["removed", "board"], ["removed", "profile"], ["admin", "board", true], ["admin", "issue", true],
                                        ["admin", "people", true, [["memberRow-7e7e7e", "revoke"]]]]
 
@@ -149,7 +151,20 @@ Window {
             var who = viewer
             return { key: keys[who], fingerprint: keys[who].substr(0, 6), role: roles[who] || null, name: names[who], site: site,
                      super_admin: supers.indexOf(who) >= 0, notice: state === "noticed" ? notice(false) : null,
-                     revoked: revocations[who] || null, syncing_own_history: false, delivery: "Open" }
+                     revoked: revocations[who] || null, syncing_own_history: false, delivery: "Open",
+                     socials: who === "admin" ? [["github", "github.com/asha"], ["linkedin", "linkedin.com/in/asha"]] : [], private: who === "r2" }
+        }
+        // member_profile of one key, as node.rs member_profile_json shapes it.
+        function memberPage(who) {
+            var gone = who === "gone", role = gone ? null : roles[who], full = !gone && role !== "Steward"
+            var hidden = who === "r2" && who !== viewer   // r2 keeps the profile private
+            full = full && !hidden
+            return { key: keys[who], fingerprint: keys[who].substr(0, 6), own: who === viewer, name: names[who], role: role, super_admin: supers.indexOf(who) >= 0,
+                     private: who === "r2", 
+                     name_signed_by_admin: role === "Steward", removed: gone, granted_at_ms: (now - 40 * 86400) * 1000, state: hidden ? "private" : "ready",
+                     pointer: who === "admin" ? "announced" : "on_chain", announced_version: who === "admin" ? 3 : null,
+                     bio: full ? "I live near the water tank and help with the pump." : "", experience: full ? "Ten years as a plumber." : "",
+                     socials: full && who === "admin" ? [["github", "github.com/asha"], ["linkedin", "linkedin.com/in/asha"]] : [] }
         }
         function siteInfo() {
             return { site: site, name: "Ward 12, Shivaji Nagar", categories: ["Water", "Garbage", "Drainage", "Streetlight"],
@@ -170,6 +185,7 @@ Window {
             case "site_info": return siteInfo()
             case "list_issues": return issues.map(marked)
             case "issue_timeline": return timeline(a[0])
+            case "member_profile": return memberPage(Object.keys(keys).filter(function (w) { return keys[w] === a[0] })[0])
             case "checkpoint_now": return { heads: [[keys.admin, 12]], heads_root: "c0ffee".repeat(10) + "abcd", n_events: 42, signer: keys.admin,
                 sig: "5a".repeat(64), spel: "spel anchor --site-id " + site + " --heads-root … --payer <YOUR_PUBLIC_ACCOUNT>" }
             }
@@ -190,6 +206,9 @@ Window {
         })
         superJobs.forEach(function (r) {
             [800, 1400].forEach(function (w) { out.push({ state: r[0], width: w, page: r[1], panels: r[2], tag: r[3] }) })
+        })
+        memberJobs.forEach(function (r) {
+            [800, 1400].forEach(function (w) { out.push({ state: r[0], width: w, page: "member", who: r[1], tag: r[1] }) })
         })
         revokeJobs.forEach(function (r) {
             [800, 1400].forEach(function (w) { out.push({ state: r[0], width: w, page: r[1], former: !!r[2], panels: r[3] }) })
@@ -226,6 +245,7 @@ Window {
         v.closeIssue()
         var pane = ["issue", "issue-new"].indexOf(j.page)   // the pane on a claimed fix (a removed member's report with `former`), and on a new report (More)
         if (pane >= 0) { v.openPage("board"); v.openIssue(logos.issues[pane ? 0 : j.former ? 1 : 3].id) }
+        else if (j.who) v.showMember(logos.keys[j.who])
         else if (j.page !== "first-run") v.openPage(j.page)
         if (j.page === "proof") v.checkpoint = logos.reply("checkpoint_now")
         var log = find(v, "changeLog")

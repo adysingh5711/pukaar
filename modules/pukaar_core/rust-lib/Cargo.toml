@@ -11,12 +11,21 @@ license = "MIT OR Apache-2.0"
 [workspace]
 exclude = ["logic"]
 
+# Copied from the LEZ v0.3.1 workspace: patches of a git dependency are not inherited.
+[patch.crates-io]
+keccak = { git = "https://github.com/logos-blockchain/sponges", rev = "3a56e99771beedf04946eab21a4a62adc2951377" }
+
 [lib]
 crate-type = ["staticlib"]
 
 [dependencies]
+bs58 = "0.5"
 hex = "0.4"
-pukaar_logic = { path = "logic" }
+pukaar_logic = { path = "logic", features = ["http"] }
 serde_json = "1"
+# The LEZ wallet crate signs and sends the writes (same tag as the runner of programs/pukaar_sites).
+wallet = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.3.1" }
+lee = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.3.1" }
+tokio = { version = "1", features = ["rt", "time"] }
 # Staged by the builder from the same revision as its code generator (Step 7).
 logos-rust-sdk = { path = "../logos-rust-sdk-src" }

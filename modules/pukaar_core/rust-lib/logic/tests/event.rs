@@ -9,6 +9,8 @@ fn report(key: &SigningKey, text: &str) -> Unsigned {
         prev: ZERO,
         lamport: 1,
         ts: 0,
+        chain_block: 1234,
+        author_account: [9; 32],
         body: Body::Report {
             category: "water".into(),
             location: "W-03".into(),
@@ -60,113 +62,96 @@ fn size_limits() {
     assert_eq!(decode(&[0; 10]), Err(DecodeError::TooShort));
 }
 
-const GOLDEN_REPORT: &str = "6cab53e9cd4262147a2c6fa2304f89c542f133c6a3fea67a400c3141d1cdabfffa913bb6fc43380a0e67ff6f4efb409ffd66f41d2cd266a0d1ce8d16d88fd1016c6f676f733a70756b6161723a31000107070707070707070707070707070707070707070707070707070707070707078a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c00000000000000000000000000000000000000000000000000000000000000000001000505776174657204572d3033000b746170206c65616b696e67";
+const GOLDEN_REPORT: &str = "4f243ab1bc1a7ba4bb35ce7f62d296e6326a367b7adf40bb254a2a8acadd4134b063a45dd073a2f0d46de8ea461a4b348819201366527fa0ee0d3ad31a797a0b6c6f676f733a70756b6161723a32000207070707070707070707070707070707070707070707070707070707070707078a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c0000000000000000000000000000000000000000000000000000000000000000000100d20909090909090909090909090909090909090909090909090909090909090909090005776174657204572d3033000b746170206c65616b696e67";
 
-/// Wire compatibility: bytes signed before `LocationRetire` existed still decode to the
-/// same event, and re-signing the same content reproduces them bit for bit.
+/// Wire compatibility of format 2: the same content signs to the same bytes, and they decode back.
 #[test]
-fn an_event_serialized_before_location_retire_round_trips_unchanged() {
+fn a_format_2_event_round_trips_unchanged() {
     let bytes = hex::decode(GOLDEN_REPORT).unwrap();
     let e = decode(&bytes).unwrap();
     assert_eq!(e.bytes, bytes);
     let k = SigningKey::from_bytes(&[1u8; 32]);
-    let mut u = report(&k, "tap leaking");
-    u.site = [7; 32];
-    assert_eq!(e.u, u);
-    assert_eq!(sign(&k, u).bytes, bytes);
-}
-
-fn retire(reason: &str) -> Body {
-    Body::LocationRetire {
-        code: "W-03".into(),
-        retired: true,
-        reason: reason.into(),
-    }
-}
-
-/// Postcard encodes the variant index first: the new variant must come after Checkpoint.
-#[test]
-fn location_retire_is_appended_after_the_last_variant() {
-    let tag = |b: &Body| postcard::to_allocvec(b).unwrap()[0];
-    let checkpoint = Body::Checkpoint {
-        heads: vec![],
-        lez_tx: String::new(),
-    };
-    assert_eq!(tag(&checkpoint), 14);
-    assert_eq!(tag(&retire("dry")), 15);
+    assert_eq!(e.u, report(&k, "tap leaking"));
+    assert_eq!(sign(&k, report(&k, "tap leaking")).bytes, bytes);
 }
 
 #[test]
-fn location_retire_round_trips() {
+fn the_domain_and_version_are_format_2() {
+    assert_eq!(DOMAIN, b"logos:pukaar:2\0");
+    assert_eq!(VERSION, 2);
     let k = new_key();
+    let e = sign(&k, report(&k, "x"));
+    assert_eq!(&e.bytes[64..64 + DOMAIN.len()], DOMAIN);
+    // a format 1 event (old domain) is refused before anything else
+    let mut old = e.bytes.clone();
+    old[64 + 13] = b'1';
+    assert_eq!(decode(&old), Err(DecodeError::BadDomain));
+    // right domain, wrong version byte, valid signature: the version rule
     let mut u = report(&k, "x");
-    u.body = retire("tap removed");
-    let e = sign(&k, u);
-    assert_eq!(decode(&e.bytes).unwrap(), e);
+    u.v = 1;
+    assert_eq!(decode(&sign(&k, u).bytes), Err(DecodeError::BadVersion));
 }
 
 #[test]
-fn location_retire_reason_over_the_text_cap_is_dropped() {
+fn the_chain_block_is_signed_and_survives_the_wire() {
     let k = new_key();
+    let e = sign(&k, report(&k, "x"));
+    assert_eq!(decode(&e.bytes).unwrap().u.chain_block, 1234);
+    // the block id sits in the signed payload: changing it breaks the signature
     let mut u = report(&k, "x");
-    u.body = retire(&"r".repeat(MAX_TEXT + 1));
-    assert_eq!(decode(&sign(&k, u).bytes), Err(DecodeError::TextTooLong));
+    u.chain_block = 1235;
+    let other = sign(&k, u);
+    assert_ne!(e.bytes[64..], other.bytes[64..]);
+    let mut forged = e.bytes.clone();
+    let at = (0..forged.len()).rev().find(|&i| forged[i..].starts_with(&[0xd2, 0x09])).unwrap();
+    forged[at] ^= 1; // 1234 as a varint is d2 09
+    assert_eq!(decode(&forged), Err(DecodeError::BadSig));
 }
 
 #[test]
-fn location_retire_texts_include_the_reason() {
-    assert_eq!(retire("dry").texts(), vec!["W-03", "dry"]);
-}
-
-fn edit(label: &str) -> Body {
-    Body::LocationEdit {
-        code: "W-03".into(),
-        label: label.into(),
-        group: "Water points".into(),
-    }
-}
-
-fn remove(reason: &str) -> Body {
-    Body::LocationRemove {
-        code: "W-03".into(),
-        undo: false,
-        reason: reason.into(),
-    }
-}
-
-/// v0.1.1 variants come after LocationRetire (15), so every v0.1.0 event keeps its tag.
-#[test]
-fn location_edit_and_remove_are_appended_after_location_retire() {
-    let tag = |b: &Body| postcard::to_allocvec(b).unwrap()[0];
-    assert_eq!(tag(&retire("dry")), 15);
-    assert_eq!(tag(&edit("Tap")), 16);
-    assert_eq!(tag(&remove("never used")), 17);
-}
-
-#[test]
-fn location_edit_and_remove_round_trip() {
+fn only_issue_events_and_checkpoints_are_bodies() {
+    // The variant index is on the wire. Report is first, Checkpoint is last.
     let k = new_key();
-    for body in [edit("Tap, dining hall"), remove("typo")] {
-        let mut u = report(&k, "x");
-        u.body = body;
-        let e = sign(&k, u);
+    let u = |body| Unsigned { body, ..report(&k, "x") };
+    for body in [
+        Body::Comment { issue: [1; 32], text: "hi".into() },
+        Body::MarkDuplicate { issue: [1; 32], of: [2; 32] },
+        Body::Checkpoint { heads: vec![([3; 32], 7)], lez_tx: "tx".into() },
+    ] {
+        let e = sign(&k, u(body));
         assert_eq!(decode(&e.bytes).unwrap(), e);
     }
+    let tag = |b: &Body| postcard::to_allocvec(b).unwrap()[0];
+    assert_eq!(tag(&report(&k, "x").body), 0);
+    assert_eq!(tag(&Body::Checkpoint { heads: vec![], lez_tx: String::new() }), 9);
 }
 
 #[test]
-fn location_edit_and_remove_texts_over_the_cap_are_dropped() {
+fn every_text_is_capped_on_receipt() {
     let k = new_key();
-    let long = "r".repeat(MAX_TEXT + 1);
-    for body in [edit(&long), remove(&long)] {
-        let mut u = report(&k, "x");
-        u.body = body;
-        assert_eq!(decode(&sign(&k, u).bytes), Err(DecodeError::TextTooLong));
+    let long = "a".repeat(MAX_TEXT + 1);
+    for body in [
+        Body::Comment { issue: [1; 32], text: long.clone() },
+        Body::Update { issue: [1; 32], note: "ok".into(), next_step: long.clone(), eta_h: 1 },
+        Body::Reopen { issue: [1; 32], reason: long.clone() },
+        Body::Checkpoint { heads: vec![], lez_tx: long.clone() },
+    ] {
+        let e = sign(&k, Unsigned { body, ..report(&k, "x") });
+        assert_eq!(decode(&e.bytes), Err(DecodeError::TextTooLong));
     }
+    assert!(Body::MarkDuplicate { issue: [1; 32], of: [2; 32] }.texts().is_empty());
 }
 
 #[test]
-fn location_edit_and_remove_texts_cover_every_field() {
-    assert_eq!(edit("Tap").texts(), vec!["W-03", "Tap", "Water points"]);
-    assert_eq!(remove("typo").texts(), vec!["W-03", "typo"]);
+fn the_author_account_is_signed_and_survives_the_wire() {
+    let k = new_key();
+    let e = sign(&k, report(&k, "x"));
+    assert_eq!(decode(&e.bytes).unwrap().u.author_account, [9; 32]);
+    // The account sits in the signed payload: another account is another event, and a flipped byte fails.
+    let other = sign(&k, Unsigned { author_account: [8; 32], ..report(&k, "x") });
+    assert_ne!(e.bytes[64..], other.bytes[64..]);
+    let mut forged = e.bytes.clone();
+    let at = (0..forged.len()).find(|&i| forged[i..].starts_with(&[9; 32])).unwrap();
+    forged[at] = 8;
+    assert_eq!(decode(&forged), Err(DecodeError::BadSig));
 }

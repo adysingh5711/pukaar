@@ -6,11 +6,11 @@
 
 use crate::event::{decode, Id};
 use crate::node::{Node, Restore};
-use crate::store::Store;
 use ed25519_dalek::SigningKey;
+use serde::{de::DeserializeOwned, Serialize};
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Present (holding the restore time, u64 LE) while a restored identity waits for its history.
 const RESTORING: &str = "restoring";
@@ -24,6 +24,49 @@ fn left_list(dir: &Path, site: &Id) -> (Vec<u8>, bool) {
     (left, named)
 }
 
+/// A JSON file of one site in the data folder (`<PREFIX>-<site>.json`): the meetings, the chat addresses.
+/// The file is the source of truth; a file that cannot be read gives the default.
+pub trait SiteFile: Sized + Serialize + DeserializeOwned + Default {
+    const PREFIX: &'static str;
+
+    /// Remember where the file lives (the fields are not saved).
+    fn bind(&mut self, dir: PathBuf, site: Id);
+    fn site(&self) -> Id;
+    fn folder(&self) -> &Path;
+
+    #[must_use]
+    fn load(dir: &Path, site: Id) -> Self {
+        let mut s: Self = fs::read(path_of::<Self>(dir, &site)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        s.bind(dir.to_path_buf(), site);
+        s
+    }
+
+    /// `self` when it is the file of `site`, else the file of `site` loaded in its place.
+    fn for_site(&mut self, dir: &Path, site: &Id) -> &mut Self {
+        if self.site() != *site {
+            *self = Self::load(dir, *site);
+        }
+        self
+    }
+
+    fn save(&self) {
+        if self.folder().as_os_str().is_empty() {
+            return; // not loaded from a folder (a test)
+        }
+        let r = serde_json::to_vec(self).map_err(io::Error::other).and_then(|b| {
+            fs::create_dir_all(self.folder())?;
+            write_atomic(&path_of::<Self>(self.folder(), &self.site()), &b)
+        });
+        if let Err(e) = r {
+            eprintln!("pukaar: could not save {}: {e}", Self::PREFIX);
+        }
+    }
+}
+
+fn path_of<T: SiteFile>(dir: &Path, site: &Id) -> PathBuf {
+    dir.join(format!("{}-{}.json", T::PREFIX, hex::encode(site)))
+}
+
 fn remove_if_present(path: &Path) -> io::Result<()> {
     match fs::remove_file(path) {
         Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
@@ -31,7 +74,7 @@ fn remove_if_present(path: &Path) -> io::Result<()> {
     }
 }
 
-fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
+pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
     let tmp = path.with_extension("tmp");
     fs::write(&tmp, data)?;
     #[cfg(unix)]
@@ -75,13 +118,13 @@ pub fn leave(dir: &Path, site: &Id) -> io::Result<()> {
         .try_for_each(|f| remove_if_present(&dir.join(f)))
 }
 
-/// Join `site`: announce ourselves, unless this key left it before, in which case our chain
-/// is already out there and we wait for it like a restore (re-signing seq 0 would fork it).
+/// Join `site`, unless this key left it before: then our chain is already out there and we wait
+/// for it like a restore (re-signing seq 0 would fork it).
 pub fn join_site(dir: &Path, key: SigningKey, site: Id, now: u64) -> Node {
     if left_list(dir, &site).1 {
         Node::join_restored(key, site, now)
     } else {
-        Node::join_announced(key, site, now)
+        Node::join(key, site)
     }
 }
 
@@ -98,6 +141,13 @@ pub fn load_or_create_key(dir: &Path) -> io::Result<SigningKey> {
     Ok(k)
 }
 
+/// The LEZ account of the key of this device (base58), made with the key if it is not there yet.
+/// The user funds it before the first write, so it must show before any site exists.
+pub fn account_b58(dir: &Path) -> io::Result<String> {
+    let key = load_or_create_key(dir)?;
+    Ok(crate::chain::b58(&crate::lezkey::lez_account_id(&crate::lezkey::derive_lez_secret(&key.to_bytes()))))
+}
+
 pub fn load(dir: &Path) -> io::Result<Option<Node>> {
     let Ok(site) = fs::read(dir.join("site")) else {
         return Ok(None);
@@ -109,11 +159,8 @@ pub fn load(dir: &Path) -> io::Result<Option<Node>> {
     let restore = fs::read(dir.join(RESTORING))
         .ok()
         .map(|b| Restore::new(b.try_into().map(u64::from_le_bytes).unwrap_or(0)));
-    let mut node = Node {
-        key,
-        store: Store::new(site),
-        restore,
-    };
+    let mut node = Node::join(key, site);
+    node.restore = restore;
     let buf = fs::read(dir.join("events.bin")).unwrap_or_default();
     let mut rest = &buf[..];
     while rest.len() >= 4 {

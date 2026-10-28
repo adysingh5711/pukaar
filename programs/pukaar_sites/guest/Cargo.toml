@@ -1,0 +1,20 @@
+[package]
+name = "pukaar_sites_guest"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "pukaar_sites"
+path = "src/main.rs"
+
+[dependencies]
+pukaar_sites_rules = { path = "../rules" }
+lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.3.1", default-features = false }
+clock_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.3.1" }
+
+[features]
+# Adds the P0 gas probe instruction. Off in the release build.
+probe = ["pukaar_sites_rules/probe"]
+
+[dev-dependencies]
+borsh = "1"

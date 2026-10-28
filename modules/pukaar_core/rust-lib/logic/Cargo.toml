@@ -9,15 +9,32 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 argon2 = "0.5"
+# Base58 of the account id, the form the wallet and JSON-RPC print (bitcoin alphabet, as LEZ `base58`).
+bs58 = "0.5"
+# The instruction bytes of the program (the rules crate derives Borsh for them).
+borsh = "1"
 chacha20poly1305 = "0.10"
+# Sealed box (libsodium crypto_box_seal) for the site keyring.
+crypto_box = { version = "0.9", features = ["seal"] }
 ed25519-dalek = "2.1"
 getrandom = "0.2"
 hex = "0.4"
+# HKDF-SHA256 that derives the LEZ key from the Pukaar seed.
+hkdf = "0.12"
+# BIP340 Schnorr on secp256k1, same crate and minor as LEZ v0.3.1 (k256 0.13.4).
+k256 = { version = "0.13", default-features = false, features = ["schnorr"] }
+# Site, Member and Revocation records, PDA seeds and the join body: the program and the app share it.
+pukaar_sites_rules = { path = "../../../../programs/pukaar_sites/rules" }
 postcard = { version = "1.1", features = ["alloc"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+# Blocking JSON-RPC reads (rustls, no default features). The module turns it on with `http`.
+ureq = { version = "3.5", default-features = false, features = ["rustls"], optional = true }
 
 # Signature checks dominate the convergence test; optimise deps even in debug.
 [profile.dev.package."*"]
 opt-level = 3
+
+[features]
+http = ["dep:ureq"]

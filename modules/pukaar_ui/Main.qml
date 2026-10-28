@@ -10,14 +10,17 @@ import QtQuick.Shapes
 Item {
     id: root
     property var me: ({})
-    readonly property var noInfo: ({ categories: [], locations: [], removed_locations: [], members: [], pending: [] })
+    readonly property var noInfo: ({ categories: [], locations: [], retired_locations: [], members: [], pending: [] })
+    readonly property var noChain: ({ key: "", writes: [], waiting: 0, refresh_waiting: 0 })
     property var info: noInfo
     // The lists of site_info live in properties of their own, written only when their content
     // changed: info itself changes on every received event (it carries an event count), and a
     // rebuilt model would wipe typed text in the People rows and reset the Report combos.
     property var categories: []
-    property var locations: []
-    property var placeLog: []            // the admin's change log (site_info place_log), newest first
+    property var locations: []           // the active places
+    property var retiredLocations: []    // the hidden places (site_info retired_locations), shown with state "retired"
+    property var chain: noChain          // chain_status: the state of every queued write
+    property var dismissed: ({})         // ids of writes whose banner was closed (kept until the app closes)
     property var members: []
     property var pending: []
     property var revoked: []             // members whose role the admin removed (site_info revoked), newest first
@@ -29,22 +32,91 @@ Item {
     property bool onlyMine: false
     property string historyPlace: ""     // History's place filter: a place code, "" = every place
     property string notice: ""           // an info banner after an action: where a reopened issue went
+    // ---- Notifications: every banner worth keeping lands here, newest first, until the app closes ----
+    property var inbox: []               // [{ms, text, tone}], at most 50
+    property int unread: 0               // notices added since the panel was last open: the bell's badge
+    property bool inboxOpen: false
+    function addNotice(text, tone) {
+        if (inbox.length && inbox[0].text === text) return      // the same banner twice in a row is one notice
+        inbox = [{ ms: Date.now(), text: text, tone: tone }].concat(inbox.slice(0, 49))
+        if (!inboxOpen) unread++
+    }
     property bool busy: false            // a call is running: every action button waits (no double submit)
     readonly property bool inSite: !!(me && me.site)
     readonly property bool staff: me.role === "Steward" || me.role === "Admin"
     readonly property bool approved: !!me.role      // a pending key has no role yet; the core rejects its reports
     // Our role was revoked, and we have not asked to join again (a new profile puts us back in pending).
-    readonly property bool removed: inSite && !approved && !!me.revoked && !pending.some(function (p) { return p.key === me.key })
+    readonly property bool removed: inSite && !approved && !!me.revoked && me.pending !== "requested" && !pending.some(function (p) { return p.key === me.key })
     readonly property bool unapproved: !approved && !removed      // no role, and it is ours to ask for: read the fingerprint at the kiosk
-    readonly property bool awaitingApproval: inSite && unapproved && !!info.name   // joined, genesis here, not yet granted a role
+    // Joined and not yet granted a role: our request is out (my_identity.pending), or the site data is here.
+    readonly property bool awaitingApproval: inSite && unapproved && me.pending !== "declined" && me.pending !== "expired" && (me.pending === "requested" || !!info.name)
     readonly property bool isAdmin: me.role === "Admin"
     readonly property bool isSuper: !!me.super_admin     // changes admins; at most two per site
     readonly property int superCount: (info.super_admins || []).length
     readonly property string roleName: isSuper ? "Super admin" : me.role || (removed ? "Removed" : "Pending")
     // A restored identity waits for its own history before signing anything (core refuses meanwhile).
     readonly property bool syncing: !!me.syncing_own_history
+    // ---- 1:1 meetings (1-1-meet.md): the core keeps UTC milliseconds, the page shows local time ----
+    property var meets: ({ meetings: [], share: true, lead_min: 10, backup: ({}) })   // meet_list
+    property var meetWith: null          // the member of the open "New meeting" box, or null
+    property string reminder: ""         // the pop-up text; "" = none
+    property var reminded: ({})          // meeting ids that were reminded since the app opened
+    function startMeet(member) { meetWith = member; openPage("meet") }
+    // ---- Messages: private chat (chat_threads, chat_messages, chat_send). One thread per person, and one per group (a row with `group: true`, its `key` the group's id) ----
+    property var chat: ({ threads: [], known: [], chat: ({}) })   // chat_threads
+    property string chatWith: ""         // the member whose thread is open, "" = none
+    property var chatMessages: []        // chat_messages of chatWith, oldest first
+    readonly property var chatThread: (chat.threads || []).filter(function (t) { return t.key === chatWith })[0] || ({})
+    readonly property bool chatGroup: chatThread.group === true      // the open thread is a group
+    property var groupInfo: ({ members: [] })   // chat_group_info of the open group
+    function applyChat(c) {
+        if (!c || !Array.isArray(c.threads)) return
+        chat = c
+        // the open thread is read: clear its dot (the next poll shows the new flag)
+        if (page === "messages" && c.threads.some(function (t) { return t.key === chatWith && t.unread }))
+            call("chat_mark_read", [chatWith], function () {})
+    }
+    function applyChatMessages(v) { if (v && Array.isArray(v.messages)) chatMessages = v.messages }
+    function applyGroupInfo(v) { if (v && Array.isArray(v.members)) groupInfo = v }
+    function openChat(key) {
+        chatWith = key; chatMessages = []; seen["chat_messages"] = ""      // the poll must apply the reply even when it equals the last one
+        groupInfo = ({ members: [] }); seen["chat_group_info"] = ""
+        call("chat_messages", [key], applyChatMessages)
+        poll("chat_threads", [], applyChat)      // fresh `known` and `unread` for the thread that opens
+        openPage("messages")
+    }
+    function chatTime(ms) {
+        if (!ms) return ""
+        return new Date(ms).toDateString() === new Date().toDateString() ? when(ms / 1000, "HH:mm") : when(ms / 1000, "d MMM")
+    }
+    // ---- another member's profile (member_profile): a row of People opens it ----
+    property string viewKey: ""          // the member whose page is open
+    property var viewed: null            // member_profile of viewKey, or {error} once the core refused
+    readonly property var socialLabels: ["website", "github", "x", "linkedin", "other"]   // the labels the core allows
+    function applyViewed(v) { if (v && v.key === viewKey) viewed = v; else if (typeof v === "string") viewed = { error: v } }
+    function showMember(key) { viewKey = key; viewed = null; call("member_profile", [key], applyViewed); openPage("member") }
+    function meetTime(r) { return when(r.start_ms / 1000, "ddd d MMM HH:mm") + " to " + when(r.end_ms / 1000, "HH:mm") }
+    // What a time runs into, as sentences: c is {mine, theirs} from the core (meet_check or a row's clashes).
+    function clashLines(c) {
+        if (!c) return []
+        return (c.mine || []).map(function (x) { return "You are busy with " + who(x.with, x.name) + ", " + meetTime(x) + "." })
+            .concat((c.theirs || []).map(function (r) { return "They are busy, " + meetTime(r) + "." }))
+    }
+    // A local timer: the first confirmed meeting that starts within the lead time, once. It runs only while the app is open.
+    function checkReminders() {
+        var now = Date.now(), lead = (meets.lead_min || 10) * 60000
+        var due = (meets.meetings || []).filter(function (m) {
+            return m.status === "confirmed" && !reminded[m.id] && m.start_ms - now <= lead && m.start_ms > now - 60000
+        })
+        if (!due.length) return
+        var m = due[0], r = Object.assign({}, reminded)
+        r[m.id] = true; reminded = r
+        reminder = "Meeting with " + who(m.with, m.name) + " starts " + (m.start_ms > now ? "in " + plural(Math.max(1, Math.round((m.start_ms - now) / 60000)), "minute") : "now")
+                 + ", at " + when(m.start_ms / 1000, "HH:mm") + "."
+    }
+    Timer { interval: 15000; running: root.inSite && root.approved; repeat: true; triggeredOnStart: true; onTriggered: root.checkReminders() }
     // ---- shell (design/proposal/NOTES.md section 3) ----
-    readonly property var pages: ["board", "report", "people", "places", "proof", "profile", "history"]   // the StackLayout's children, in order
+    readonly property var pages: ["board", "report", "people", "places", "proof", "profile", "history", "meet", "member", "messages"]   // the StackLayout's children, in order
     property string page: "board"
     // The sidebar is expanded (216 px) from 1100 px of window, an 80 px icon rail below; the user's
     // toggle ("expanded" / "collapsed", "" = never pressed) wins at every width and is remembered.
@@ -194,9 +266,12 @@ Item {
     function keep(name, value) { if (JSON.stringify(value) !== JSON.stringify(root[name])) root[name] = value }
     function setInfo(i) {
         info = i
-        keep("categories", i.categories); keep("locations", i.locations); keep("placeLog", i.place_log || [])
+        keep("categories", i.categories); keep("locations", i.locations || [])
+        keep("retiredLocations", (i.retired_locations || []).map(function (l) {
+            return Object.assign({}, l, { state: "retired", open_issues: 0, ever_used: true })
+        }))
         keep("members", i.members); keep("pending", i.pending); keep("revoked", i.revoked || [])
-        keep("groupNames", groupsOf(i.locations))
+        keep("groupNames", groupsOf(allPlaces))
     }
     // Opening a card moves the cursor to the note, so a steward can type straight away.
     function openIssue(id) {
@@ -207,11 +282,6 @@ Item {
         })
     }
     function closeIssue() { selected = null }
-    // The core's Delivery state, in plain words (the raw Down/Listening/Starting/Started/Open are internal).
-    function deliveryLabel(d) {
-        if (failed(d)) return "offline: " + d.substr("error: ".length)
-        return d === "Open" ? "online" : "connecting"
-    }
     function failed(v) {
         return typeof v === "string" && (v.indexOf("error:") === 0 || v.indexOf("rejected:") === 0)
     }
@@ -232,7 +302,7 @@ Item {
     // Drop this device's copy of the site (the key stays); back to the first-run screen.
     function leave() {
         run("leave_site", [], function () {
-            closeIssue(); page = "board"; checkpoint = null; issues = []; setInfo(noInfo); seen = ({})
+            closeIssue(); page = "board"; chatWith = ""; checkpoint = null; issues = []; setInfo(noInfo); chain = noChain; seen = ({})
         })
     }
     // Poll steps in order; the site-bound ones only once my_identity says we are in a site.
@@ -250,8 +320,16 @@ Item {
         var steps = [
             ["my_identity", [], function (m) { me = (m && typeof m === "object") ? m : {} }],
             ["site_info", [], function (i) { if (i && i.site) setInfo(i) }],
+            ["chain_status", [], function (s) { if (s && Array.isArray(s.writes)) chain = s }],
+            ["meet_list", [], function (l) { if (l && Array.isArray(l.meetings)) meets = l }],
             ["list_issues", [], function (l) { if (Array.isArray(l)) issues = l }]
         ]
+        if (page === "member" && viewKey) steps.push(["member_profile", [viewKey], applyViewed])
+        if (page === "messages" && approved) {
+            steps.push(["chat_threads", [], applyChat])
+            if (chatWith) steps.push(["chat_messages", [chatWith], applyChatMessages])
+            if (chatWith && chatGroup) steps.push(["chat_group_info", [chatWith], applyGroupInfo])
+        }
         // only refresh the pane that is still open (a reply landing after Close must not reopen it)
         if (selected) {
             var open = selected.issue.id
@@ -288,49 +366,114 @@ Item {
     function who(key, name) { return name ? name : "pseudonym " + String(key).substr(0, 6) }
     function formerTag(former) { return former ? " (former member)" : "" }   // after a revoked author's name and code
     function when(ts, format) { return new Date(ts * 1000).toLocaleString(Qt.locale(), format || "d MMM HH:mm") }
-    // A member's admin notice (site_info notices): the running one while they are an admin, else the
-    // one that ended it, or their last demotion.
-    function noticeOf(m) {
-        var n = (info.notices || []).filter(function (x) { return x.subject === m.key })[0], d = m.demotions || []
-        return m.role === "Admin" ? n || null : n || d[d.length - 1] || null
+    // ---- chain writes (chain_status): every queued write, in the order it was queued. A write moves
+    // waiting (held for Send changes), preparing, queued, sent, confirming, then included, or rejected
+    // with a reason. A rejected write is gone: the row shows the old state again. ----
+    readonly property var liveStates: ["waiting", "preparing", "queued", "sent", "confirming"]
+    readonly property var stateText: ({ waiting: "waiting to be sent", preparing: "preparing", queued: "queued", sent: "sending",
+                                        confirming: "confirming", included: "on the chain", rejected: "rejected" })
+    readonly property var kindText: ({ create_site: "Site", approve: "Approval", set_role: "Role change", revoke: "Revoke",
+        set_profile: "Profile update", staff_name: "Staff name", profile: "Profile", set_details: "Site details", set_places: "Places change",
+        super_admin_add: "Super admin change", super_admin_remove: "Super admin change", super_admin_transfer: "Super admin change", anchor: "Anchor", backup: "Meetings backup" })
+    // The held kinds that Send changes sends: approvals, role changes, revokes and profile refreshes.
+    readonly property var batchKinds: ["approve", "set_role", "revoke", "set_profile"]
+    readonly property var writes: chain.writes || []
+    readonly property int waitingCount: (chain.waiting || 0) + (chain.refresh_waiting || 0)
+    // A batch is on its way: some of its writes have left the waiting state and are not done.
+    readonly property bool batchBusy: writes.some(function (w) { return batchKinds.indexOf(w.kind) >= 0 && liveStates.indexOf(w.state) >= 0 && w.state !== "waiting" })
+    // The newest write about this member (base58 account), or null.
+    function writeFor(account) {
+        var l = writes.filter(function (w) { return !!account && (w.accounts || []).indexOf(account) >= 0 })
+        return l.length ? l[l.length - 1] : null
     }
-    // The People row's line about it.
-    function noticeLine(m) {
-        var n = noticeOf(m)
-        if (!n) return ""
-        var by = who(n.by, n.by_name), why = "“" + n.reason + "”"
-        if (m.role === "Admin")
-            return "Admin · " + (n.outcome === "remove" ? "is removed" : "becomes steward") + " on " + when(n.deadline) + " (notice by " + by + ": " + why + ")"
-        return m.role + " · was admin until " + when(n.deadline) + ", changed by " + by + ": " + why
-               + (n.sealed_by ? " Sealed by " + who(n.sealed_by, n.sealed_by_name) + (n.sealed_ts ? " at " + when(n.sealed_ts) : "") + "." : "")
+    // An anchor write is on its way: one at a time.
+    readonly property bool anchorLive: writes.some(function (w) { return w.kind === "anchor" && liveStates.indexOf(w.state) >= 0 })
+    function isLive(w) { return !!w && liveStates.indexOf(w.state) >= 0 }
+    function writeWhy(w) { return w.reason ? ": " + w.reason : "" }
+    // The key of our account in the wallet: only a failure is news ("ok" and "not imported yet" are not).
+    readonly property string keyProblem: ["", "ok", "not imported yet"].indexOf(chain.key || "") >= 0 ? "" : chain.key
+    // The balance of our network account (chain_status, in lepta, null until the first read). The core holds a write
+    // back under chain.floor_lepta, so that a failed write can still be paid, and it goes on when funds arrive.
+    // The warning comes under chain.low_lepta: fewer than three more writes fit.
+    readonly property var balance: chain.balance_lepta === undefined ? null : chain.balance_lepta
+    function lez(l) {
+        var f = String(1e9 + l % 1e9).substr(1).replace(/0+$/, "")
+        return Math.floor(l / 1e9) + (f ? "." + f : "")
     }
-    // The member's own refused role actions (site_info rejected), e.g. an admin's after their notice ended.
-    function rejectedLine(m) {
-        var l = (info.rejected || []).filter(function (r) { return r.author === m.key }), n = noticeOf(m)
-        if (!l.length) return ""
-        return plural(l.length, "action") + " by " + who(m.key, m.name) + (n && m.role !== "Admin" ? " after " + when(n.deadline) : "")
-               + (l.length === 1 ? " was" : " were") + " rejected: " + l[0].reason
+    readonly property string balanceState: balance === null ? "unknown" : balance < chain.floor_lepta ? "short" : balance < chain.low_lepta ? "low" : "ok"
+    readonly property string balanceLine: balance === null ? "Balance: not read yet."
+        : "Balance: " + lez(balance) + " LEZ." + (balanceState === "short" ? " A write needs at least " + lez(chain.floor_lepta)
+            + " LEZ, so that a failed write can still be paid. Send funds to this account." : balanceState === "low" ? " This is enough for fewer than three more writes. Add funds soon." : "")
+    // The first write that waits because the account holds too little (its reason says what to do), or null.
+    readonly property var fundsWrite: writes.filter(function (w) { return w.needs_funds })[0] || null
+    // The banners at the top: a rejected write, and a write that has no row of its own (the site, places,
+    // super admins) while it is on its way. The site stays on screen once it is on the chain, until closed.
+    // Kept in a property of its own, replaced only when its content changed: chain_status arrives every 2 s as a new object,
+    // and a rebuilt Repeater would restart every banner's delay and never show it.
+    property var writeBanners: []
+    onWriteBannersNextChanged: if (JSON.stringify(writeBannersNext) !== JSON.stringify(writeBanners)) writeBanners = writeBannersNext
+    readonly property var writeBannersNext: writes.filter(function (w) {
+        if (dismissed[w.id]) return false
+        if (w.needs_funds) return false      // the funds banner says why it waits
+        return w.state === "rejected" || (w.kind === "create_site" ? true
+            : (w.accounts || []).length === 0 && w.kind !== "profile" && isLive(w))
+    }).slice(-3)
+    function dismiss(id) { var d = Object.assign({}, dismissed); d[id] = true; dismissed = d }
+    // Delivery, chain and Storage as one status each: {name, site, tone, state, detail}. The tone is "ok" (green),
+    // "conn" (amber: working or not known yet), "idle" (grey: nothing to read yet) or "off" (red: a real problem).
+    // The sidebar shows only the tone, Profile shows every word, so the two always agree.
+    // The chain is red only when a read really failed. A site that is not created yet is grey, never an outage.
+    function agoMs(ms) {
+        var sec = Math.max(0, now - ms / 1000)
+        return (sec < 120 ? "just now" : sec < 3600 ? Math.floor(sec / 60) + " min ago" : dur(Math.floor(sec / 3600)) + " ago") + " (" + when(ms / 1000, "HH:mm") + ")"
     }
-    // The change log's action chip per kind: its label and colour group (blue in motion, green restored, grey ended).
-    readonly property var placeActions: ({ added: ["Added", "closed"], edited: ["Edited", "progress"], renamed: ["Renamed", "progress"],
-        retired: ["Retired", "closed"], restored: ["Restored", "resolved"], removal_started: ["Removal started", "progress"],
-        removal_undone: ["Removal undone", "progress"], removed: ["Removed", "closed"] })
-    // A change-log row's reason/detail, from site_info place_log.
-    function placeDetail(c) {
-        var reason = (c.reason || "").replace(/[.\s]+$/, "")
-        if (c.kind === "renamed") return "from “" + c.from + "” to “" + c.to + "”"
-        if (c.kind === "removed") return (reason ? reason + " " : "") + "(started by " + who(c.by, c.by_name) + " on " + when(c.since, "d MMM") + ")"
-        var pending = c.kind === "removal_started" && locations.some(function (l) { return l.code === c.code && l.state === "pending_removal" && l.removes_at === c.ends_at })
-        return pending ? (reason ? reason + ". " : "") + "Hidden on " + when(c.ends_at, "d MMM") + " unless undone" : reason
+    readonly property var connRows: {
+        var d = me.delivery, c = info.chain, s = info.storage
+        var gone = failed(d)
+        var chainRow = !c ? ["conn", "Connecting", "Waiting for the first read of the chain."]
+            : c.ok ? ["ok", "Online", "Last read: block " + c.block + (c.read_ms ? ", " + agoMs(c.read_ms) : "") + "."]
+            : c.missing ? ["idle", "Site not created yet", "The site is not on the chain yet."]
+            : c.error ? ["off", "Offline", "The chain read failed: " + c.error + (c.block ? ". Last good read: block " + c.block + (c.read_ms ? ", " + agoMs(c.read_ms) : "") : "") + "."]
+            : ["conn", "Connecting", "Waiting for the first read of the chain."]
+        var files = s && s.pending > 0 ? plural(s.pending, "file") + " waiting." : "No files are waiting."
+        var storageRow = !s ? ["conn", "Connecting", "Waiting for the Storage module."]
+            : s.error ? ["off", s.ready ? "Running, with an error" : "Not running", s.error + (s.pending > 0 ? " " + files : "")]
+            : s.ready ? [s.pending > 0 ? "conn" : "ok", "Running", files]
+            : s.pending > 0 ? ["conn", "Starting", "The Storage node is starting. This can take a minute. " + files]
+            : ["conn", "Not started yet", "Storage starts when the site needs a file."]
+        return [
+            { name: "Delivery", site: false, tone: gone ? "off" : d === "Open" ? "ok" : "conn", state: gone ? "Offline" : d === "Open" ? "Online" : "Connecting",
+              detail: gone ? "Reason: " + d.replace(/^(error|rejected): /, "") : d === "Open" ? "Messages to other members can go out." : "Waiting for the delivery network." },
+            { name: "Chain", site: true, tone: chainRow[0], state: chainRow[1], detail: chainRow[2] },
+            { name: "Storage", site: true, tone: storageRow[0], state: storageRow[1], detail: storageRow[2] }
+        ]
     }
-    // One change-log row in plain words: what the search matches and a screen reader says.
-    function placeChange(c) {
-        return [c.code, c.label, placeActions[c.kind][0], "by", who(c.by, c.by_name), when(c.ts), placeDetail(c)].join(" ")
+    // Profile's own extra row: the balance of the network account. Not in connRows, because the sidebar shows one dot for each of those.
+    readonly property var balanceRow: ({ name: "Balance", site: false, tone: ({ unknown: "conn", short: "off", low: "conn", ok: "ok" })[balanceState],
+        state: balance === null ? "Not read yet" : lez(balance) + " LEZ", detail: balance === null ? "The balance shows after the first read of the chain." : balanceLine.replace(/^Balance: [^ ]+ LEZ\.\s*/, "") || "Enough for the next writes." })
+    // A status dot colour: the sidebar's tokens, or the page's.
+    function toneColor(tone, side) {
+        return (side ? { ok: t.sbOk, conn: t.sbConn, off: t.sbOff, idle: t.sbCtl } : { ok: t.okDot, conn: t.connDot, off: t.danger, idle: t.ctlBd })[tone]
+    }
+    // The newest queued write, in one line, for the Profile status card.
+    readonly property string latestWrite: {
+        var w = writes.length ? writes[writes.length - 1] : null
+        if (!w) return "No change has been sent to the chain yet."
+        var why = w.reason ? String(w.reason).substr(0, 140) + (String(w.reason).length > 140 ? "…" : "") : ""
+        return "Latest change for the chain: #" + w.id + ", " + (kindText[w.kind] || w.kind) + ", " + (stateText[w.state] || w.state) + (why ? ". Reason: " + why : ".")
+    }
+    // Why the chain refused a write, as a hint: funds only when the reason is about fees or funds.
+    // ponytail: a word match on the reason text. Ceiling: a new wording from the chain is not caught.
+    function rejectHint(reason) {
+        var r = String(reason || "")
+        return /\b(funds?|balance|fees?|insufficient|lepta)\b/i.test(r) ? "Check that your network account has funds."
+             : /\bstorage\b/i.test(r) ? "Storage did not start. See Profile for details." : ""
     }
     function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") }
     function place(i) {
-        var p = i.location === "other" ? "Other" : (i.location + " " + (i.location_label || ""))
-        if (i.location_retired) p += " (retired)"
+        var l = placeByCode(i.location)
+        var p = i.location === "other" ? "Other" : (i.location + " " + (i.location_label || (l ? l.label : "")))
+        if (i.location_retired || (l && l.state === "retired")) p += " (retired)"
         return i.landmark ? p + " (" + i.landmark + ")" : p
     }
     function placeCode(i) { return i.location === "other" ? "Other" : i.location }
@@ -351,15 +494,11 @@ Item {
     function anchorSummary(a) {
         var newer = newerEvents(a)
         return "Last anchor recorded " + age(a.ts) + " (" + when(a.ts, now - a.ts < 6 * 86400 ? "ddd HH:mm" : "") + "). Covers "
-            + plural(a.events_covered, "event") + "."
+            + plural(a.events_covered, "event") + "." + (a.block ? " Seen on the chain at block " + a.block + "." : "")
             + (newer ? " " + plural(newer, "newer event") + (newer === 1 ? " isn't" : " aren't") + " anchored yet." : "")
     }
-    // A place that takes no reports, in words: "retired" or "removes in 12 days" ("" = active).
-    function placeState(l) {
-        if (l.state === "pending_removal")
-            return "removes in " + plural(Math.max(0, Math.ceil((l.removes_at - Date.now() / 1000) / 86400)), "day")
-        return l.state === "retired" ? "retired" : ""
-    }
+    // A place that takes no reports, in words: "retired" ("" = active).
+    function placeState(l) { return l.state === "retired" ? "retired" : "" }
     function dueHours(p) { return Math.round((p.due_ts - Date.now() / 1000) / 3600) }
     function isOverdue(i) {
         var p = i.progress
@@ -382,6 +521,10 @@ Item {
     property real now: Date.now() / 1000
     Timer { interval: 60000; running: true; repeat: true; onTriggered: root.now = Date.now() / 1000 }
     function hoursSince(ts) { return Math.floor((now - ts) / 3600) }
+    // When a join request stops being valid, in plain words (the core gives `until`, unix seconds, and `left`).
+    function validLine(until, left) {
+        return "Your request is valid until " + when(until, "ddd d MMM, HH:mm") + (left ? " (" + left + " left)" : "") + ". After that you can send it again."
+    }
     function dur(h) { return h < 48 ? h + " h" : Math.floor(h / 24) + " d" }
     function age(ts) { var h = hoursSince(ts); return h < 1 ? "just now" : dur(h) + " ago" }
     // The card's red lines. SLA flags are computed by the core (site SLA hours); this only words them.
@@ -520,10 +663,12 @@ Item {
     // THE place filter, shared by the Report picker and the Members list: keeps the places that
     // match `query` (code, name or group), `group` ("" = any) and the retired switch, ordered so
     // every group is one run of rows (views print one header per run).
+    readonly property var allPlaces: locations.concat(retiredLocations)   // active first, then the hidden ones
+    function placeByCode(code) { return allPlaces.filter(function (x) { return x.code === code })[0] }
     function placesView(query, group, withRetired) {
         var q = query.trim().toLowerCase()
-        var shown = locations.filter(function (l) {
-            return (withRetired || l.state === "active") && (group === "" || l.group === group)
+        var shown = (withRetired ? allPlaces : locations).filter(function (l) {
+            return (group === "" || l.group === group)
                 && (q === "" || (l.code + " " + l.label + " " + l.group).toLowerCase().indexOf(q) >= 0)
         })
         var out = []
@@ -531,7 +676,7 @@ Item {
         return out
     }
     function placeLabel(code) {
-        var l = locations.filter(function (x) { return x.code === code })[0]
+        var l = placeByCode(code)
         return l ? l.code + "  " + l.label : code
     }
     function openIssuesText(n) { return plural(n, "open issue") }
@@ -684,6 +829,44 @@ Item {
         }
         contentItem: Label { text: check.text; color: root.ink(check.enabled); leftPadding: check.indicator.width + 8; verticalAlignment: Text.AlignVCenter }
     }
+    // A search box over a list of people to tick (New group, Add members). `picked` is {key: true}; `clear()` resets both.
+    component MemberPicker: ColumnLayout {
+        id: mp
+        property var people: []
+        property var picked: ({})
+        readonly property int count: Object.keys(picked).length
+        readonly property var shown: {
+            var q = find.text.trim().toLowerCase()
+            return people.filter(function (m) { return !q || (m.name || "").toLowerCase().indexOf(q) >= 0 || m.key.indexOf(q) === 0 })
+        }
+        function clear() { find.clear(); picked = ({}) }
+        function focusSearch() { Qt.callLater(find.forceActiveFocus) }
+        function toggle(key, on) {
+            var p = Object.assign({}, picked)
+            if (on) p[key] = true; else delete p[key]
+            picked = p
+        }
+        spacing: 8
+        FramedField { id: find; Layout.fillWidth: true; placeholderText: "Search by name"; Accessible.name: "Search members" }
+        ListView {
+            Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumHeight: 96
+            clip: true
+            model: mp.shown
+            delegate: FramedCheck {
+                id: pick
+                required property var modelData
+                width: ListView.view.width
+                text: root.who(modelData.key, modelData.name)
+                onToggled: mp.toggle(modelData.key, checked)
+                Binding { target: pick; property: "checked"; value: !!mp.picked[pick.modelData.key] }
+            }
+            Label {
+                visible: parent.count === 0
+                anchors.centerIn: parent; color: root.t.muted
+                text: find.text ? "Nobody matches." : "There is nobody to add."
+            }
+        }
+    }
     // The sidebar's tooltip: right of its parent, on the sidebar's tooltip tokens.
     component SideTip: ToolTip {
         id: tip
@@ -700,7 +883,8 @@ Item {
         property bool current: false
         property bool compact: false
         property int count: 0
-        readonly property string waiting: count > 0 ? ", " + count + " waiting" : ""
+        property bool dot: false      // something new, no number (unread messages)
+        readonly property string waiting: count > 0 ? ", " + count + " waiting" : dot ? ", unread" : ""
         readonly property color ink: current ? root.t.sbActFg : root.t.sbFg
         readonly property color iconInk: current ? root.t.sbActIcon : root.t.sbIcon
         Layout.fillWidth: true
@@ -723,6 +907,12 @@ Item {
                 y: nav.compact ? 2 : (parent.height - height) / 2
                 Label { id: pill; anchors.centerIn: parent; text: nav.count; color: root.t.onPrimary; font.pointSize: root.smallSize; font.weight: Font.DemiBold }
             }
+            Rectangle {   // the unread dot: right of the label, or the rail icon's top-right corner
+                visible: nav.dot && nav.count === 0
+                width: 10; height: 10; radius: 5; color: root.t.primary
+                x: parent.width - width - (nav.compact ? 6 : 14)
+                y: nav.compact ? 6 : (parent.height - height) / 2
+            }
         }
         contentItem: Item {
             implicitHeight: nav.compact ? 0 : lines.implicitHeight
@@ -730,7 +920,7 @@ Item {
             Column {
                 id: lines
                 visible: !nav.compact
-                x: 32; width: parent.width - 32 - (nav.count > 0 ? 36 : 0); anchors.verticalCenter: parent.verticalCenter
+                x: 32; width: parent.width - 32 - (nav.count > 0 || nav.dot ? 36 : 0); anchors.verticalCenter: parent.verticalCenter
                 Label { width: parent.width; text: nav.text; color: nav.ink; elide: Text.ElideRight; font.weight: nav.current ? Font.DemiBold : Font.Medium }
             }
         }
@@ -810,11 +1000,6 @@ Item {
             DashLine { visible: link.mono; y: parent.height + 1; width: parent.width; color: root.t.accent; pattern: link.hovered ? [1, 0] : [1, 2] }
             Rectangle { anchors { fill: parent; margins: -3 } radius: 4; color: "transparent"; border.width: link.visualFocus ? 2 : 0; border.color: root.t.focus }
         }
-    }
-    // A place's "Changes" link; the caller says what a click does.
-    component ChangesLink: LinkButton {
-        property string code
-        text: "Changes"; Accessible.name: "Changes to " + code
     }
     // A place code that opens that place in History. A button of its own, so a click on it never
     // reaches the card it sits in.
@@ -929,8 +1114,7 @@ Item {
     // A table's columns: each one's width (the `fill` ones also share what is left) and the `low` priority
     // ones that drop out when `compact`. History's drop out on a narrow page or beside the issue pane.
     readonly property var histTable: ({ w: [62, 170, 220, 150, 80, 170, 90, 60], fill: [1, 2, 5], low: [4, 5, 6, 7], compact: compactRows || paneOpen })
-    readonly property var placeTable: ({ w: [56, 0, 110, 130, 84, 76, 296], fill: [1], low: [2, 4, 5], compact: compactRows })
-    readonly property var logTable: ({ w: [64, 190, 140, 100, 200], fill: [1, 4], low: [3], compact: compactRows })
+    readonly property var placeTable: ({ w: [56, 0, 110, 130, 84, 296], fill: [1], low: [2, 4], compact: compactRows })
     // One table cell: a text, then whatever it holds (flag lines, chips). The header row uses it too.
     component HistCell: Column {
         required property int col
@@ -952,7 +1136,6 @@ Item {
         }
     }
     component PlaceCell: HistCell { cols: root.placeTable }
-    component LogCell: HistCell { cols: root.logTable }
     // A table's column titles: a tinted strip over its rows, inset like them.
     component TableHead: Rectangle {
         default property alias cells: heads.data
@@ -1182,6 +1365,40 @@ Item {
         Flow { id: acts; Layout.fillWidth: true; spacing: 8 }
     }
 
+    // One meeting: who, when, its state, what a waiting proposal runs into, then the buttons that the caller adds.
+    component MeetRow: ColumnLayout {
+        id: mr
+        required property var modelData
+        required property int index
+        default property alias actions: act.data
+        readonly property var lines: root.clashLines(modelData.clashes)
+        readonly property string phrase: ({ proposed: modelData.you === "requester" ? "Waiting for their answer" : "Asks for your answer",
+                                           confirmed: "Confirmed", declined: "Declined", cancelled: modelData.cancelled_by_you ? "Cancelled by you" : "Cancelled", unaccepted: "Not accepted" })[modelData.status]
+        Layout.fillWidth: true
+        spacing: 0
+        Rectangle { visible: mr.index > 0; Layout.fillWidth: true; implicitHeight: 1; color: root.t.bd }
+        GridLayout {
+            Layout.fillWidth: true; Layout.margins: 12; Layout.leftMargin: 16; Layout.rightMargin: 16
+            columns: root.compactRows ? 1 : 2; columnSpacing: 12; rowSpacing: 8
+            ColumnLayout {
+                Layout.fillWidth: true; Layout.alignment: Qt.AlignTop
+                spacing: 4
+                Flow {
+                    Layout.fillWidth: true; spacing: 6
+                    Label { text: root.who(mr.modelData.with, mr.modelData.name); textFormat: Text.PlainText; font.weight: Font.DemiBold }
+                    StatusChip { label: mr.phrase; stage: mr.modelData.status === "confirmed" ? root.t.resolved : mr.modelData.status === "proposed" ? root.t.progress : root.t.closed }
+                }
+                Label { text: root.meetTime(mr.modelData); color: root.t.muted; font.pointSize: root.smallSize }
+                Label {
+                    visible: mr.lines.length > 0
+                    Layout.fillWidth: true; wrapMode: Text.Wrap; color: root.t.warn; font.pointSize: root.smallSize
+                    text: "This time clashes. " + mr.lines.join(" ") + (mr.modelData.you === "invitee" ? " You can still accept." : "")
+                }
+            }
+            RowLayout { id: act; Layout.alignment: Qt.AlignTop | Qt.AlignRight; spacing: 8 }
+        }
+    }
+
     // ---- layout pieces ----
 
     // One tab of the StackLayout: scrolls when its content outgrows the window (30 pending
@@ -1373,8 +1590,37 @@ Item {
 
     // A tinted notice (info blue, `err` red, or a `tone`: "warn" amber, "plain" neutral) with an icon, wrapped text, and optionally one button
     // on the right: a text one (`buttonText`) or an icon-only one (`buttonIcon`).
+    // A notice shows only after its condition `when` has held for `delay` ms (a start-up state that clears by itself
+    // never shows), and goes away by itself after `expire` ms (0 = stays). `shown` is the result; when `when` clears,
+    // the next time starts again.
+    component Settled: Item {
+        id: gate
+        property bool when: true
+        property int delay: 0
+        property int expire: 0
+        property bool ready: delay === 0
+        property bool spent: false
+        readonly property bool shown: when && ready && !spent
+        onWhenChanged: if (!when) { ready = delay === 0; spent = false }
+        Timer { running: gate.when && !gate.ready; interval: gate.delay; onTriggered: gate.ready = true }
+        Timer { running: gate.shown && gate.expire > 0; interval: gate.expire; onTriggered: gate.spent = true }
+    }
+
+    // `when`, `delay` and `expire` are Settled's. `log` keeps what it said in the Notifications panel. A caller that
+    // sets `visible` itself skips all of this.
     component Flash: Rectangle {
         id: flash
+        property bool when: true
+        property int delay: 0
+        property int expire: 0
+        property bool log: false
+        readonly property string said: (lead ? lead + " " : "") + text
+        function keep() { if (log && gate.shown) root.addNotice(said, tone) }
+        visible: gate.shown
+        onShownChanged: keep()
+        onSaidChanged: keep()
+        readonly property bool shown: gate.shown
+        Settled { id: gate; when: flash.when; delay: flash.delay; expire: flash.expire }
         property string text
         property string lead               // a bold red first sentence
         property bool err: false
@@ -1415,6 +1661,10 @@ Item {
 
     // A wrapped paragraph. Plain text on purpose: "<YOUR_PUBLIC_ACCOUNT>" must not be read as a tag.
     component Note: Label {
+        property bool when: true           // with `delay` (ms): shows only after `when` has held that long (see Settled)
+        property int delay: 0
+        visible: gate.shown
+        Settled { id: gate; when: parent.when; delay: parent.delay }
         Layout.fillWidth: true
         wrapMode: Text.Wrap
         textFormat: Text.PlainText
@@ -1435,6 +1685,60 @@ Item {
             anchors.centerIn: parent; text: fp.text; font.family: "monospace"; textFormat: Text.PlainText
             font.pointSize: fp.big ? root.baseSize * 18 / 14 : root.smallSize; font.weight: fp.big ? Font.DemiBold : Font.Normal
             font.letterSpacing: fp.big ? 1 : 0
+        }
+    }
+
+    // What the chain is doing with the change to one member: a chip while it waits or is on its way, and
+    // the reason when the chain rejected it (the row then shows its old state again).
+    component WriteMark: ColumnLayout {
+        id: mark
+        property string account
+        property bool queued: false          // site_info.pending: an approval for this person is queued
+        readonly property var w: root.writeFor(account)
+        readonly property bool live: root.isLive(w)
+        readonly property bool rejected: !!w && w.state === "rejected"
+        Layout.fillWidth: true
+        spacing: 4
+        visible: live || queued || rejected
+        Flow {
+            Layout.fillWidth: true
+            visible: mark.live || mark.queued
+            StatusChip {
+                label: mark.live ? root.kindText[mark.w.kind] + " " + root.stateText[mark.w.state] : "Approval waiting to be sent"
+                stage: root.t.progress; icon: "await"
+            }
+        }
+        FlagLine {
+            visible: mark.rejected; Layout.fillWidth: true
+            modelData: mark.rejected ? "Rejected" + root.writeWhy(mark.w) + "." : ""
+        }
+    }
+
+    // The LEZ account of the user, to copy and fund: it pays the fee of every change that goes to the chain.
+    component AccountBox: ColumnLayout {
+        Layout.fillWidth: true
+        spacing: 4
+        visible: !!root.me.account
+        FormRow {
+            label: "Your network account"
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                FramedField {
+                    Layout.fillWidth: true; readOnly: true; text: root.me.account || ""
+                    font.family: "monospace"; Accessible.name: "Your network account"
+                }
+                FramedButton { text: "Copy"; iconName: "copy"; Accessible.name: "Copy your network account"; onClicked: root.copyText(root.me.account) }
+            }
+        }
+        Help {
+            visible: root.inSite
+            text: root.balanceLine; color: root.balanceState === "short" ? root.t.danger : root.balanceState === "low" ? root.t.warn : root.t.muted
+            font.weight: root.balanceState === "short" || root.balanceState === "low" ? Font.DemiBold : Font.Normal
+        }
+        Help {
+            text: "This account pays the small network fee for each change that you send to the chain. "
+                + "It needs funds before your first change. Add funds to it from your wallet. Without funds, the app holds the change back and sends it when funds arrive."
         }
     }
 
@@ -1518,25 +1822,6 @@ Item {
         }
     }
 
-    // A row of the change log's table, from one site_info place_log entry.
-    component LogRow: Rectangle {
-        id: log
-        required property var modelData
-        readonly property var action: root.placeActions[modelData.kind]
-        Layout.fillWidth: true; implicitHeight: cells.implicitHeight + 20; color: "transparent"
-        Accessible.role: Accessible.StaticText; Accessible.name: root.placeChange(modelData)
-        Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: root.t.bd }
-        RowLayout {
-            id: cells
-            x: 16; y: 10; width: parent.width - 32; spacing: 12
-            LogCell { col: 0; muted: true; text: root.when(log.modelData.ts, "d MMM") }
-            LogCell { col: 1; format: Text.RichText; text: root.mono(log.modelData.code) + " " + root.esc(log.modelData.label || "") }
-            LogCell { col: 2; StatusChip { label: log.action[0]; stage: root.t[log.action[1]] } }
-            LogCell { col: 3; muted: true; text: root.who(log.modelData.by, log.modelData.by_name) }
-            LogCell { col: 4; text: root.placeDetail(log.modelData) }
-        }
-    }
-
     // The one multi-line text box: visible frame, scrolls, optional placeholder. Read-only boxes
     // are selectable and get a Copy button (more buttons can be put inside, beside it). With
     // `enterAccepts`, Return emits accepted() and Shift+Return starts a new line.
@@ -1553,6 +1838,7 @@ Item {
         property int boxHeight: 70
         default property alias extra: actions.data
         signal accepted()
+        signal edited()                   // the text changed, by typing or by the caller
         function enter(e) { if (fta.enterAccepts && !(e.modifiers & Qt.ShiftModifier)) fta.accepted(); else e.accepted = false }
         Layout.fillWidth: true
         spacing: 4
@@ -1572,7 +1858,7 @@ Item {
                 padding: 8
                 background: null
                 Accessible.name: fta.name
-                onTextChanged: if (fta.maxLength > 0 && length > fta.maxLength) remove(fta.maxLength, length)
+                onTextChanged: { if (fta.maxLength > 0 && length > fta.maxLength) remove(fta.maxLength, length); fta.edited() }
                 Keys.onReturnPressed: function (e) { fta.enter(e) }
                 Keys.onEnterPressed: function (e) { fta.enter(e) }
             }
@@ -1673,6 +1959,7 @@ Item {
         property string okText
         property string kind: "danger"
         property string reasonName           // what a screen reader says for the reason field
+        property string reasonHint: "Everyone on the site can read this."
         property bool withReason: true
         property bool ready: true            // the `extra` choices are complete
         property alias reason: reasonField.text
@@ -1691,7 +1978,7 @@ Item {
             FramedField {
                 id: reasonField
                 Layout.fillWidth: true; maximumLength: 500
-                placeholderText: "Everyone on the site can read this."
+                placeholderText: rp.reasonHint
                 Accessible.name: rp.reasonName
                 onAccepted: ok.submit()
             }
@@ -1839,14 +2126,15 @@ Item {
                     model: ["All groups"].concat(root.groupNames)
                 }
             }
-            FramedCheck { id: showRetired; objectName: "showRetired"; text: "Show retired places"; Layout.alignment: Qt.AlignBottom }
+            FramedCheck { id: showRetired; objectName: "showRetired"; checked: pb.bare; text: "Show retired places"; Layout.alignment: Qt.AlignBottom }
         }
         Rectangle { visible: pb.bare; Layout.fillWidth: true; implicitHeight: 1; color: root.t.bd }
         Label {
             Layout.leftMargin: pb.pad; Layout.topMargin: pb.bare ? 2 : 0; Layout.bottomMargin: pb.bare ? 2 : 0
             font.pointSize: root.smallSize
             color: root.t.muted
-            text: pb.places.length === 0 ? "No places match. Clear the search or pick another group."
+            text: pb.total === 0 ? "No places yet. They show here when the site data arrives."
+                : pb.places.length === 0 ? "No places match. Clear the search or pick another group."
                                          : pb.places.length + " of " + pb.total + " places"
         }
         Frame {
@@ -1873,18 +2161,17 @@ Item {
         }
         Flash {
             visible: pb.retiredPlace !== null && showRetired.checked
-            readonly property bool removing: !!pb.retiredPlace && pb.retiredPlace.state === "pending_removal"
             text: !pb.retiredPlace ? "" : pb.retiredPlace.code + " " + pb.retiredPlace.label
-                + (removing ? " is being removed (" + root.placeState(pb.retiredPlace) + ")" : " is retired")
-                + (pb.retiredPlace.retired_reason || pb.retiredPlace.removal_reason ? " (reason: " + (pb.retiredPlace.retired_reason || pb.retiredPlace.removal_reason) + ")" : "")
-                + ". If the problem is real, report it as Other and describe the place, or ask the admin to "
-                + (removing ? "undo the removal." : "restore it.")
+                + " is retired. If the problem is real, report it as Other and describe the place, or ask the admin to restore it."
             buttonText: "Report as Other at this spot"
             onActivated: pb.reportOther()
         }
     }
 
     Timer { interval: 2000; running: true; repeat: true; triggeredOnStart: true; onTriggered: root.refresh() }
+    // The Messages tab dot needs the chat list when the page is not open: refresh() reads it only on the Messages page, every 2 s.
+    // A slow poll here, because chat_threads asks the chat module.
+    Timer { interval: 20000; running: root.inSite && root.approved && root.page !== "messages"; repeat: true; triggeredOnStart: true; onTriggered: root.poll("chat_threads", [], root.applyChat) }
 
     Rectangle { anchors.fill: parent; color: root.t.page }     // the page never shows the host's window colour
 
@@ -1897,7 +2184,6 @@ Item {
         readonly property bool open: root.sidebarOpen
         // the toggle sits on the site-name line: card top + border and padding + half the first line
         readonly property real nameY: siteCard.parent.y + siteCard.y + (open ? 11 : 9) + siteTitle.contentHeight / siteTitle.lineCount / 2
-        readonly property string deliveryText: root.deliveryLabel(root.me.delivery)
         readonly property color on: root.t.sbFg
         readonly property string fp: root.me.fingerprint || ""
         Rectangle { anchors.right: parent.right; width: 1; height: parent.height; color: root.t.sbEdge }
@@ -1955,13 +2241,15 @@ Item {
                         { label: "Report", icon: "report", page: "report" },
                         { label: "History", icon: "hist", page: "history" },
                         { label: "People", icon: "members", page: "people", count: root.isAdmin ? root.pending.length : 0 },   // the admin's waiting count
+                        { label: "Messages", icon: "cmt", page: "messages", dot: root.chat.unread === true && root.page !== "messages" },
+                        { label: "Meetings", icon: "bell", page: "meet", count: root.meets.meetings.filter(function (m) { return m.status === "proposed" && m.you === "invitee" }).length },   // requests that wait for us
                         { label: "Places", icon: "pin", page: "places" }
-                    ].filter(function (e) { return root.approved || e.page !== "report" })   // a pending key cannot report
+                    ].filter(function (e) { return root.approved || ["report", "meet", "messages"].indexOf(e.page) < 0 })   // a pending key cannot report, meet or message
                     delegate: NavItem {
                         required property var modelData
                         text: modelData.label; glyph: modelData.icon
-                        current: root.page === modelData.page; compact: !sidebar.open
-                        count: modelData.count || 0
+                        current: root.page === modelData.page || (modelData.page === "people" && root.page === "member"); compact: !sidebar.open
+                        count: modelData.count || 0; dot: !!modelData.dot
                         onClicked: root.openPage(modelData.page)
                     }
                 }
@@ -1971,21 +2259,42 @@ Item {
             ColumnLayout {
                 Layout.fillWidth: true; Layout.topMargin: -4
                 spacing: 12
-                GridLayout {   // delivery: a dot and the status, the reason in red when it failed
-                    Layout.fillWidth: true
-                    columns: sidebar.open ? 3 : 1; columnSpacing: 8; rowSpacing: 4
-                    Rectangle {
-                        Layout.alignment: Qt.AlignHCenter | Qt.AlignTop; Layout.topMargin: sidebar.open ? 3 : 0
-                        implicitWidth: 10; implicitHeight: 10; radius: 5
-                        color: root.failed(root.me.delivery) ? root.t.sbOff : sidebar.deliveryText === "online" ? root.t.sbOk : root.t.sbConn
-                    }
-                    Label { Layout.alignment: sidebar.open ? Qt.AlignTop : Qt.AlignHCenter; text: "delivery:"; color: root.t.sbMuted; font.pointSize: root.smallSize }
-                    Label {
-                        Layout.fillWidth: true; Layout.alignment: Qt.AlignTop
-                        text: sidebar.deliveryText; wrapMode: Text.Wrap
-                        horizontalAlignment: sidebar.open ? Text.AlignLeft : Text.AlignHCenter
-                        color: root.failed(root.me.delivery) ? root.t.sbDanger : sidebar.on
-                        font.pointSize: root.smallSize; font.weight: Font.Medium
+                NavItem {   // Notifications: the bell opens the panel; the pill counts what came in since it was last open
+                    text: "Notifications"; glyph: "bell"; compact: !sidebar.open
+                    count: root.unread; current: root.inboxOpen
+                    onClicked: root.inboxOpen = !root.inboxOpen
+                }
+                GridLayout {   // delivery, chain and Storage: one dot each, no words. A click opens Profile, which has the details.
+                    Layout.alignment: sidebar.open ? Qt.AlignLeft : Qt.AlignHCenter
+                    Layout.leftMargin: sidebar.open ? 2 : 0
+                    columns: sidebar.open ? 3 : 1; columnSpacing: 0; rowSpacing: 0     // the rail is 67 px wide: three 28 px buttons would not fit in a row
+                    Repeater {
+                        model: root.connRows.filter(function (e) { return !e.site || root.inSite })
+                        delegate: AbstractButton {
+                            id: dot
+                            required property var modelData
+                            implicitWidth: 28; implicitHeight: 28
+                            hoverEnabled: true
+                            focusPolicy: Qt.StrongFocus
+                            objectName: "statusDot-" + modelData.name
+                            Accessible.name: modelData.name + ": " + modelData.state + ". See Profile for details"
+                            HoverHandler { cursorShape: Qt.PointingHandCursor }
+                            SideTip {
+                                objectName: "statusTip-" + dot.modelData.name
+                                x: (dot.width - width) / 2; y: -height - 6; margins: 4     // above the dot: a tip on the right would hide the next dot
+                                text: root.inSite ? "See Profile for details" : dot.modelData.name + ": " + dot.modelData.state.toLowerCase()
+                                visible: dot.hovered || dot.visualFocus
+                            }
+                            onClicked: if (root.inSite) root.openPage("profile")
+                            background: Rectangle {
+                                radius: 6
+                                color: dot.hovered ? root.t.sbHover : "transparent"
+                                border.width: dot.visualFocus ? 2 : 0; border.color: root.t.focus
+                            }
+                            contentItem: Item {
+                                Rectangle { anchors.centerIn: parent; width: 12; height: 12; radius: 6; color: root.toneColor(dot.modelData.tone, true) }
+                            }
+                        }
                     }
                 }
                 AbstractButton {   // you: name, fingerprint, role; opens Profile
@@ -2057,6 +2366,55 @@ Item {
         color: "#4d000000"
         MouseArea { anchors.fill: parent; onClicked: root.overlayOpen = false }
     }
+    // ---- the Notifications panel: the notices of this session, newest first ----
+    onInboxOpenChanged: {
+        if (inboxOpen) { unread = 0; inboxPanel.open() } else inboxPanel.close()
+    }
+    Popup {
+        id: inboxPanel
+        parent: root
+        onClosed: root.inboxOpen = false     // Escape
+        closePolicy: Popup.CloseOnEscape
+        x: root.sidebarWidth + 8
+        width: Math.min(400, root.width - x - 16); height: Math.min(440, root.height - 32); y: root.height - height - 16
+        padding: 12
+        background: Rectangle { radius: 8; color: root.t.card; border.color: root.t.bd }
+        contentItem: ColumnLayout {
+            spacing: 8
+            RowLayout {
+                spacing: 12
+                Label { Layout.fillWidth: true; text: "Notifications"; font.weight: Font.DemiBold; font.pointSize: root.baseSize * 16 / 14; color: root.t.fg }
+                LinkButton { visible: root.inbox.length > 0; text: "Clear all"; onClicked: root.inbox = [] }
+                LinkButton { text: "Close"; onClicked: root.inboxOpen = false }
+            }
+            Help { when: root.inbox.length === 0; text: "Nothing here. Notices that go away by themselves are kept here." }
+            ListView {
+                Layout.fillWidth: true; Layout.fillHeight: true
+                clip: true; spacing: 8
+                model: root.inbox
+                ScrollBar.vertical: ScrollBar {}
+                delegate: RowLayout {
+                    id: item
+                    required property var modelData
+                    required property int index
+                    width: ListView.view.width
+                    spacing: 8
+                    Icon { Layout.alignment: Qt.AlignTop; Layout.topMargin: 2; name: item.modelData.tone === "info" ? "info" : "warn"; size: 16
+                           color: item.modelData.tone === "err" ? root.t.danger : item.modelData.tone === "warn" ? root.t.warn : root.t.accent }
+                    ColumnLayout {
+                        Layout.fillWidth: true; spacing: 2
+                        Label { text: root.when(item.modelData.ms / 1000, "HH:mm"); color: root.t.muted; font.pointSize: root.smallSize }
+                        Note { text: item.modelData.text; color: root.t.fg }
+                    }
+                    LinkButton {
+                        Layout.alignment: Qt.AlignTop
+                        text: "Dismiss"; Accessible.name: "Dismiss this notice"
+                        onClicked: root.inbox = root.inbox.filter(function (n, i) { return i !== item.index })
+                    }
+                }
+            }
+        }
+    }
     Shortcut { sequence: "Escape"; enabled: root.overlayOpen; onActivated: root.overlayOpen = false }
     Button {   // the collapse toggle: a 28 px knob in a 36 px hit area, on the divider and the site-name line
         id: toggle
@@ -2081,43 +2439,117 @@ Item {
         spacing: 8
 
         Flash {   // the last refused action; stays until dismissed or the next action replaces it
-            visible: root.message !== ""
+            when: root.message !== ""; log: true
             Accessible.role: Accessible.AlertMessage
             err: true; bold: true
             text: root.message.replace(/^error: /, "")   // the red warning icon already says so
             buttonIcon: "x"; buttonName: "Dismiss this error"
             onActivated: root.message = ""
         }
-        Flash {   // after an action: where it went (a reopened issue is back on the board)
-            visible: root.notice !== ""
+        Flash {   // after an action: where it went (a reopened issue is back on the board). Goes by itself.
+            when: root.notice !== ""; expire: 6000; log: true
             icon: "reopen"
             text: root.notice
             buttonIcon: "x"; buttonName: "Dismiss this notice"
             onActivated: root.notice = ""
         }
         Flash {   // forks: someone signed two versions of their log (the threat model says: flag it)
-            visible: root.inSite && root.info.forks > 0
+            when: root.inSite && root.info.forks > 0; log: true
             err: true; bold: true; icon: "shield"
             text: "Integrity warning: " + root.info.forks + " conflicting history pair(s) found. Someone signed two versions of their log, so devices may show different boards."
         }
-        Flash {   // joined, but the genesis hasn't arrived: wrong id, or nobody online yet
-            visible: root.inSite && !root.info.name
-            text: "Waiting for site data… If this lasts, check the site id, or wait for a member to come online."
+        Flash {   // joined, but the site data has not come yet: the chain or Storage is slow, or the id is wrong
+            when: root.inSite && !root.info.name; delay: 3000
+            text: "Waiting for site data. It comes from the chain and from storage, and that can take a minute. If this lasts, check the site id."
             buttonText: "Leave this site"
             onActivated: root.leave()
         }
-        Flash {   // joined and waiting for a role: what to do, and what comes after
-            visible: root.awaitingApproval
-            text: "Waiting for the admin to approve you. Your fingerprint: " + (root.me.fingerprint || "") + ". Read it aloud at the kiosk. After approval you can report faults, confirm fixes and comment."
+        Flash {   // joined and waiting for a role: the request is out; what to do, and what comes after
+            when: root.awaitingApproval; delay: 3000
+            icon: "res"
+            lead: "Request sent."
+            text: (root.me.pending === "requested" ? "Your request is with the admin. " : "")
+                  + (root.me.request_until ? root.validLine(root.me.request_until, root.me.request_left) + " " : "")
+                  + "Waiting for the admin to approve you. Your fingerprint: " + (root.me.fingerprint || "")
+                  + ". Read it aloud at the kiosk. After approval you can report faults, confirm fixes and comment."
+            buttonText: "Cancel and send again"
+            buttonEffect: "This sends a new request with your profile. The old request stays valid until it expires."
+            onActivated: root.run("join_again", [])
+        }
+        Flash {   // the day of the request is over: no admin sees it any more, and it can be sent again
+            visible: root.inSite && root.unapproved && root.me.pending === "expired"
+            icon: "warn"
+            lead: "Request expired."
+            text: "Your request was valid until " + (root.me.request_until ? root.when(root.me.request_until, "ddd d MMM, HH:mm") : "the end of its day")
+                  + ". No admin can approve it now. You can send it again."
+            buttonText: "Send again"
+            onActivated: root.run("join_again", [])
+        }
+        Flash {   // an admin turned the request down: it can be sent again, also when no admin is online
+            visible: root.inSite && root.unapproved && root.me.pending === "declined"
+            icon: "warn"
+            lead: "Request declined."
+            text: "The admin declined this request. You can send it again."
+            buttonText: "Send again"
+            onActivated: root.run("join_again", [])
+        }
+        Flash {   // a change waits because the account holds too little: it goes on by itself when funds arrive
+            when: root.inSite && !!root.fundsWrite; log: true
+            Accessible.role: Accessible.AlertMessage
+            tone: "warn"; icon: "warn"
+            lead: "A change is waiting for funds."
+            text: root.fundsWrite ? root.fundsWrite.reason : ""
+        }
+        Flash {   // the wallet cannot use our key: nothing can be sent to the chain
+            when: root.inSite && root.keyProblem !== ""; delay: 3000; log: true
+            Accessible.role: Accessible.AlertMessage
+            err: true
+            lead: "The wallet cannot use your key."
+            text: "Nothing is sent to the chain until this is fixed. Details: " + root.keyProblem
+        }
+        Repeater {   // the writes on their way to the chain, and the ones that the chain rejected
+            model: root.writeBanners
+            delegate: Flash {
+                id: banner
+                required property var modelData
+                readonly property bool site: modelData.kind === "create_site"
+                readonly property bool rejected: modelData.state === "rejected"
+                readonly property bool included: modelData.state === "included"
+                delay: rejected || included ? 0 : 3000      // a write on its way shows only if it takes a while
+                expire: included ? 6000 : 0                 // "on the chain" is good news: it goes by itself
+                log: rejected || included
+                err: rejected
+                Accessible.role: rejected ? Accessible.AlertMessage : Accessible.StaticText
+                icon: !rejected && modelData.state === "included" ? "res" : rejected ? "warn" : "update"
+                lead: site ? (rejected ? "The site was not created." : modelData.state === "included" ? "The site is on the chain."
+                                : "Creating on the chain.")
+                           : root.kindText[modelData.kind] + (rejected ? " was rejected." : " is on its way to the chain.")
+                text: rejected ? "Reason: " + String(modelData.reason || "none given").replace(/\.$/, "") + "."
+                                 + (root.rejectHint(modelData.reason) ? " " + root.rejectHint(modelData.reason) : "") + (site ? " You can start again." : " Nothing changed.")
+                               : "Status: " + root.stateText[modelData.state] + "."
+                buttonText: site && rejected ? "Start again" : ""
+                buttonIcon: site && rejected ? "" : "x"; buttonName: site && rejected ? "Start again" : "Close this message"
+                onActivated: site && rejected ? root.leave() : root.dismiss(modelData.id)
+            }
+        }
+        Flash {   // the reminder of a meeting that starts soon
+            when: root.reminder !== ""; log: true
+            tone: "warn"; icon: "bell"; lead: "Reminder."
+            text: root.reminder
+            buttonIcon: "x"; buttonName: "Close this reminder"
+            onActivated: root.reminder = ""
         }
         Flash {   // our role was revoked: by whom, when, why, and what is left
             visible: root.removed
             err: true
             text: root.removed ? "Your role was removed by " + root.who(root.me.revoked.by, root.me.revoked.by_name) + " on " + root.when(root.me.revoked.ts, "d MMM")
                                  + ": " + root.me.revoked.reason + " You can still read the board, and your past reports stay. To take part again, ask the admin to grant you a role." : ""
+            buttonText: "Ask to join again"
+            buttonEffect: "This sends a new request to the admin."
+            onActivated: root.run("join_again", [])
         }
         Flash {
-            visible: root.inSite && root.syncing
+            when: root.inSite && root.syncing; delay: 3000
             err: true; icon: "update"
             text: "Restoring your earlier reports from the network. Actions are paused until they arrive, so your new ones can't conflict with them."
             buttonText: "Skip waiting (history lost)"
@@ -2143,11 +2575,12 @@ Item {
                     buttonText: "Join"; buttonKind: "primary"
                     onSubmitted: root.run("site_join", [joinField.text])
                 }
-                Help { text: "Ask a steward, or read it from the kiosk screen." }
+                Help { text: "Ask a steward, or read it from the kiosk screen. Joining only sends a request to the admin. It costs no fee." }
             }
             CollapsibleSection {
                 title: "Create a site"; aside: "(site admin only)"
-                Help { text: "Nothing is published until you press Create site. Places can be added later too, on the Places page." }
+                Help { text: "Nothing is sent until you press Create site. Then the site goes to the chain, and that can take a minute or two. Places can be added later too, on the Places page." }
+                AccountBox {}
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 16
@@ -2402,14 +2835,6 @@ Item {
                             font.pointSize: root.smallSize; color: root.t.muted
                         }
                     }
-                    Flash {   // we are an admin on notice: when and how our role changes, and why
-                        readonly property var n: root.me.notice
-                        visible: !!n && !n.sealed && n.deadline > root.now
-                        Layout.bottomMargin: 8
-                        tone: "warn"; icon: "warn"
-                        lead: n ? (n.outcome === "remove" ? "You are removed from the site on " : "You become a steward on ") + root.when(n.deadline) + "." : ""
-                        text: n ? "Reason: “" + n.reason + "” You keep admin powers until then." : ""
-                    }
                     Flash {   // the record no longer matches its anchor: every member sees it, on every Board visit
                         visible: root.anchorState === "mismatch"
                         Layout.bottomMargin: 8
@@ -2642,11 +3067,34 @@ Item {
                     maxWidth: 1040
                     enabled: !root.syncing
                     PageHead { title: "People"; lede: root.isAdmin ? "Approve people and manage their roles." : "Who is in this site." }
+                    Rectangle {   // the admin's held changes: approvals, role changes and revokes go out together
+                        id: batchBar
+                        visible: root.isAdmin && (root.waitingCount > 0 || root.batchBusy)
+                        Layout.fillWidth: true
+                        implicitHeight: batchRow.implicitHeight + 24
+                        radius: 8; color: root.t.accentBg; border.color: root.t.accentBd
+                        RowLayout {
+                            id: batchRow
+                            anchors { fill: parent; margins: 12 }
+                            spacing: 12
+                            Label {
+                                Layout.fillWidth: true; wrapMode: Text.Wrap
+                                text: root.batchBusy ? "A batch is on its way to the chain. This takes a minute or two."
+                                    : root.plural(root.waitingCount, "change") + (root.waitingCount === 1 ? " waits" : " wait") + " to be sent. Each shows as pending until you send it."
+                            }
+                            ActionButton {
+                                kind: "primary"
+                                text: root.batchBusy ? "Sending…" : "Send " + root.plural(root.waitingCount, "change")
+                                allowed: root.waitingCount > 0 && !root.batchBusy
+                                onClicked: root.run("send_batch", [])
+                            }
+                        }
+                    }
                     CollapsibleSection {
                         visible: root.isAdmin
                         title: "Waiting for approval"; aside: "· " + root.pending.length
                         open: true; pad: 0
-                        Flash { Layout.margins: 16; Layout.bottomMargin: 12; icon: "mega"; text: "Grant a role only after the person reads this fingerprint aloud." }
+                        Flash { Layout.margins: 16; Layout.bottomMargin: 12; icon: "mega"; text: "Grant a role only after the person reads this fingerprint aloud. Granting only queues the change. It goes to the chain when you press Send changes." }
                         Blank {   // empty: say so and say when someone appears
                             visible: root.pending.length === 0
                             Layout.topMargin: 12
@@ -2662,10 +3110,20 @@ Item {
                                     Fingerprint { big: true; text: pendingRow.modelData.fingerprint }
                                     Label {
                                         Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
-                                        text: pendingRow.modelData.name || "(no name)"
+                                        text: pendingRow.modelData.name || "Details have not arrived yet."
                                         color: pendingRow.modelData.name ? root.t.fg : root.t.muted
                                         font.weight: pendingRow.modelData.name ? Font.DemiBold : Font.Normal
                                     }
+                                }
+                                WriteMark { account: pendingRow.modelData.account || ""; queued: !!pendingRow.modelData.queued }
+                                Help {
+                                    visible: !!pendingRow.modelData.valid_until
+                                    text: "Valid until " + root.when(pendingRow.modelData.valid_until, "ddd d MMM, HH:mm") + (pendingRow.modelData.left ? " (" + pendingRow.modelData.left + " left)." : ".")
+                                }
+                                ConfirmButton {   // free: nothing goes to the chain
+                                    text: "Reject"; name: "Reject: " + pendingRow.person; confirmText: "Confirm reject"
+                                    effect: "They can send the request again."
+                                    onConfirmed: root.run("reject_join", [pendingRow.modelData.key])
                                 }
                             }
                         }
@@ -2692,10 +3150,9 @@ Item {
                                 readonly property bool sup: !!modelData.super_admin
                                 readonly property bool elevated: admin || modelData.role === "Steward"
                                 readonly property string person: root.who(modelData.key, modelData.name)
-                                readonly property var running: admin ? root.noticeOf(modelData) : null   // their notice, still running
-                                readonly property bool canChange: root.isSuper && admin && !sup && !running
-                                property string panel                // "" or the open step: "revoke", "change" or "transfer"
-                                onPanelChanged: { revokeStep.reset(); changeStep.reset() }
+                                readonly property bool canAddSuper: root.isSuper && admin && !sup
+                                property string panel                // "" or the open step: "revoke" or "transfer"
+                                onPanelChanged: revokeStep.reset()
                                 Layout.fillWidth: true
                                 spacing: 0
                                 Rectangle { visible: memberRow.index > 0; Layout.fillWidth: true; implicitHeight: 1; color: root.t.bd }
@@ -2724,8 +3181,20 @@ Item {
                                             StatusChip { visible: root.compactRows; label: memberRow.modelData.role; stage: memberRow.elevated ? root.t.progress : root.t.closed }
                                         }
                                         Label { visible: memberRow.own; text: "you"; color: root.t.muted; font.pointSize: root.smallSize }
-                                        Help { visible: text !== ""; Layout.topMargin: 4; text: root.noticeLine(memberRow.modelData) }
-                                        FlagLine { id: rejected; visible: rejected.modelData !== ""; Layout.fillWidth: true; Layout.topMargin: 4; modelData: root.rejectedLine(memberRow.modelData) }
+                                        LinkButton {
+                                            objectName: "memberOpen-" + memberRow.modelData.fingerprint
+                                            text: "View profile  ›"; Accessible.name: "Open the profile of " + memberRow.person
+                                            onClicked: root.showMember(memberRow.modelData.key)
+                                        }
+                                        LinkButton { visible: !memberRow.own && root.approved; text: "Message  ›"; Accessible.name: "Message " + memberRow.person; onClicked: root.openChat(memberRow.modelData.key) }
+                                        LinkButton { visible: !memberRow.own && root.approved; text: "1:1 meeting  ›"; Accessible.name: "Plan a 1:1 meeting with " + memberRow.person; onClicked: root.startMeet(memberRow.modelData) }
+                                        Label {   // O5: a staff name counts only with the signature of an admin
+                                            visible: memberRow.elevated
+                                            Layout.fillWidth: true; wrapMode: Text.Wrap; color: root.t.muted; font.pointSize: root.smallSize
+                                            text: memberRow.modelData.name_signed_by_admin ? "Name signed by an admin"
+                                                : root.isAdmin ? "No name yet. Use Set name to sign one." : "No name yet. An admin must sign one."
+                                        }
+                                        WriteMark { Layout.topMargin: 4; account: memberRow.modelData.account || "" }
                                     }
                                     RowLayout {   // only the controls this viewer may use; nothing at all for residents and stewards
                                         visible: root.isAdmin
@@ -2734,36 +3203,36 @@ Item {
                                         Help {
                                             visible: memberRow.admin && !root.isSuper
                                             Layout.fillWidth: false; Layout.maximumWidth: 240
-                                            text: "Only a super admin can change admins."
+                                            text: "Only a super admin can revoke an admin."
+                                        }
+                                        ActionButton {   // O5: an admin signs the name of staff
+                                            visible: memberRow.elevated && (!memberRow.admin || root.isSuper || memberRow.own)
+                                            text: "Set name"; Accessible.name: "Set the name of " + memberRow.person
+                                            onClicked: memberRow.panel = "name"
                                         }
                                         ConfirmButton {
                                             visible: root.isSuper && !memberRow.admin && !!memberRow.modelData.name
                                             text: "Grant admin"; name: text + ": " + memberRow.person; confirmText: "Confirm grant"
-                                            effect: "They become an admin now."
+                                            effect: "They become an admin when you send the batch. Your signature on their name is sent now and costs a network fee."
                                             onConfirmed: root.run("grant_role", [memberRow.modelData.key, "admin", memberRow.modelData.name])
                                         }
-                                        ActionButton {
-                                            visible: memberRow.canChange
-                                            text: "Change admin"; Accessible.name: text + ": " + memberRow.person
-                                            onClicked: memberRow.panel = "change"
+                                        ConfirmButton {
+                                            visible: memberRow.canAddSuper && !!memberRow.modelData.name
+                                            text: "Make steward"; name: text + ": " + memberRow.person; confirmText: "Confirm"
+                                            effect: "They become a steward when you send the batch. Your signature on their name is sent now and costs a network fee. Everyone on the site can see the change."
+                                            onConfirmed: root.run("grant_role", [memberRow.modelData.key, "steward", memberRow.modelData.name])
                                         }
                                         ConfirmButton {
-                                            visible: memberRow.canChange && root.superCount < 2 && !!memberRow.modelData.name
+                                            visible: memberRow.canAddSuper
+                                            text: "Make resident"; name: text + ": " + memberRow.person; confirmText: "Confirm"
+                                            effect: "They become a resident when you send the batch. Everyone on the site can see the change."
+                                            onConfirmed: root.run("grant_role", [memberRow.modelData.key, "resident", ""])
+                                        }
+                                        ConfirmButton {
+                                            visible: memberRow.canAddSuper && root.superCount < 2 && !!memberRow.modelData.name
                                             text: "Add super admin"; name: text + ": " + memberRow.person; confirmText: "Confirm"
-                                            effect: "They can change admins too, from now on."
+                                            effect: "They become the second super admin once the chain accepts it."
                                             onConfirmed: root.run("add_super_admin", [memberRow.modelData.key])
-                                        }
-                                        ConfirmButton {
-                                            visible: root.isSuper && !!memberRow.running
-                                            text: "End notice now"; kind: "danger"; name: text + ": " + memberRow.person; confirmText: "Confirm end"
-                                            effect: memberRow.running && memberRow.running.outcome === "remove" ? "They are removed from the site now." : "They become a steward now."
-                                            onConfirmed: root.run("end_notice_now", [memberRow.modelData.key])
-                                        }
-                                        ConfirmButton {
-                                            visible: root.isSuper && !!memberRow.running
-                                            text: "Cancel notice"; name: text + ": " + memberRow.person; confirmText: "Confirm cancel"
-                                            effect: "They stay an admin."
-                                            onConfirmed: root.run("cancel_notice", [memberRow.modelData.key])
                                         }
                                         ActionButton {
                                             visible: root.isSuper && memberRow.sup && memberRow.own
@@ -2773,13 +3242,33 @@ Item {
                                         ConfirmButton {
                                             visible: root.isSuper && memberRow.sup && !memberRow.own
                                             text: "Remove super admin"; kind: "danger"; name: text + ": " + memberRow.person; confirmText: "Confirm remove"
-                                            effect: "They become a regular admin. Immediate, no notice."
+                                            effect: "They become a regular admin once the chain accepts it."
                                             onConfirmed: root.run("remove_super_admin", [memberRow.modelData.key])
                                         }
                                         ActionButton {
-                                            visible: !memberRow.admin
+                                            visible: !memberRow.admin || (root.isSuper && !memberRow.sup)
                                             text: "Revoke"; kind: "danger"; Accessible.name: "Revoke " + memberRow.person
                                             onClicked: memberRow.panel = "revoke"
+                                        }
+                                    }
+                                }
+                                ReasonPanel {   // O5: the name of a steward or an admin, signed by us
+                                    visible: memberRow.panel === "name" && root.isAdmin
+                                    Layout.leftMargin: 16 + 92 + 12
+                                    title: "Set the name of " + memberRow.person
+                                    withReason: false
+                                    ready: staffNameField.text.trim().length > 0
+                                    effect: "Sent to the chain now and costs a network fee. Everyone sees it marked as signed by an admin."
+                                    okText: "Sign name"
+                                    onConfirmed: root.run("set_staff_name", [memberRow.modelData.key, staffNameField.text], function () { memberRow.panel = "" })
+                                    onCancelled: memberRow.panel = ""
+                                    FormRow {
+                                        label: "Name"; compact: true
+                                        FramedField {
+                                            id: staffNameField
+                                            Layout.fillWidth: true; maximumLength: 64
+                                            text: memberRow.modelData.name || ""; Accessible.name: "Name for " + memberRow.person
+                                            placeholderText: "e.g. Ravi Kumar"
                                         }
                                     }
                                 }
@@ -2789,58 +3278,18 @@ Item {
                                     Layout.leftMargin: 16 + 92 + 12
                                     title: "Revoke " + memberRow.person + "?"
                                     reasonName: "Reason for revoking " + memberRow.person
-                                    effect: "They lose the " + memberRow.modelData.role + " role now. Everyone on the site can see the reason."
+                                    effect: "They lose the " + memberRow.modelData.role + " role when you send the batch. Everyone on the site can see the reason."
                                     okText: "Confirm revoke"
                                     onConfirmed: root.run("revoke_role", [memberRow.modelData.key, reason], function () { memberRow.panel = "" })
                                     onCancelled: memberRow.panel = ""
                                 }
-                                ReasonPanel {   // a notice: they stay an admin until the deadline, then the outcome applies by itself
-                                    id: changeStep
-                                    property int outcome: 0          // 0 steward, 1 remove
-                                    property int span: 3             // index into `days`, or 4: the custom date and time
-                                    readonly property var days: [0, 1, 7, 30]
-                                    readonly property real deadline: end(root.now)
-                                    function end(t) {
-                                        return span < 4 ? Math.floor(t) + days[span] * 86400
-                                                        : Date.fromLocaleString(Qt.locale(), custom.text.trim(), "yyyy-MM-dd HH:mm").getTime() / 1000
-                                    }
-                                    visible: memberRow.panel === "change" && root.isSuper
-                                    Layout.leftMargin: 16 + 92 + 12
-                                    title: "Change admin: " + memberRow.person
-                                    reasonName: "Reason for changing " + memberRow.person
-                                    ready: span < 4 || deadline > Date.now() / 1000
-                                    effect: !ready ? "Write a date and time to come, as 2026-11-11 14:00."
-                                        : span === 0 ? "They " + (outcome ? "are removed from the site" : "become a steward") + " now. Everyone can see the reason."
-                                        : "They keep admin powers until " + root.when(deadline) + ". At that time they automatically "
-                                          + (outcome ? "are removed from the site" : "become a steward")
-                                          + ". Actions they sign after that time are rejected. Everyone can see the reason."
-                                    okText: "Start notice"
-                                    onConfirmed: root.run("admin_notice", [memberRow.modelData.key, outcome ? "remove" : "steward", Math.floor(end(Date.now() / 1000)), reason],
-                                                          function () { memberRow.panel = "" })
-                                    onCancelled: memberRow.panel = ""
-                                    FormRow {
-                                        label: "What happens at the end"; compact: true
-                                        Segmented { name: "What happens at the end"; options: ["Move to steward", "Remove from site"]; current: changeStep.outcome; onPicked: function (i) { changeStep.outcome = i } }
-                                    }
-                                    FormRow {
-                                        label: "Notice"; compact: true
-                                        Segmented { name: "Notice"; options: ["Now", "1 day", "7 days", "30 days", "Custom"]; current: changeStep.span; onPicked: function (i) { changeStep.span = i } }
-                                        FramedField {
-                                            id: custom
-                                            visible: changeStep.span === 4
-                                            Layout.preferredWidth: 220
-                                            placeholderText: "yyyy-MM-dd HH:mm"
-                                            Accessible.name: "Notice ends at, as year-month-day hours:minutes"
-                                        }
-                                    }
-                                }
-                                ReasonPanel {   // hand our place to a named member, at once
+                                ReasonPanel {   // hand our place to a named member
                                     visible: memberRow.panel === "transfer" && root.isSuper
                                     Layout.leftMargin: 16 + 92 + 12
                                     title: "Transfer super admin"
                                     withReason: false
                                     ready: transferTo.currentIndex >= 0
-                                    effect: "They become a super admin now. You become a regular admin. The change is immediate and everyone can see it."
+                                    effect: "They become a super admin and you become a regular admin, once the chain accepts it. Everyone can see it."
                                     okText: "Transfer"
                                     onConfirmed: root.run("transfer_super_admin", [transferTo.currentValue], function () { memberRow.panel = "" })
                                     onCancelled: memberRow.panel = ""
@@ -2885,50 +3334,39 @@ Item {
                                     text: "Removed by " + root.who(removedRow.modelData.by, removedRow.modelData.by_name) + " on "
                                           + root.when(removedRow.modelData.ts, "d MMM") + ": " + removedRow.modelData.reason
                                 }
+                                LinkButton {
+                                    text: "View profile  ›"; Accessible.name: "Open the profile of " + root.who(removedRow.modelData.key, removedRow.modelData.name)
+                                    onClicked: root.showMember(removedRow.modelData.key)
+                                }
                             }
                         }
                     }
                 }
 
-                // Places (everyone in the site): the places and their change log, searchable. The admin
-                // also adds, edits, retires and removes places here.
+                // Places (everyone in the site): the active and the retired places. The admin also adds,
+                // edits, retires, removes and restores places here. Each change goes to the chain first.
                 TabPage {
                     id: placesPage
                     objectName: "placesPage"
                     maxWidth: 1040
                     enabled: !root.syncing
                     property bool adding: false    // "Add a place" was pressed: its form shows above the list
-                    property bool fullLog: false    // the change log past its newest 20; forgotten once the page is left
-                    onVisibleChanged: if (!visible) fullLog = false
-                    readonly property int retiredCount: root.locations.filter(function (l) { return l.state === "retired" }).length
-                    // The change log's search: any word of a row (code, name, person, action, reason), over the whole log.
-                    readonly property string query: logSearch.text.trim().toLowerCase()
-                    readonly property var logMatches: query === "" ? root.placeLog
-                        : root.placeLog.filter(function (c) { return root.placeChange(c).toLowerCase().indexOf(query) >= 0 })
-                    // A place's "Changes" link: its code in the search, then the log in view.
-                    function showChanges(code) {
-                        logSearch.text = code
-                        changeLog.open = true
-                        logSearch.forceActiveFocus()
-                        Qt.callLater(function () {
-                            var f = placesPage.contentItem
-                            f.contentY = Math.max(0, Math.min(changeLog.mapToItem(f.contentItem, 0, 0).y - 16, f.contentHeight - f.height))
-                        })
-                    }
-                    PageHead { title: "Places"; lede: root.isAdmin ? "Add, edit, retire and remove places, and see what changed." : "The places in this site, and what changed." }
+                    readonly property int retiredCount: root.retiredLocations.length
+                    PageHead { title: "Places"; lede: root.isAdmin ? "Add, edit, retire, remove and restore places." : "The places in this site." }
                     CollapsibleSection {
                         title: "Places"
-                        aside: "· " + root.locations.length + " places" + (placesPage.retiredCount > 0 ? ", " + placesPage.retiredCount + " retired" : "")
+                        aside: "· " + root.plural(root.locations.length, "place") + (placesPage.retiredCount > 0 ? ", " + placesPage.retiredCount + " retired" : "")
                         open: true; pad: 0
                         RowLayout {
                             Layout.fillWidth: true; Layout.margins: 16; Layout.bottomMargin: 8
                             spacing: 12
                             Help {
                                 text: root.isAdmin
-                                    ? "Nothing is deleted. A retired place takes no new reports; one with open issues can't be retired. "
-                                      + "A place nobody ever reported can be removed: it is hidden after 30 days (undo until then), and its signed events stay in everyone's log. "
-                                      + "Edit changes a place's name and group; its code never changes."
-                                    : "Nothing is deleted. A retired place takes no new reports. A place marked \"hidden on\" a date will leave the lists then; its history stays. A code opens that place in History."
+                                    ? "Nothing is deleted. A retired place takes no new reports, and one with open issues can't be retired. "
+                                      + "A place that nobody ever reported can also be removed. Retire and remove both hide the place from the lists. "
+                                      + "Restore brings a hidden place back. Edit changes a place's name and group. Its code never changes. "
+                                      + "Each change goes to the chain first, so it shows in the list after a minute or two."
+                                    : "Nothing is deleted. A retired place takes no new reports. A code opens that place in History."
                             }
                             FramedButton {
                                 visible: root.isAdmin
@@ -2941,7 +3379,7 @@ Item {
                             visible: placesPage.adding && root.isAdmin
                             Layout.fillWidth: true; Layout.margins: 16; Layout.topMargin: 0
                             spacing: 12
-                            Help { text: "For a place found on the site walk. It joins the list straight away." }
+                            Help { text: "For a place found on the site walk. It joins the list after the chain accepts it." }
                             RowLayout {
                                 Layout.fillWidth: true
                                 spacing: 16
@@ -2999,8 +3437,7 @@ Item {
                                     PlaceCell { col: 2; muted: true; bold: true; text: "Group" }
                                     PlaceCell { col: 3; muted: true; bold: true; text: "Status" }
                                     PlaceCell { col: 4; muted: true; bold: true; align: Text.AlignRight; text: "Open issues" }
-                                    PlaceCell { col: 5; muted: true; bold: true; text: "Log" }
-                                    PlaceCell { col: 6; visible: root.isAdmin; muted: true; bold: true; text: "Actions" }
+                                    PlaceCell { col: 5; visible: root.isAdmin; muted: true; bold: true; text: "Actions" }
                                 }
                             }
                             rowDelegate: Component {
@@ -3009,7 +3446,6 @@ Item {
                                     objectName: "placeRow-" + modelData.code
                                     required property var modelData
                                     readonly property string st: modelData.state
-                                    readonly property bool pending: st === "pending_removal"
                                     // The core refuses a retire while issues are open; disabling is only a courtesy.
                                     readonly property bool blocked: st === "active" && modelData.open_issues > 0
                                     // What the row's inline panel is doing: "" (nothing), "edit", or the core method a confirm step
@@ -3018,8 +3454,7 @@ Item {
                                     readonly property var ask: ({
                                         retire_location: { title: "Retire", ok: "Confirm retire", kind: "danger", effect: " takes no new reports. Its history stays, and you can restore it later." },
                                         restore_location: { title: "Restore", ok: "Confirm restore", kind: "primary", effect: " takes reports again." },
-                                        remove_location: { title: "Remove", ok: "Confirm remove", kind: "danger", effect: " is hidden after 30 days. You can undo until then." },
-                                        undo_remove_location: { title: "Undo the removal of", ok: "Confirm undo", kind: "primary", effect: " stays in the lists." } })[panel]
+                                        remove_location: { title: "Remove", ok: "Confirm remove", kind: "danger", effect: " is hidden from the lists, like a retired place. You can restore it later." } })[panel]
                                     onPanelChanged: confirmStep.reset()
                                     width: ListView.view.width
                                     height: stack.implicitHeight + 1
@@ -3035,66 +3470,44 @@ Item {
                                             PlaceCell { col: 0; PlaceLink { code: locRow.modelData.code } }
                                             PlaceCell {
                                                 col: 1; text: locRow.modelData.label; ink: locRow.st === "active" ? root.t.fg : root.t.muted
-                                                Label {
-                                                    visible: !!locRow.modelData.renamed_from
-                                                    width: parent.width; wrapMode: Text.Wrap; textFormat: Text.PlainText
-                                                    font.pointSize: root.smallSize; color: root.t.muted
-                                                    text: "was “" + locRow.modelData.renamed_from + "”"
-                                                }
                                             }
                                             PlaceCell { col: 2; muted: true; text: locRow.modelData.group }
                                             PlaceCell {
                                                 col: 3
                                                 StatusChip {
-                                                    visible: !locRow.pending
                                                     label: locRow.st === "retired" ? "Retired" : "Active"
                                                     stage: locRow.st === "retired" ? root.t.closed : root.t.resolved
                                                 }
-                                                Label {
-                                                    visible: text !== ""
-                                                    width: parent.width; wrapMode: Text.Wrap; textFormat: Text.PlainText
-                                                    color: locRow.pending ? root.t.danger : root.t.muted
-                                                    font.pointSize: root.smallSize; font.weight: locRow.pending ? Font.DemiBold : Font.Normal
-                                                    text: locRow.pending ? "hidden on " + root.when(locRow.modelData.removes_at, "d MMM") + ": " + locRow.modelData.removal_reason
-                                                        : locRow.st === "retired" ? locRow.modelData.retired_reason : ""
-                                                }
-                                                Flow {   // the Open issues and Log columns, once they have dropped out
-                                                    visible: root.placeTable.compact
-                                                    width: parent.width; spacing: 8
-                                                    Label {
-                                                        visible: locRow.modelData.open_issues > 0
-                                                        font.pointSize: root.smallSize; color: root.t.muted; text: root.openIssuesText(locRow.modelData.open_issues)
-                                                    }
-                                                    ChangesLink { code: locRow.modelData.code; onClicked: placesPage.showChanges(code) }
+                                                Label {   // the Open issues column, once it has dropped out
+                                                    visible: root.placeTable.compact && locRow.modelData.open_issues > 0
+                                                    font.pointSize: root.smallSize; color: root.t.muted; text: root.openIssuesText(locRow.modelData.open_issues)
                                                 }
                                             }
                                             PlaceCell {
                                                 col: 4; align: Text.AlignRight; text: locRow.modelData.open_issues
                                                 ink: locRow.modelData.open_issues > 0 ? root.t.fg : root.t.muted
                                             }
-                                            PlaceCell { col: 5; ChangesLink { code: locRow.modelData.code; onClicked: placesPage.showChanges(code) } }
                                             PlaceCell {   // three fixed slots, so every row's buttons line up
-                                                col: 6; visible: root.isAdmin
+                                                col: 5; visible: root.isAdmin
                                                 RowLayout {
                                                     width: parent.width; spacing: 6
                                                     ActionButton {   // slot 1: Retire / Restore
-                                                        shown: !locRow.pending
                                                         Layout.preferredWidth: 80
                                                         text: locRow.st === "retired" ? "Restore" : "Retire"
                                                         allowed: !locRow.blocked
                                                         Accessible.name: text + " " + locRow.modelData.code
                                                         onClicked: locRow.panel = locRow.st === "retired" ? "restore_location" : "retire_location"
                                                     }
-                                                    ActionButton {   // slot 2: Remove / Undo removal; only for a place no report ever named, the core decides
-                                                        shown: locRow.pending || !locRow.modelData.ever_used
+                                                    ActionButton {   // slot 2: Remove; only for a place no report ever named
+                                                        shown: locRow.st === "active" && !locRow.modelData.ever_used
                                                         Layout.preferredWidth: 124
-                                                        kind: locRow.pending ? "default" : "danger"
-                                                        text: locRow.pending ? "Undo removal" : "Remove"
+                                                        kind: "danger"
+                                                        text: "Remove"
                                                         Accessible.name: text + " " + locRow.modelData.code
-                                                        onClicked: locRow.panel = locRow.pending ? "undo_remove_location" : "remove_location"
+                                                        onClicked: locRow.panel = "remove_location"
                                                     }
-                                                    ActionButton {   // slot 3: Edit
-                                                        shown: !locRow.pending
+                                                    ActionButton {   // slot 3: Edit (a retired place is restored first)
+                                                        shown: locRow.st === "active"
                                                         Layout.preferredWidth: 76
                                                         text: locRow.panel === "edit" ? "Cancel" : "Edit"
                                                         Accessible.name: (locRow.panel === "edit" ? "Cancel editing " : "Edit ") + locRow.modelData.code
@@ -3114,6 +3527,7 @@ Item {
                                             Layout.leftMargin: 16 + root.placeTable.w[0] + 12
                                             title: locRow.ask ? locRow.ask.title + " " + locRow.modelData.code + ", " + locRow.modelData.label + "?" : ""
                                             reasonName: "Reason for changing " + locRow.modelData.code
+                                            reasonHint: "Needed to confirm. The chain does not keep this text."
                                             effect: locRow.ask ? locRow.modelData.label + locRow.ask.effect : ""
                                             okText: locRow.ask ? locRow.ask.ok : ""; kind: locRow.ask ? locRow.ask.kind : "default"
                                             onConfirmed: root.run(locRow.panel, [locRow.modelData.code, reason], function () { locRow.panel = "" })
@@ -3147,64 +3561,10 @@ Item {
                             }
                         }
                     }
-                    CollapsibleSection {
-                        id: changeLog
-                        objectName: "changeLog"
-                        title: "Change log"
-                        aside: "· " + (placesPage.query ? placesPage.logMatches.length + " of " : "") + root.placeLog.length
-                        pad: 0
-                        Help {
-                            Layout.margins: 16; Layout.bottomMargin: 8
-                            text: "Removed places are hidden from every list, retired ones included. Removed means hidden: the signed events stay in everyone's log."
-                        }
-                        Help {
-                            visible: root.placeLog.length === 0
-                            Layout.margins: 16; Layout.topMargin: 0
-                            text: "No changes yet."
-                        }
-                        FormRow {
-                            visible: root.placeLog.length > 0
-                            Layout.margins: 16; Layout.topMargin: 4; Layout.bottomMargin: 12
-                            label: "Search"; compact: true
-                            FramedField {
-                                id: logSearch
-                                objectName: "logSearch"
-                                Layout.fillWidth: true
-                                placeholderText: "place, person, action (retired, removed, renamed…) or reason"
-                                Accessible.name: "Search the change log"
-                            }
-                        }
-                        Blank {
-                            visible: placesPage.query !== "" && placesPage.logMatches.length === 0
-                            Layout.topMargin: 8
-                            icon: "search"; title: "No changes match “" + logSearch.text.trim() + "”."
-                            text: "Search by place code or name, a person, an action or a reason."
-                            FramedButton { text: "Clear"; Accessible.name: "Clear the change log search"; onClicked: logSearch.text = "" }
-                        }
-                        TableHead {
-                            visible: placesPage.logMatches.length > 0
-                            LogCell { col: 0; muted: true; bold: true; text: "When" }
-                            LogCell { col: 1; muted: true; bold: true; text: "Place" }
-                            LogCell { col: 2; muted: true; bold: true; text: "Action" }
-                            LogCell { col: 3; muted: true; bold: true; text: "By" }
-                            LogCell { col: 4; muted: true; bold: true; text: "Reason / detail" }
-                        }
-                        Repeater {
-                            model: placesPage.fullLog || placesPage.query ? placesPage.logMatches : root.placeLog.slice(0, 20)
-                            delegate: LogRow {}
-                        }
-                        MoreToggle {
-                            visible: !placesPage.query && root.placeLog.length > 20
-                            Layout.fillWidth: true; Layout.margins: 16
-                            expanded: placesPage.fullLog
-                            text: expanded ? "Show the newest 20" : "+" + root.plural(root.placeLog.length - 20, "older change")
-                            onClicked: placesPage.fullLog = !placesPage.fullLog
-                        }
-                    }
                 }
 
-                // Integrity (from History's strip and the Board's mismatch banner): the record's status, then the three
-                // anchor steps for any member: compute, run the printed spel command, record the reference
+                // Integrity (from History's strip and the Board's mismatch banner): the record's status, then the
+                // anchor for any member: compute the checkpoint, then one button that writes it to the chain
                 TabPage {
                     enabled: !root.syncing
                     PageHead {
@@ -3226,7 +3586,11 @@ Item {
                     }
                     Help { visible: !root.approved; text: "Members can anchor the record. After approval you can do this too." }
                     Heading { visible: root.approved; text: "Anchor now" }
-                    Help { visible: root.approved; text: "Needs a terminal and a LEZ account." }
+                    Help {
+                        visible: root.approved
+                        text: "An anchor is one write to the chain. It costs about 0.0005 LEZ (523,304 lepta), and your network account pays it. "
+                            + "It can be written once for each state of the record."
+                    }
                     Step {
                         visible: root.approved
                         n: 1; title: "Compute the checkpoint"
@@ -3238,30 +3602,15 @@ Item {
                     }
                     Step {
                         visible: root.approved
-                        n: 2; title: "Copy the command"
-                        Help { text: "Run it in programs/pukaar_registry/ in a terminal. Replace <YOUR_PUBLIC_ACCOUNT> with your LEZ account." }
-                        FramedTextArea {
-                            readOnly: true; mono: true; boxHeight: 112
-                            name: "spel anchor command"
-                            placeholder: "Compute the checkpoint first"
-                            text: root.checkpoint ? root.checkpoint.spel : ""
-                        }
-                    }
-                    Step {
-                        visible: root.approved
-                        n: 3; title: "Record the reference"
-                        Help { text: "Paste the reference the command prints, then record it." }
-                        LabelledField {
-                            id: anchorField
-                            label: "Reference"
-                            placeholder: "e.g. 0x9f2c…e1 or pda:<account id>"
-                            mono: true
-                            buttonText: "Record"
-                            missing: !root.checkpoint ? "Compute the checkpoint first (step 1)." : anchorField.text.trim() === "" ? "Paste the reference first." : ""
-                            onSubmitted: {
-                                root.run("record_anchor", [JSON.stringify(root.checkpoint.heads), anchorField.text],
-                                         function () { anchorField.text = ""; root.checkpoint = null })
-                            }
+                        n: 2; title: "Anchor it on the chain"
+                        Help { visible: root.anchorLive; text: "The anchor is on its way to the chain. This takes a minute or two." }
+                        Help { visible: root.balanceState === "short" && !root.anchorLive; text: root.balanceLine }
+                        ConfirmButton {
+                            text: root.anchorLive ? "Anchoring…" : "Anchor now"; kind: "primary"
+                            allowed: !root.anchorLive
+                            effect: "This sends one write to the chain. It costs about 0.0005 LEZ from your network account. If this record is anchored already, nothing is sent."
+                            confirmText: "Anchor now"
+                            onConfirmed: root.run("anchor_now", [], function () { root.checkpoint = null })
                         }
                     }
                 }
@@ -3269,7 +3618,21 @@ Item {
                 // Profile (the you block opens it): me on this device. Name, backup, invite, leave.
                 TabPage {
                     id: profilePage
+                    readonly property bool staffLocked: root.me.role === "Steward"   // O5: only an admin signs a steward's name
                     readonly property string myName: root.me.name || ""   // a string: changes only when the name does, not on every refresh
+                    readonly property string myBio: root.me.bio || ""
+                    readonly property string myExperience: root.me.experience || ""
+                    readonly property var mySocials: root.me.socials || []
+                    // The filled rows as the core takes them: [["github","github.com/asha"], ...]
+                    function socialsJson() {
+                        var out = []
+                        for (var i = 0; i < socialRows.count; i++) {
+                            var r = socialRows.itemAt(i)
+                            if (r.address.text.trim() !== "") out.push([r.label.currentText, r.address.text])
+                        }
+                        return JSON.stringify(out)
+                    }
+                    property bool saved: false           // the last save went through: say where it is shown
                     readonly property var myReports: root.issues.filter(function (i) { return i.reporter === root.me.key })
                     readonly property int mineOpen: myReports.filter(function (i) { return !root.isTerminal(i.status) }).length
                     PageHead { title: "You"; lede: root.esc(root.me.name || "pseudonym") + " · " + root.roleName }
@@ -3282,27 +3645,142 @@ Item {
                         buttonText: "Back up key"
                         onActivated: exportPassword.forceActiveFocus()
                     }
+                    Heading { text: "Connection status" }
+                    Rectangle {
+                        objectName: "connCard"
+                        Layout.fillWidth: true
+                        implicitHeight: connCol.implicitHeight + 2
+                        radius: 8; color: root.t.card; border.color: root.t.bd
+                        ColumnLayout {
+                            id: connCol
+                            x: 1; y: 1; width: parent.width - 2
+                            spacing: 0
+                            Repeater {
+                                model: root.connRows.concat([root.balanceRow])
+                                delegate: ColumnLayout {
+                                    id: crow
+                                    required property var modelData
+                                    required property int index
+                                    Layout.fillWidth: true
+                                    spacing: 0
+                                    Accessible.role: Accessible.StaticText
+                                    Accessible.name: modelData.name + ": " + modelData.state + ". " + modelData.detail
+                                    Rectangle { visible: crow.index > 0; Layout.fillWidth: true; implicitHeight: 1; color: root.t.bd }
+                                    RowLayout {
+                                        Layout.fillWidth: true; Layout.margins: 12; Layout.leftMargin: 16; Layout.rightMargin: 16
+                                        spacing: 12
+                                        Rectangle {
+                                            Layout.alignment: Qt.AlignTop; Layout.topMargin: 5
+                                            implicitWidth: 12; implicitHeight: 12; radius: 6; color: root.toneColor(crow.modelData.tone, false)
+                                        }
+                                        ColumnLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 2
+                                            Label {
+                                                Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.RichText
+                                                text: "<b>" + root.esc(crow.modelData.name) + "</b> &nbsp;<font color='" + (crow.modelData.tone === "idle" ? root.t.muted : crow.modelData.tone === "off" ? root.t.danger : root.t.fg) + "'>" + root.esc(crow.modelData.state) + "</font>"
+                                            }
+                                            Help { text: crow.modelData.detail }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Help { Layout.bottomMargin: 8; text: root.latestWrite }
                     FormRow {
                         label: "Your code"; sub: root.unapproved ? "(read it aloud at the kiosk)" : ""
                         Fingerprint { text: root.me.fingerprint || ""; big: root.unapproved }
                     }
-                    Heading { text: "Name" }
-                    Note { visible: root.staff; text: root.me.name || ""; font.weight: Font.DemiBold }
-                    Help { visible: root.staff; text: "Staff names are set by the admin when granting the role." }
-                    LabelledField {
-                        id: nameField
-                        visible: !root.staff
+                    Heading { text: "About you" }
+                    Help { visible: !profilePage.staffLocked; text: "Members of this site read these. Leave them empty to stay a pseudonym." }
+                    Help { visible: profilePage.staffLocked; text: "An admin sets the name of staff. Ask an admin to sign your name." }
+                    FormRow {
+                        visible: !profilePage.staffLocked
                         label: "Display name"
-                        text: profilePage.myName
-                        placeholder: "e.g. Asha (or leave empty to stay pseudonymous)"
-                        buttonText: "Set name"
-                        onSubmitted: root.run("set_profile", [nameField.text])
+                        FramedField {
+                            id: nameField
+                            Layout.fillWidth: true; maximumLength: 64
+                            text: profilePage.myName; Accessible.name: "Display name"
+                            placeholderText: "e.g. Asha"
+                            onTextEdited: profilePage.saved = false
+                        }
                     }
-                    Help {
-                        visible: !root.staff
-                        text: "The admin may have named you when approving you; this replaces it. Set it empty to stay a pseudonym; the admin who granted your role can still link it. Staff are always named."
+                    FormRow {
+                        visible: !profilePage.staffLocked
+                        label: "Bio"; sub: "(optional)"
+                        FramedTextArea {
+                            id: bioField
+                            boxHeight: 70; maxLength: 500
+                            wrap: TextEdit.WrapAtWordBoundaryOrAnywhere
+                            text: profilePage.myBio; name: "Bio"
+                            placeholder: "e.g. I live near the water tank and help with the pump."
+                            onEdited: profilePage.saved = false
+                        }
                     }
-                    Help { visible: root.removed; text: "Setting your name asks to join again: you then wait for the admin's approval." }
+                    FormRow {
+                        visible: !profilePage.staffLocked
+                        label: "Experience"; sub: "(optional)"
+                        FramedTextArea {
+                            id: experienceField
+                            boxHeight: 70; maxLength: 500
+                            wrap: TextEdit.WrapAtWordBoundaryOrAnywhere
+                            text: profilePage.myExperience; name: "Experience"
+                            placeholder: "e.g. Ten years as a plumber."
+                            onEdited: profilePage.saved = false
+                        }
+                    }
+                    FramedCheck {
+                        id: shareProfile
+                        visible: !profilePage.staffLocked
+                        text: "Share my bio, experience and links with the site (off: members see my name and role only)"
+                        Binding on checked { value: root.me.private !== true }
+                        onToggled: profilePage.saved = false
+                    }
+                    FormRow {
+                        visible: !profilePage.staffLocked
+                        label: "Links"; sub: "(optional, up to 4)"
+                        Help { text: "Write the address without https://, at most 30 characters, for example github.com/asha." }
+                        Repeater {
+                            id: socialRows
+                            model: 4
+                            delegate: RowLayout {
+                                id: socialRow
+                                required property int index
+                                readonly property var kept: profilePage.mySocials[index] || null   // [label, address] from the saved profile
+                                property alias label: socialLabel
+                                property alias address: socialAddress
+                                Layout.fillWidth: true; spacing: 8
+                                FramedCombo {
+                                    id: socialLabel
+                                    Layout.preferredWidth: 130
+                                    model: root.socialLabels; Accessible.name: "Type of link " + (socialRow.index + 1)
+                                    currentIndex: socialRow.kept ? Math.max(0, root.socialLabels.indexOf(socialRow.kept[0])) : 0
+                                    onActivated: profilePage.saved = false
+                                }
+                                FramedField {
+                                    id: socialAddress
+                                    Layout.fillWidth: true; maximumLength: 30
+                                    text: socialRow.kept ? socialRow.kept[1] : ""; Accessible.name: "Address of link " + (socialRow.index + 1)
+                                    placeholderText: "e.g. github.com/asha"
+                                    onTextEdited: profilePage.saved = false
+                                }
+                            }
+                        }
+                    }
+                    RowLayout {
+                        visible: !profilePage.staffLocked
+                        Layout.fillWidth: true
+                        spacing: 12
+                        ActionButton {
+                            text: "Save profile"; kind: "primary"
+                            onClicked: root.run("set_profile", [nameField.text, bioField.text, experienceField.text, profilePage.socialsJson(), shareProfile.checked ? "" : "1"],
+                                                function () { profilePage.saved = true })
+                        }
+                        Help { visible: profilePage.saved; text: "Members see this now. The chain record updates at the next admin batch." }
+                    }
+                    Help { visible: root.removed; text: "Saving your profile does not give back your role. Ask the admin to approve you again." }
+                    AccountBox { Layout.topMargin: 12 }
                     Heading { text: "Back up this identity" }
                     Help { text: "Your identity is a key on this device. A backup lets you continue as the same person after a reinstall." }
                     Flash {
@@ -3439,7 +3917,7 @@ Item {
                                 Accessible.name: "Filter by place"
                                 textRole: "label"; valueRole: "code"
                                 model: [{ code: "", label: "All places" }]
-                                    .concat(root.locations.map(function (l) { return { code: l.code, label: l.code + " " + l.label } }))
+                                    .concat(root.allPlaces.map(function (l) { return { code: l.code, label: l.code + " " + l.label } }))
                                     .concat([{ code: "other", label: "Other (not on the list)" }])
                                 displayText: hist.place === "" ? "All places" : hist.place === "other" ? "Other" : root.placeLabel(hist.place)
                                 onActivated: function (index) { root.historyPlace = valueAt(index) }
@@ -3568,6 +4046,590 @@ Item {
                         }
                     }
                 }
+                // Meetings: 1:1 with another member. Requests, a new meeting, upcoming, history, settings and backup.
+                TabPage {
+                    id: meetPage
+                    enabled: !root.syncing
+                    readonly property var target: root.meetWith
+                    readonly property string targetName: target ? root.who(target.key, target.name) : ""
+                    property int lenMin: 30
+                    property var pick: null          // the chosen slot
+                    property var view: null          // meet_slots of the target
+                    property string slotsError: ""   // why the times did not load, "" when they did
+                    property var clash: null         // meet_check of the pick
+                    readonly property var all: root.meets.meetings || []
+                    readonly property var backup: root.meets.backup || ({})
+                    readonly property var requests: all.filter(function (m) { return m.status === "proposed" && m.you === "invitee" })
+                    readonly property var upcoming: all.filter(function (m) { return (m.status === "confirmed" || (m.status === "proposed" && m.you === "requester")) && m.end_ms > root.now * 1000 })
+                    readonly property var history: all.filter(function (m) { return requests.indexOf(m) < 0 && upcoming.indexOf(m) < 0 }).reverse()
+                    // Open slots first (8:00 to 20:00 local), then the busy ones, marked as busy.
+                    readonly property var slots: {
+                        if (!view) return []
+                        var ok = view.slots.filter(function (s) {
+                            var a = new Date(s.start_ms), b = new Date(s.end_ms)
+                            return a.getDate() === b.getDate() && a.getHours() >= 8 && (b.getHours() < 20 || (b.getHours() === 20 && b.getMinutes() === 0))
+                        })
+                        return ok.filter(function (s) { return !s.mine && !s.theirs }).slice(0, 24)
+                            .concat(ok.filter(function (s) { return s.mine || s.theirs }).slice(0, 8))
+                    }
+                    readonly property var lines: root.clashLines(clash)
+                    function load() {
+                        if (target) root.call("meet_slots", [target.key, Date.now(), lenMin], function (v) {
+                            var ok = !!v && Array.isArray(v.slots)
+                            if (ok) view = v
+                            slotsError = ok ? "" : String(typeof v === "string" ? v : "no answer").replace(/^error:\s*/, "")
+                        })
+                    }
+                    function ranges(list) {
+                        return (list || []).slice(0, 6).map(function (r) { return root.meetTime(r) + (r.name ? " with " + r.name : "") }).join("; ")
+                    }
+                    onTargetChanged: { pick = null; clash = null; view = null; slotsError = ""; load() }
+                    Timer { interval: 20000; running: !!meetPage.target && root.page === "meet"; repeat: true; onTriggered: meetPage.load() }
+                    PageHead {
+                        title: "Meetings"
+                        lede: "Plan a 1:1 meeting with another member. Open People and choose 1:1 meeting. Times show in your local time."
+                    }
+                    Heading { visible: meetPage.requests.length > 0; text: "Requests" }
+                    Frame {
+                        visible: meetPage.requests.length > 0
+                        Layout.fillWidth: true; implicitHeight: reqs.implicitHeight; fill: root.t.card; edge: root.t.bd
+                        ColumnLayout {
+                            id: reqs
+                            width: parent.width; spacing: 0
+                            Repeater {
+                                model: meetPage.requests
+                                delegate: MeetRow {
+                                    id: req
+                                    ActionButton { text: "Accept"; kind: "primary"; Accessible.name: "Accept the meeting with " + root.who(req.modelData.with, req.modelData.name); onClicked: root.run("meet_accept", [req.modelData.id]) }
+                                    ActionButton { text: "Decline"; Accessible.name: "Decline the meeting with " + root.who(req.modelData.with, req.modelData.name); onClicked: root.run("meet_decline", [req.modelData.id]) }
+                                }
+                            }
+                        }
+                    }
+                    Heading { visible: !!meetPage.target; text: "New meeting with " + meetPage.targetName }
+                    ColumnLayout {
+                        visible: !!meetPage.target
+                        Layout.fillWidth: true; spacing: 8
+                        RowLayout {
+                            spacing: 12
+                            Label { text: "Length" }
+                            Segmented {
+                                name: "Length of the meeting"; options: ["30 min", "60 min", "90 min"]
+                                current: [30, 60, 90].indexOf(meetPage.lenMin)
+                                onPicked: function (i) { meetPage.lenMin = [30, 60, 90][i]; meetPage.pick = null; meetPage.clash = null; meetPage.load() }
+                            }
+                            LinkButton { text: "Close"; onClicked: root.meetWith = null }
+                        }
+                        Flash { visible: meetPage.slotsError !== ""; err: true; text: "The free times could not load: " + meetPage.slotsError }
+                        Help {
+                            visible: !!meetPage.view
+                            text: meetPage.view && meetPage.view.shared ? meetPage.targetName + " shares free and busy times. Only times are shared, never titles."
+                                                                        : meetPage.targetName + " shares no free and busy times, so every slot of theirs looks open."
+                        }
+                        Help { visible: !!meetPage.view && meetPage.view.mine.length > 0; text: "Busy for you: " + (meetPage.view ? meetPage.ranges(meetPage.view.mine) : "") }
+                        Help { visible: !!meetPage.view && meetPage.view.theirs.length > 0; text: "Busy for them: " + (meetPage.view ? meetPage.ranges(meetPage.view.theirs) : "") }
+                        Flow {
+                            Layout.fillWidth: true; spacing: 8
+                            Repeater {
+                                model: meetPage.slots
+                                delegate: FramedButton {
+                                    required property var modelData
+                                    readonly property bool busy: modelData.mine || modelData.theirs
+                                    kind: meetPage.pick && meetPage.pick.start_ms === modelData.start_ms ? "primary" : "default"
+                                    text: root.when(modelData.start_ms / 1000, "ddd d MMM HH:mm") + (busy ? " (busy)" : "")
+                                    Accessible.name: text
+                                    onClicked: {
+                                        meetPage.pick = modelData; meetPage.clash = null
+                                        root.call("meet_check", [meetPage.target.key, modelData.start_ms, modelData.end_ms], function (c) { if (c && c.mine) meetPage.clash = c })
+                                    }
+                                }
+                            }
+                        }
+                        Help { visible: !!meetPage.view && meetPage.slots.length === 0; text: "No slots between 8:00 and 20:00 in the next 7 days." }
+                        Flash {
+                            visible: meetPage.lines.length > 0
+                            tone: "warn"; icon: "warn"; lead: "This time clashes."
+                            text: meetPage.lines.join(" ") + " You can still send the proposal."
+                        }
+                        ActionButton {
+                            visible: !!meetPage.pick
+                            text: meetPage.lines.length > 0 ? "Send anyway" : "Send proposal"; kind: "primary"
+                            onClicked: root.run("meet_propose", [meetPage.target.key, meetPage.pick.start_ms, meetPage.pick.end_ms],
+                                                function () { meetPage.pick = null; meetPage.clash = null; root.meetWith = null })
+                        }
+                    }
+                    Heading { text: "Upcoming" }
+                    Blank { visible: meetPage.upcoming.length === 0; icon: "bell"; title: "No meetings planned"; text: "Open People and choose 1:1 meeting." }
+                    Frame {
+                        visible: meetPage.upcoming.length > 0
+                        Layout.fillWidth: true; implicitHeight: ups.implicitHeight; fill: root.t.card; edge: root.t.bd
+                        ColumnLayout {
+                            id: ups
+                            width: parent.width; spacing: 0
+                            Repeater {
+                                model: meetPage.upcoming
+                                delegate: MeetRow {
+                                    id: up
+                                    ConfirmButton {
+                                        text: up.modelData.status === "confirmed" ? "Cancel meeting" : "Withdraw"; name: text + " with " + root.who(up.modelData.with, up.modelData.name)
+                                        confirmText: "Confirm"; effect: "The other person gets a signed cancel message and the time is free again."
+                                        onConfirmed: root.run("meet_cancel", [up.modelData.id])
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Heading { visible: meetPage.history.length > 0; text: "History" }
+                    Frame {
+                        visible: meetPage.history.length > 0
+                        Layout.fillWidth: true; implicitHeight: hists.implicitHeight; fill: root.t.card; edge: root.t.bd
+                        ColumnLayout {
+                            id: hists
+                            width: parent.width; spacing: 0
+                            Repeater { model: meetPage.history; delegate: MeetRow {} }
+                        }
+                    }
+                    Heading { text: "Settings" }
+                    FramedCheck {
+                        text: "Share my free and busy times with the site (times only, never titles)"
+                        Binding on checked { value: root.meets.share !== false }
+                        onToggled: root.run("meet_prefs", [checked ? 1 : 0, root.meets.lead_min])
+                    }
+                    RowLayout {
+                        spacing: 12
+                        Label { text: "Remind me" }
+                        Segmented {
+                            name: "Reminder before a meeting"; options: ["5 min", "10 min", "15 min", "30 min", "60 min"]
+                            current: [5, 10, 15, 30, 60].indexOf(root.meets.lead_min)
+                            onPicked: function (i) { root.run("meet_prefs", [root.meets.share === false ? 0 : 1, [5, 10, 15, 30, 60][i]]) }
+                        }
+                        Label { text: "before. The reminder shows only while this app is open."; color: root.t.muted; font.pointSize: root.smallSize }
+                    }
+                    Heading { text: "Backup" }
+                    Help { text: "A backup puts your meeting history in Storage. The file is encrypted with a key from your account. Then its CID goes into one record of yours on the chain, so a new device can find it. The chain write costs a small fee. Meeting details never go on the chain. If Storage is not reachable, the backup is skipped and your local history stays." }
+                    Flash { visible: !!meetPage.backup.error; err: true; text: meetPage.backup.error || "" }
+                    Note {
+                        visible: !!meetPage.backup.cid
+                        text: "Last backup: " + root.when((meetPage.backup.at_ms || 0) / 1000, "d MMM HH:mm") + ". CID: " + (meetPage.backup.cid || "")
+                        font.family: "monospace"
+                    }
+                    Note {
+                        visible: !!meetPage.backup.pointer
+                        text: !meetPage.backup.pointer ? "" : meetPage.backup.pointer.state === "rejected" ? "The pointer on the chain was rejected: " + (meetPage.backup.pointer.reason || "")
+                            : meetPage.backup.pointer.state === "included" ? "The pointer is on the chain. A new device can find this backup."
+                            : "The pointer is going to the chain (" + (root.stateText[meetPage.backup.pointer.state] || meetPage.backup.pointer.state) + ")."
+                    }
+                    ActionButton {
+                        text: meetPage.backup.job ? "Working: " + meetPage.backup.job + "…" : "Back up now"
+                        allowed: !meetPage.backup.job
+                        onClicked: root.run("meet_backup", [])
+                    }
+                    Help { text: "Restore reads the CID of your latest backup from the chain and downloads it from Storage. Type a CID only if the chain has no pointer of yours." }
+                    LabelledField {
+                        id: restoreCid
+                        label: "Restore your backup"; placeholder: "CID (only if the chain has none)"; mono: true
+                        buttonText: "Restore"
+                        missing: meetPage.backup.job ? "A backup or a restore is running." : ""
+                        onSubmitted: root.run("meet_restore", [restoreCid.text])
+                    }
+                }
+
+                // Member (a row of People opens it): the profile of one member of this site. A steward has a name
+                // and a role only, like on the You page. Links show as plain text and open after a confirm.
+                TabPage {
+                    id: memberPage
+                    objectName: "memberPage"
+                    readonly property var v: root.viewed
+                    readonly property bool ok: !!v && !v.error
+                    readonly property bool full: ok && !v.removed && v.role !== "Steward" && v.state !== "private"   // bio, experience and links show
+                    readonly property string person: ok ? root.who(v.key, v.name) : ""
+                    readonly property var links: ok && v.socials ? v.socials : []
+                    readonly property bool empty: ok && !v.bio && !v.experience && links.length === 0
+                    LinkButton { text: "‹  Back to People"; Accessible.name: "Back to People"; onClicked: root.openPage("people") }
+                    PageHead { title: memberPage.ok ? memberPage.person : "Member"; lede: memberPage.ok ? root.esc(memberPage.v.removed ? "Removed" : (memberPage.v.super_admin ? "Super admin" : memberPage.v.role || "Pending")) : "" }
+                    Help { visible: !memberPage.v; text: "Loading this member…" }
+                    Help { visible: !!memberPage.v && !!memberPage.v.error; color: root.t.danger; text: memberPage.v ? String(memberPage.v.error || "") : "" }
+                    RowLayout {
+                        visible: memberPage.ok
+                        spacing: 8
+                        Fingerprint { text: memberPage.ok ? memberPage.v.fingerprint : "" }
+                        StatusChip { visible: memberPage.ok && !memberPage.v.removed && memberPage.v.role !== "Resident"; label: memberPage.ok ? (memberPage.v.super_admin ? "Super admin" : memberPage.v.role || "") : ""; stage: root.t.progress }
+                        StatusChip { visible: memberPage.ok && !!memberPage.v.removed; label: "Removed"; stage: root.t.closed }
+                        Label { visible: memberPage.ok && memberPage.v.own; text: "you"; color: root.t.muted; font.pointSize: root.smallSize }
+                    }
+                    FormRow {
+                        visible: memberPage.ok && memberPage.v.granted_at_ms > 0
+                        label: "Joined"
+                        Label { text: memberPage.ok ? root.when(memberPage.v.granted_at_ms / 1000, "d MMMM yyyy") : "" }
+                    }
+                    Help { visible: memberPage.ok && !!memberPage.v.removed; text: "This member was removed from the site. Only the name stays." }
+                    Help { visible: memberPage.ok && memberPage.v.role === "Steward"; text: "A steward has a name and a role only." }
+                    Help { visible: memberPage.ok && memberPage.v.state === "private"; text: "This member keeps their profile private. You see the name and the role only." }
+                    Help { visible: memberPage.ok && memberPage.v.own && memberPage.v.private; text: "Your profile is private. Other members see your name and role only." }
+                    Help { visible: memberPage.ok && memberPage.v.pointer === "announced"; text: "This profile has a newer edit. The chain record updates at the next admin batch." }
+                    ColumnLayout {
+                        visible: memberPage.full
+                        Layout.fillWidth: true; spacing: 8
+                        Help { visible: memberPage.v && memberPage.v.state === "loading"; text: "This profile has not arrived yet. The app tries again by itself." }
+                        ActionButton { visible: memberPage.v && memberPage.v.state === "loading"; text: "Try again"; onClicked: root.call("member_profile", [root.viewKey], root.applyViewed) }
+                        Help { visible: memberPage.v && memberPage.v.state !== "loading" && memberPage.empty; text: memberPage.v && memberPage.v.own ? "You have no bio yet. Add one on the You page." : "This member has no bio yet." }
+                        Heading { visible: !!(memberPage.v && memberPage.v.bio); text: "Bio" }
+                        Note { visible: !!(memberPage.v && memberPage.v.bio); text: memberPage.v ? memberPage.v.bio || "" : "" }
+                        Heading { visible: !!(memberPage.v && memberPage.v.experience); text: "Experience" }
+                        Note { visible: !!(memberPage.v && memberPage.v.experience); text: memberPage.v ? memberPage.v.experience || "" : "" }
+                        Heading { visible: memberPage.links.length > 0; text: "Links" }
+                        Repeater {
+                            model: memberPage.links
+                            delegate: RowLayout {
+                                id: linkRow
+                                required property var modelData
+                                Layout.fillWidth: true; spacing: 12
+                                Label { Layout.preferredWidth: 90; text: linkRow.modelData[0]; textFormat: Text.PlainText; color: root.t.muted }
+                                Label { Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText; font.family: "monospace"; text: linkRow.modelData[1] }
+                                ConfirmButton {
+                                    text: "Open"; name: "Open the " + linkRow.modelData[0] + " link"; confirmText: "Open link"
+                                    effect: "This opens https://" + linkRow.modelData[1] + " in your browser. Open only links that you trust."
+                                    onConfirmed: Qt.openUrlExternally("https://" + linkRow.modelData[1])
+                                }
+                            }
+                        }
+                    }
+                    RowLayout {
+                        visible: memberPage.ok && !memberPage.v.removed
+                        spacing: 12
+                        ActionButton { visible: memberPage.ok && memberPage.v.own; text: "Edit your profile"; kind: "primary"; onClicked: root.openPage("profile") }
+                        ActionButton { visible: memberPage.ok && !memberPage.v.own && root.approved; text: "Message"; onClicked: root.openChat(root.viewKey) }
+                        ActionButton { visible: memberPage.ok && !memberPage.v.own && root.approved; text: "Plan a 1:1 meeting"; onClicked: root.startMeet(memberPage.v) }
+                    }
+                }
+                // Messages: private chat with another active member, or a group of active members. The chats on the left, the open
+                // thread and the send box on the right (one column on a narrow window). Only the people in a chat can read a message.
+                // A message that cannot go yet (their chat address has not arrived, or a member of the group has not joined) waits in
+                // a local queue and goes out by itself.
+                ColumnLayout {
+                    id: chatPage
+                    enabled: !root.syncing
+                    spacing: 8
+                    readonly property var threads: root.chat.threads || []
+                    readonly property var known: root.chat.known || []
+                    readonly property var link: root.chat.chat || ({})          // {ok, status} or {ok: false, error | starting}
+                    readonly property var st: link.status || ({})
+                    readonly property string problem: root.chat.problem || ""   // the chat module did not answer the list
+                    readonly property var others: root.members.filter(function (m) { return m.key !== root.me.key })
+                    // Only people with a sent, received or waiting message are listed. A new chat is empty until one exists.
+                    property bool picking: false          // the New chat picker replaces the chat list
+                    property bool grouping: false         // the New group form replaces the chat list
+                    property bool showMembers: false      // the members of the open group replace its messages
+                    readonly property bool membersShown: root.chatGroup && showMembers
+                    readonly property bool readOnly: root.chatGroup && root.chatThread.history_only === true
+                    readonly property int joining: root.chatThread.pending || 0
+                    readonly property var addable: {   // active members that are not in the open group
+                        var inn = ({})
+                        ;(root.groupInfo.members || []).forEach(function (m) { inn[m.key] = true })
+                        return others.filter(function (m) { return !inn[m.key] })
+                    }
+                    readonly property var picks: {
+                        var q = picker.text.trim().toLowerCase()
+                        return others.filter(function (m) { return !q || (m.name || "").toLowerCase().indexOf(q) >= 0 || m.key.indexOf(q) === 0 })
+                    }
+                    readonly property string currentName: root.chatGroup ? (root.chatThread.name || "Group")
+                                                          : root.who(root.chatWith, (others.filter(function (m) { return m.key === root.chatWith })[0] || ({})).name)
+                    readonly property bool hasAddress: known.indexOf(root.chatWith) >= 0
+                    readonly property bool twoPane: width >= 640
+                    readonly property bool online: st.delivery === "online"
+                    function send() {
+                        var key = root.chatWith
+                        root.run("chat_send", [key, draft.text.trim()], function (r) {
+                            draft.clear()
+                            if (r && r.sent === false)
+                                root.notice = "Your message is saved and not sent yet. " + (r.why || "") + " It goes out by itself as soon as it can."
+                            root.call("chat_messages", [key], root.applyChatMessages)
+                        })
+                    }
+                    function createGroup() {
+                        var name = groupName.text.trim()
+                        root.run("chat_group_create", [name, Object.keys(groupPick.picked).join(",")], function (r) {
+                            groupName.clear(); groupPick.clear()
+                            root.notice = "The group " + name + " is made. A member is added as soon as their chat address is known, and joins within a minute or two."
+                            root.call("chat_threads", [], function (c) { root.applyChat(c); root.openChat(r.convo) })
+                        })
+                    }
+                    function addMembers() {
+                        var convo = root.chatWith
+                        root.run("chat_group_add", [convo, Object.keys(addPick.picked).join(",")], function () {
+                            addPick.clear()
+                            root.notice = "The members are added. They join within a minute or two."
+                            root.call("chat_group_info", [convo], root.applyGroupInfo)
+                        })
+                    }
+                    PageHead {
+                        title: "Messages"
+                        lede: "Write privately to another active member, or to a group of them. Only the people in a chat can read the messages."
+                    }
+                    Flash { when: !!chatPage.link.error; delay: 3000; err: true; lead: "Chat is not running."; text: chatPage.link.error || "" }
+                    Flash { when: !!chatPage.problem; delay: 3000; err: true; lead: "The chat module did not answer."; text: chatPage.problem }
+                    Flash { when: chatPage.st.delivery === "error"; delay: 3000; err: true; lead: "Chat cannot reach the network."; text: chatPage.st.detail || "" }
+                    Flash { when: !!chatPage.st.note; delay: 3000; tone: "warn"; icon: "warn"; text: chatPage.st.note || "" }
+                    Help {
+                        delay: 3000
+                        when: !!chatPage.link.starting || (!!chatPage.link.ok && chatPage.st.delivery === "initialising")
+                        text: "Chat is starting. Messages that you write now are kept and sent when it is ready."
+                    }
+                    Connections {   // a chat opened from People, or a group just made
+                        target: root
+                        function onChatWithChanged() { chatPage.picking = false; chatPage.grouping = false; chatPage.showMembers = false; picker.clear(); addPick.clear() }
+                    }
+                    RowLayout {
+                        visible: chatPage.twoPane || root.chatWith === ""
+                        spacing: 8
+                        ActionButton {
+                            text: chatPage.picking ? "Cancel" : "New chat"
+                            iconName: chatPage.picking ? "" : "cmt"
+                            Accessible.name: chatPage.picking ? "Cancel the new chat" : "Start a new chat"
+                            onClicked: { chatPage.picking = !chatPage.picking; chatPage.grouping = false; picker.clear() }
+                        }
+                        ActionButton {
+                            text: chatPage.grouping ? "Cancel" : "New group"
+                            iconName: chatPage.grouping ? "" : "members"
+                            Accessible.name: chatPage.grouping ? "Cancel the new group" : "Start a new group"
+                            onClicked: { chatPage.grouping = !chatPage.grouping; chatPage.picking = false; groupName.clear(); groupPick.clear() }
+                        }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true; Layout.fillHeight: true; Layout.bottomMargin: 16
+                        spacing: 8
+                        Frame {   // the chats
+                            visible: chatPage.twoPane || root.chatWith === ""
+                            Layout.preferredWidth: chatPage.twoPane ? 280 : -1
+                            Layout.fillWidth: !chatPage.twoPane; Layout.fillHeight: true
+                            fill: root.t.card; edge: root.t.bd
+                            ListView {
+                                id: chatList
+                                anchors { fill: parent; margins: 1 }
+                                clip: true
+                                visible: !chatPage.picking && !chatPage.grouping
+                                model: chatPage.threads
+                                delegate: ItemDelegate {
+                                    id: chatRow
+                                    required property var modelData
+                                    width: ListView.view.width
+                                    highlighted: modelData.key === root.chatWith
+                                    readonly property string title: modelData.group ? modelData.name : root.who(modelData.key, modelData.name)
+                                    readonly property bool isUnread: modelData.unread === true && !highlighted
+                                    Accessible.name: (modelData.group ? "Group " : "Chat with ") + title + (isUnread ? ", unread" : "") + ". " + modelData.preview
+                                    onClicked: root.openChat(modelData.key)
+                                    background: Rectangle { color: chatRow.highlighted ? root.t.sbActBg : chatRow.hovered ? root.t.hover : "transparent" }
+                                    contentItem: ColumnLayout {
+                                        spacing: 2
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            Icon { visible: chatRow.modelData.group === true; name: "members"; size: 14; color: root.t.muted }
+                                            Label { Layout.fillWidth: true; elide: Text.ElideRight; textFormat: Text.PlainText; font.weight: chatRow.isUnread ? Font.Bold : Font.DemiBold; color: root.t.fg; text: chatRow.title }
+                                            Rectangle { visible: chatRow.isUnread; width: 10; height: 10; radius: 5; color: root.t.primary }
+                                            Label { text: root.chatTime(chatRow.modelData.last_ms); font.pointSize: root.smallSize; color: root.t.muted }
+                                        }
+                                        Label {
+                                            visible: chatRow.modelData.group === true
+                                            Layout.fillWidth: true; elide: Text.ElideRight; font.pointSize: root.smallSize; color: root.t.muted
+                                            text: (chatRow.modelData.members || 1) + ((chatRow.modelData.members || 1) === 1 ? " member" : " members") + (chatRow.modelData.pending > 0 ? ", " + chatRow.modelData.pending + " joining" : "")
+                                        }
+                                        Label { Layout.fillWidth: true; elide: Text.ElideRight; textFormat: Text.PlainText; font.pointSize: root.smallSize; color: root.t.muted; text: chatRow.modelData.preview || "No messages yet" }
+                                    }
+                                }
+                            }
+                            Blank {
+                                visible: !chatPage.picking && !chatPage.grouping && chatPage.threads.length === 0
+                                anchors.centerIn: parent; width: parent.width - 32
+                                icon: "cmt"; title: "No chats yet"; text: "Press New chat to write to a member, or New group to write to several."
+                            }
+                            ColumnLayout {   // the New chat picker: the other active members
+                                visible: chatPage.picking
+                                anchors { fill: parent; margins: 8 }
+                                spacing: 8
+                                FramedField { id: picker; Layout.fillWidth: true; placeholderText: "Search by name"; Accessible.name: "Search members" }
+                                ListView {
+                                    Layout.fillWidth: true; Layout.fillHeight: true
+                                    clip: true
+                                    model: chatPage.picks
+                                    delegate: ItemDelegate {
+                                        id: pick
+                                        required property var modelData
+                                        width: ListView.view.width
+                                        Accessible.name: "Start a chat with " + root.who(modelData.key, modelData.name)
+                                        onClicked: root.openChat(modelData.key)
+                                        background: Rectangle { color: pick.hovered ? root.t.hover : "transparent" }
+                                        contentItem: Label { elide: Text.ElideRight; textFormat: Text.PlainText; color: root.t.fg; text: root.who(pick.modelData.key, pick.modelData.name) }
+                                    }
+                                    Label {
+                                        visible: parent.count === 0
+                                        anchors.centerIn: parent; color: root.t.muted
+                                        text: picker.text ? "Nobody matches." : "There is nobody else to message yet."
+                                    }
+                                }
+                            }
+                            ColumnLayout {   // the New group form: a name, then the members to add
+                                visible: chatPage.grouping
+                                anchors { fill: parent; margins: 8 }
+                                spacing: 8
+                                FramedField { id: groupName; Layout.fillWidth: true; placeholderText: "Group name"; maximumLength: 60; Accessible.name: "Group name" }
+                                MemberPicker { id: groupPick; Layout.fillWidth: true; Layout.fillHeight: true; people: chatPage.others }
+                                ActionButton {
+                                    Layout.fillWidth: true
+                                    text: "Create group" + (groupPick.count > 0 ? " with " + groupPick.count : "")
+                                    kind: "primary"
+                                    allowed: groupName.text.trim() !== "" && groupPick.count > 0
+                                    Accessible.name: "Create the group"
+                                    onClicked: chatPage.createGroup()
+                                }
+                            }
+                        }
+                        Frame {   // the open thread and the send box
+                            visible: chatPage.twoPane || root.chatWith !== ""
+                            Layout.fillWidth: true; Layout.fillHeight: true
+                            fill: root.t.card; edge: root.t.bd
+                            Blank {
+                                visible: root.chatWith === ""
+                                anchors.centerIn: parent; width: parent.width - 32
+                                icon: "cmt"; title: "Pick a chat"; text: "Choose a chat on the left, or press New chat or New group."
+                            }
+                            ColumnLayout {
+                                visible: root.chatWith !== ""
+                                anchors { fill: parent; margins: 12 }
+                                spacing: 8
+                                RowLayout {
+                                    Layout.fillWidth: true; spacing: 12
+                                    LinkButton { visible: !chatPage.twoPane; text: "‹  Back"; Accessible.name: "Back to the chats"; onClicked: root.chatWith = "" }
+                                    Icon { visible: root.chatGroup; name: "members"; size: 18; color: root.t.muted }
+                                    ColumnLayout {
+                                        Layout.fillWidth: true; spacing: 0
+                                        Label { Layout.fillWidth: true; elide: Text.ElideRight; textFormat: Text.PlainText; font.weight: Font.DemiBold; font.pointSize: root.baseSize * 16 / 14; text: chatPage.currentName }
+                                        Label {
+                                            visible: root.chatGroup
+                                            Layout.fillWidth: true; elide: Text.ElideRight; font.pointSize: root.smallSize; color: root.t.muted
+                                            text: (root.chatThread.members || 1) + ((root.chatThread.members || 1) === 1 ? " member" : " members") + (chatPage.joining > 0 ? ", " + chatPage.joining + " joining" : "")
+                                        }
+                                    }
+                                    ActionButton {
+                                        visible: root.chatGroup
+                                        text: chatPage.showMembers ? "Messages" : "Members"
+                                        Accessible.name: chatPage.showMembers ? "Back to the messages" : "Show the members of the group"
+                                        onClicked: chatPage.showMembers = !chatPage.showMembers
+                                    }
+                                    ActionButton {
+                                        visible: root.chatGroup && !chatPage.readOnly
+                                        text: "Add members"; iconName: "plus"
+                                        Accessible.name: "Add members to the group"
+                                        onClicked: { chatPage.showMembers = true; addPick.focusSearch() }
+                                    }
+                                }
+                                Help { when: !root.chatGroup && !chatPage.hasAddress; delay: 3000; text: "Their chat address has not arrived yet. Your message waits in the queue and goes out when it arrives." }
+                                Help {
+                                    when: root.chatGroup && chatPage.joining > 0 && !chatPage.showMembers; delay: 3000
+                                    text: "Some members have not joined yet. This can take a minute or two. A member who joins later does not see the messages sent before."
+                                }
+                                Flash {
+                                    when: chatPage.readOnly; delay: 3000; tone: "warn"; icon: "warn"
+                                    text: "This group is from before a restart. You can read it, and you cannot write in it until a member adds you again."
+                                }
+                                ColumnLayout {   // the members of the group, and a list to add more from
+                                    visible: chatPage.membersShown
+                                    Layout.fillWidth: true; Layout.fillHeight: true
+                                    spacing: 8
+                                    Label { font.weight: Font.DemiBold; text: "In the group" }
+                                    ListView {
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: Math.min(contentHeight, 150)
+                                        clip: true
+                                        model: root.groupInfo.members || []
+                                        delegate: Label {
+                                            required property var modelData
+                                            width: ListView.view.width; elide: Text.ElideRight; textFormat: Text.PlainText; color: root.t.fg
+                                            text: (modelData.me ? "You" : root.who(modelData.key, modelData.name)) + (modelData.pending ? " (joining)" : "")
+                                        }
+                                    }
+                                    Label { visible: !chatPage.readOnly; font.weight: Font.DemiBold; text: "Add members" }
+                                    MemberPicker { id: addPick; visible: !chatPage.readOnly; Layout.fillWidth: true; Layout.fillHeight: true; people: chatPage.addable }
+                                    ActionButton {
+                                        visible: !chatPage.readOnly
+                                        Layout.alignment: Qt.AlignRight
+                                        text: "Add" + (addPick.count > 0 ? " " + addPick.count : "")
+                                        kind: "primary"; allowed: addPick.count > 0
+                                        Accessible.name: "Add the selected members to the group"
+                                        onClicked: chatPage.addMembers()
+                                    }
+                                }
+                                ListView {
+                                    id: thread
+                                    visible: !chatPage.membersShown
+                                    Layout.fillWidth: true; Layout.fillHeight: true
+                                    clip: true; spacing: 6
+                                    model: root.chatMessages
+                                    onCountChanged: Qt.callLater(thread.positionViewAtEnd)
+                                    delegate: ColumnLayout {
+                                        id: bubble
+                                        required property var modelData
+                                        required property int index
+                                        readonly property bool mine: modelData.from_self
+                                        // the first new message after a chat from before a restart
+                                        readonly property bool startsNew: index > 0 && !modelData.old && root.chatMessages[index - 1].old
+                                        width: ListView.view.width
+                                        spacing: 6
+                                        Help { visible: bubble.startsNew; horizontalAlignment: Text.AlignHCenter; text: "The messages above are from before a restart and are read only. New messages start here." }
+                                        Label {   // in a group: who wrote it
+                                            visible: root.chatGroup && !bubble.mine && !!bubble.modelData.sender_key
+                                            Layout.alignment: Qt.AlignLeft
+                                            textFormat: Text.PlainText; font.pointSize: root.smallSize; font.weight: Font.DemiBold; color: root.t.muted
+                                            text: root.who(bubble.modelData.sender_key || "", bubble.modelData.sender_name)
+                                        }
+                                        Rectangle {
+                                            Layout.alignment: bubble.mine ? Qt.AlignRight : Qt.AlignLeft
+                                            Layout.maximumWidth: thread.width * 0.8
+                                            implicitWidth: Math.min(body.implicitWidth, thread.width * 0.8 - 24) + 24
+                                            implicitHeight: body.implicitHeight + 16
+                                            radius: 8
+                                            color: bubble.mine ? root.t.accentBg : root.t.well
+                                            border.color: bubble.mine ? root.t.accentBd : root.t.bd
+                                            ColumnLayout {
+                                                id: body
+                                                anchors { fill: parent; margins: 8; leftMargin: 12; rightMargin: 12 }
+                                                spacing: 2
+                                                Label { Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText; color: root.t.fg; text: bubble.modelData.content }
+                                                Label {
+                                                    font.pointSize: root.smallSize; color: root.t.muted
+                                                    text: bubble.modelData.queued ? "Not sent yet" : root.chatTime(bubble.modelData.ts_ms) + (bubble.mine ? " · sent" : "")
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                Blank {
+                                    visible: root.chatMessages.length === 0 && !chatPage.membersShown
+                                    Layout.fillHeight: true
+                                    icon: "cmt"; title: "No messages yet"; text: "Write the first message below."
+                                }
+                                RowLayout {
+                                    visible: !chatPage.membersShown
+                                    Layout.fillWidth: true; spacing: 8
+                                    FramedField {
+                                        id: draft
+                                        Layout.fillWidth: true
+                                        enabled: !chatPage.readOnly
+                                        placeholderText: "Write a message"; maximumLength: 4000
+                                        Accessible.name: "Message to " + chatPage.currentName
+                                        onAccepted: sendButton.submit()
+                                    }
+                                    ActionButton {
+                                        id: sendButton
+                                        text: "Send"; kind: "primary"
+                                        allowed: draft.text.trim() !== "" && !chatPage.readOnly
+                                        Accessible.name: "Send the message to " + chatPage.currentName
+                                        onClicked: chatPage.send()
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             // The issue pane: header, the report, why it isn't closed yet, then the actions grouped by
@@ -3659,11 +4721,6 @@ Item {
                         Layout.fillWidth: true; Layout.topMargin: 4; wrapMode: Text.Wrap
                         text: !detail.issue.location ? "" : root.placeName(detail.issue) || root.placeCode(detail.issue)
                         font.pointSize: root.baseSize * 17 / 14; font.weight: Font.DemiBold
-                    }
-                    Label {
-                        visible: !!detail.issue.location_renamed_from
-                        Layout.fillWidth: true; wrapMode: Text.Wrap
-                        text: "Place renamed from " + detail.issue.location_renamed_from; font.pointSize: root.smallSize; color: root.t.muted
                     }
                     Flash {   // an old issue: why it is not on the board, and that nothing is lost
                         visible: detail.finished && !root.onBoard(detail.issue)

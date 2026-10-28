@@ -1,5 +1,31 @@
 {
   "nodes": {
+    "chat_module": {
+      "inputs": {
+        "logos-delivery-module": [
+          "pukaar_core",
+          "delivery_module"
+        ],
+        "logos-module-builder": [
+          "pukaar_core",
+          "logos-module-builder"
+        ]
+      },
+      "locked": {
+        "lastModified": 1790696142,
+        "narHash": "sha256-gfxbwt7Xk2UpL77ku4OYVxJdo/dMcPilxwzn0TArizc=",
+        "owner": "logos-co",
+        "repo": "logos-chat-module",
+        "rev": "5053dd5062817f34a93055435781c1c448c7ce6c",
+        "type": "github"
+      },
+      "original": {
+        "owner": "logos-co",
+        "ref": "v0.3.0",
+        "repo": "logos-chat-module",
+        "type": "github"
+      }
+    },
     "crane": {
       "locked": {
         "lastModified": 1780532242,
@@ -41128,6 +41154,28 @@
         "type": "github"
       }
     },
+    "logos-storage": {
+      "inputs": {
+        "nixpkgs": "nixpkgs_614",
+        "nixpkgs-windows": "nixpkgs-windows_421"
+      },
+      "locked": {
+        "lastModified": 1791033757,
+        "narHash": "sha256-Vj89qnnSFvPaROHJ44VBSg9vF+amjPfaNLg82yuisMw=",
+        "ref": "refs/tags/v0.5.3",
+        "rev": "56854f4ebce0cfe68e3557d1be21b758ac62ae0c",
+        "revCount": 996,
+        "submodules": true,
+        "type": "git",
+        "url": "https://github.com/logos-storage/logos-storage-nim"
+      },
+      "original": {
+        "ref": "refs/tags/v0.5.3",
+        "submodules": true,
+        "type": "git",
+        "url": "https://github.com/logos-storage/logos-storage-nim"
+      }
+    },
     "logos-test-framework": {
       "inputs": {
         "logos-cpp-sdk": [
@@ -55411,6 +55459,22 @@
         "type": "github"
       }
     },
+    "nixpkgs-windows_421": {
+      "locked": {
+        "lastModified": 1789027773,
+        "narHash": "sha256-peDPNhDs5kAX4b7jP71fsyEI6vM5DTFNXhnjd+7Ug6A=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "4b576876945404fa58704ebe13e4e72c50a4ccdc",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "release-26.05",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
     "nixpkgs-windows_43": {
       "locked": {
         "lastModified": 1782723713,
@@ -65539,6 +65603,22 @@
         "type": "github"
       }
     },
+    "nixpkgs_614": {
+      "locked": {
+        "lastModified": 1783375776,
+        "narHash": "sha256-pg6hLjDeAWaUOzh2JM2Cw0BwYpGtOyNr6A4FBwP9Ymo=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "cd648d6ea62bc0ffba91e61fcfe5e33c1e2004b1",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "release-25.11",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
     "nixpkgs_62": {
       "locked": {
         "lastModified": 1759036355,
@@ -66514,10 +66594,18 @@
     },
     "pukaar_core": {
       "inputs": {
+        "chat_module": "chat_module",
         "delivery_module": "delivery_module",
         "logos-module-builder": [
           "logos-module-builder"
-        ]
+        ],
+        "nixpkgs": [
+          "pukaar_core",
+          "logos-module-builder",
+          "nixpkgs"
+        ],
+        "rust-overlay": "rust-overlay_16",
+        "storage_module": "storage_module"
       },
       "locked": {
         "path": "../pukaar_core",
@@ -66716,6 +66804,28 @@
       "original": {
         "owner": "oxalica",
         "repo": "rust-overlay",
+        "type": "github"
+      }
+    },
+    "rust-overlay_16": {
+      "inputs": {
+        "nixpkgs": [
+          "pukaar_core",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1790843958,
+        "narHash": "sha256-jtYAaAXT1gxEtzmeYmOGu0IvKPle5J39BOFbgl6os+A=",
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "rev": "b2ccad3b67335d368eef49ec48b9c8166858e73d",
+        "type": "github"
+      },
+      "original": {
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "rev": "b2ccad3b67335d368eef49ec48b9c8166858e73d",
         "type": "github"
       }
     },
@@ -66951,6 +67061,29 @@
         "owner": "logos-blockchain",
         "repo": "logos-blockchain-rust-rapidsnark",
         "rev": "e91187f8ccb5bbfc7bb00dac88169112428da78f",
+        "type": "github"
+      }
+    },
+    "storage_module": {
+      "inputs": {
+        "logos-module-builder": [
+          "pukaar_core",
+          "logos-module-builder"
+        ],
+        "logos-storage": "logos-storage"
+      },
+      "locked": {
+        "lastModified": 1791039176,
+        "narHash": "sha256-NSJrn8aR9fYKcNJjujXhIPTQNkJx+K4QGfZOfIH8qNs=",
+        "owner": "logos-co",
+        "repo": "logos-storage-module",
+        "rev": "7548f41ae189917d58c37f0fb6d3a2700b99f59b",
+        "type": "github"
+      },
+      "original": {
+        "owner": "logos-co",
+        "ref": "v3.0.2",
+        "repo": "logos-storage-module",
         "type": "github"
       }
     },

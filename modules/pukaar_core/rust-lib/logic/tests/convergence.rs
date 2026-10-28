@@ -4,6 +4,8 @@ mod util;
 use common::*;
 use pukaar_logic::event::{Body, Id};
 use pukaar_logic::node::Node;
+use pukaar_logic::reducer::Rank;
+use std::collections::BTreeMap;
 
 /// Tiny deterministic RNG, so failures reproduce from the seed.
 struct Rng(u64);
@@ -106,7 +108,7 @@ fn any_delivery_order_gives_the_same_state() {
             for i in (1..order.len()).rev() {
                 order.swap(i, r.pick(i + 1));
             }
-            let mut fresh = Node::join(pukaar_logic::event::new_key(), s.admin.store.site);
+            let mut fresh = node(pukaar_logic::event::new_key(), &s.roles);
             for b in &order {
                 fresh.receive(b).unwrap();
             }
@@ -120,12 +122,12 @@ fn any_delivery_order_gives_the_same_state() {
 }
 
 /// A fresh replica fed `all` in a shuffled order.
-fn replay(r: &mut Rng, site: Id, all: &[Vec<u8>]) -> Node {
+fn replay(r: &mut Rng, roles: &BTreeMap<pukaar_logic::event::Key, Rank>, all: &[Vec<u8>]) -> Node {
     let mut order: Vec<&Vec<u8>> = all.iter().collect();
     for i in (1..order.len()).rev() {
         order.swap(i, r.pick(i + 1));
     }
-    let mut fresh = Node::join(pukaar_logic::event::new_key(), site);
+    let mut fresh = node(pukaar_logic::event::new_key(), roles);
     for b in order {
         fresh.receive(b).unwrap();
     }
@@ -139,11 +141,11 @@ fn a_forked_author_converges_to_one_branch_in_any_delivery_order() {
     for seed in 1..=30u64 {
         let mut r = Rng(seed);
         let mut s = Site::new();
-        let mut laptop = second_device(&s.asha);
+        let mut laptop = second_device(&s.asha, &s.roles);
         for round in 0..4u64 {
             let mut nodes = with(&mut s, &mut laptop);
-            nodes[2].publish(profile("phone"), round).unwrap();
-            nodes[5].publish(profile("laptop"), round).unwrap();
+            nodes[2].publish(comment("phone"), round).unwrap();
+            nodes[5].publish(comment("laptop"), round).unwrap();
             for _ in 0..4 {
                 let who = r.pick(6);
                 let issues: Vec<Id> = nodes[who].state().issues.keys().copied().collect();
@@ -166,7 +168,7 @@ fn a_forked_author_converges_to_one_branch_in_any_delivery_order() {
         }
         let all: Vec<Vec<u8>> = nodes[0].store.held().map(|e| e.bytes.clone()).collect();
         for _ in 0..10 {
-            let fresh = replay(&mut r, s.admin.store.site, &all);
+            let fresh = replay(&mut r, &s.roles, &all);
             assert!(fresh.store.pending.is_empty(), "seed {seed}: gaps filled");
             assert_eq!(fresh.state(), expected, "seed {seed}: state diverged");
             assert_eq!(canonical(&fresh), canon, "seed {seed}: branch diverged");
@@ -178,13 +180,13 @@ fn a_forked_author_converges_to_one_branch_in_any_delivery_order() {
 #[test]
 fn after_losing_a_fork_our_next_event_builds_on_the_winner() {
     let mut s = Site::new();
-    let mut laptop = second_device(&s.asha);
+    let mut laptop = second_device(&s.asha, &s.roles);
     // both devices sign two events offline: seq n and n+1 on each, conflicting
     let phone: Vec<_> = (0..2)
-        .map(|i| s.asha.publish(profile("phone"), i).unwrap())
+        .map(|i| s.asha.publish(comment("phone"), i).unwrap())
         .collect();
     let lap: Vec<_> = (0..2)
-        .map(|i| laptop.publish(profile("laptop"), i).unwrap())
+        .map(|i| laptop.publish(comment("laptop"), i).unwrap())
         .collect();
     assert_eq!(phone[0].u.seq, lap[0].u.seq);
     gossip(&mut with(&mut s, &mut laptop));
@@ -196,7 +198,7 @@ fn after_losing_a_fork_our_next_event_builds_on_the_winner() {
         "the losing seq and its child"
     );
     let loser = if phone_wins { &mut laptop } else { &mut s.asha };
-    let next = loser.publish(profile("again"), 9).unwrap();
+    let next = loser.publish(comment("again"), 9).unwrap();
     assert_eq!((next.u.seq, next.u.prev), (head.u.seq + 1, head.id));
     let mut nodes = with(&mut s, &mut laptop);
     gossip(&mut nodes);

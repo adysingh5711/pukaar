@@ -5,24 +5,49 @@
 //! rust-lib/Cargo.toml); this file only moves bytes between that crate, the
 //! disk and Delivery.
 
-use pukaar_logic::event::{Body, Event, Role, SigningKey};
+mod chat;
+mod wallet;
+mod storage;
+
+use pukaar_logic::chatbook::ChatBook;
+use pukaar_logic::event::{sha256, Body, Event, Key, SigningKey};
+use pukaar_logic::fetch::{sync_once, Fetched, Store as _};
 use pukaar_logic::identity;
-use pukaar_logic::node::{action_body, genesis_from_json, parse_id, Node};
-use pukaar_logic::persist;
+use pukaar_logic::node::{action_body, parse_id, Node};
+use pukaar_logic::lezkey::{derive_lez_secret, lez_account_id};
+use pukaar_logic::meet::{Act, Meetings};
+use pukaar_logic::persist::{self, SiteFile as _};
+use pukaar_logic::profile;
+use pukaar_logic::ops::{self, Place, SuperKind};
+use pukaar_logic::queue::{self, Queue, SharedQueue};
+use pukaar_logic::reducer::Rank;
+use pukaar_logic::rpc::{Chain, HttpRpc};
 use pukaar_logic::store::Accept;
 use pukaar_logic::sync::{
     heads_msg, lost_node, send_queue, should_answer, to_resend, to_resend_own, SendError, Wire,
-    DELIVERY_CFG,
+    WriteKind, DELIVERY_CFG,
 };
+use pukaar_logic::writes;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 // Mutex comes from the generated scaffold below (same module scope): a second
 // `use std::sync::Mutex;` here would be a duplicate import (confirmed at Step 8).
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub trait PukaarCoreModule: Send + 'static {
+    /// Uploads the files and queues `create_site`: `{"ok":true,"queued":id,"site":hex}` at once, or
+    /// `error: …`. The site shows on the chain after a block (`chain_status`).
     fn site_create(&mut self, genesis_json: String) -> String;
+    /// Signs a join request with both keys and sends it to the site: `{"ok":true,"queued":id,"site":hex}`.
+    /// `my_identity.pending` is "requested" until an admin approves.
     fn site_join(&mut self, site_hex: String) -> String;
+    /// Admin only. Hides the join request of this person and sends them a signed decline. It writes
+    /// nothing to the chain and costs no fee. A new request from them shows again. `ok` or `error: …`.
+    fn reject_join(&mut self, subject_hex: String) -> String;
+    /// Cancels our join request (waiting, declined, or used by an earlier approval) and sends a new one
+    /// with a fresh profile file: `{"ok":true,"queued":id}`. Refused for a member that has a role.
+    fn join_again(&mut self) -> String;
     /// Drop this device's copy of the site (no event is published); the key stays, so
     /// rejoining is the same person. `ok` or `error: …`.
     fn leave_site(&mut self) -> String;
@@ -34,8 +59,18 @@ pub trait PukaarCoreModule: Send + 'static {
     fn import_identity(&mut self, blob: String, password: String) -> String;
     /// Stop waiting for a restored identity's history (allowed 10 min after the restore).
     fn skip_history_sync(&mut self) -> String;
-    fn set_profile(&mut self, display_name: String) -> String;
-    /// `name` is required for steward/admin and optional for residents. Only a super admin
+    /// Seals and uploads the profile and announces it to the site: members see it at once. The chain
+    /// pointer follows at the next admin `send_batch`. `{"ok":true,"queued":id}`. `bio`, `experience` and
+    /// `socials` are optional: a call with the name only keeps working, and clears all three. `socials` is
+    /// JSON, at most 4 pairs: `[["github","github.com/asha"]]`. Labels: website, github, x, linkedin, other.
+    /// `private` is "1" to show other members the name and the role only (the app hides the rest), or empty.
+    fn set_profile(&mut self, display_name: String, bio: Option<String>, experience: Option<String>, socials: Option<String>, private: Option<String>) -> String;
+    /// Admin only. Signs the display name of a steward or an admin and queues the chain pointer at once
+    /// (one fee, no batch). Readers accept a staff name only with the signature of an admin.
+    /// `{"ok":true,"queued":id}`. A super admin names another admin, an admin names stewards and itself.
+    fn set_staff_name(&mut self, subject_hex: String, name: String) -> String;
+    /// Held until an admin calls `send_batch`. `name` is required for steward/admin and optional for
+    /// residents. Only a super admin
     /// grants "admin" or changes an admin's role; nobody changes a super admin's.
     fn grant_role(&mut self, subject_hex: String, role: String, name: String) -> String;
     /// Admin only (the rules reject anyone else's); `reason` is required. Revoking an admin is
@@ -95,8 +130,78 @@ pub trait PukaarCoreModule: Send + 'static {
     fn list_issues(&mut self) -> String;
     fn issue_timeline(&mut self, issue_hex: String) -> String;
     fn site_info(&mut self) -> String;
+    /// The page of one member of this site, removed ones too: name, role, joining time (`granted_at_ms`), bio,
+    /// experience, `socials` and the pointer state. It reads caches only. `error: …` for a key that is no member.
+    fn member_profile(&mut self, key_hex: String) -> String;
     fn checkpoint_now(&mut self) -> String;
+    /// Any active member. Queues one `anchor` write for the record as it is now: `{"ok":true,"queued":id}`. It costs
+    /// about 523,304 lepta from the account of the member. It reads the chain first and refuses a record that is
+    /// anchored already, because a failed call costs about 4 M lepta. The result shows in `site_info.last_anchor`.
+    fn anchor_now(&mut self) -> String;
     fn record_anchor(&mut self, heads_json: String, lez_ref: String) -> String;
+    /// The state of each queued chain write: `key` (the wallet key import), `writes` (id, kind, state,
+    /// short tx hash, reason, items) and `waiting` (writes held for `send_batch`).
+    fn chain_status(&mut self) -> String;
+    /// Admin only: send the held approvals, role changes and revokes, and the profile refreshes of the
+    /// members, in batches of 10. `{"ok":true,"queued":[ids]}`.
+    fn send_batch(&mut self) -> String;
+    /// 1:1 meetings of this member: `{"meetings":[…],"share":bool,"lead_min":n,"backup":{…}}`. Times are UTC ms.
+    fn meet_list(&mut self) -> String;
+    /// The free/busy view for a meeting with `other_hex`: our busy ranges, theirs when they share, and the
+    /// next 7 days of slots of `len_min` minutes from `from_ms`: `{"shared","mine","theirs","slots"}`.
+    fn meet_slots(&mut self, other_hex: String, from_ms: f64, len_min: i64) -> String;
+    /// What a time runs into, in our calendar and in the summary of `other_hex`: `{"mine":[…],"theirs":[…]}`.
+    fn meet_check(&mut self, other_hex: String, start_ms: f64, end_ms: f64) -> String;
+    /// Saves a proposal and sends it, sealed, to `other_hex`: `{"ok":true,"id":hex}`. A clash does not stop it.
+    fn meet_propose(&mut self, other_hex: String, start_ms: f64, end_ms: f64) -> String;
+    /// The invitee accepts a proposal that is not over. `ok` or `error: …`.
+    fn meet_accept(&mut self, id_hex: String) -> String;
+    /// The invitee declines a proposal: the slot is free again. `ok` or `error: …`.
+    fn meet_decline(&mut self, id_hex: String) -> String;
+    /// Either side cancels a confirmed meeting, or the requester cancels a proposal. `ok` or `error: …`.
+    fn meet_cancel(&mut self, id_hex: String) -> String;
+    /// Share the free/busy summary with the site (1) or with nobody (0), and the reminder lead time in minutes.
+    fn meet_prefs(&mut self, share: i64, lead_min: i64) -> String;
+    /// Encrypts the meeting history and uploads it to Storage in the background. `meet_list().backup` shows the result.
+    fn meet_backup(&mut self) -> String;
+    /// Reads the CID of your backup from the chain (a typed `cid` is used only when the chain has none), downloads it
+    /// from Storage in the background and adds the meetings that are missing.
+    fn meet_restore(&mut self, cid: String) -> String;
+    /// Starts `chat_module` on the Delivery preset `logos.dev`, reads its installation address (a new one at each start)
+    /// and announces it to the site, signed. Only an active member can. The core also does this by itself in the
+    /// background. Safe to call again: `{"address", "delivery", "detail", "adopted", "preset", "note"}`, or `error: …`.
+    /// `note` is set when chat, not Pukaar, created the shared Delivery node (its setup then differs from Pukaar's).
+    fn chat_start(&mut self) -> String;
+    /// The chat list of an active member: `{"threads":[{"key","name","preview","last_ms","queued","history_only",
+    /// "has_address","unread"}],"unread":bool,"known":[keys whose chat address arrived],"chat":{"ok","status"|"error"},"problem"}`, newest first.
+    /// One thread per person, old conversations and the new one together. A group of the site is a row too, with
+    /// `"group":true`, `key` its conversation id, `name` its name, `members` (in the group) and `pending` (added, not in yet).
+    /// It reads the chat module, so the screen polls it.
+    fn chat_threads(&mut self) -> String;
+    /// Marks a thread as read, up to its newest message: its `unread` flag and the total `unread` go out. `key_hex` is a
+    /// member's key, or the `key` of a group row (its conversation id). The mark is kept in the site's chat file.
+    /// `{"ok":true}`, or `error: …`.
+    fn chat_mark_read(&mut self, key_hex: String) -> String;
+    /// A thread, by the `key` of its row: `{"messages":[{"from_self","content","ts_ms","old","queued"}]}`, oldest first.
+    /// `old` is a message of a conversation from before a restart (read only), `queued` a message that is not sent yet.
+    /// In a group a message that came in also has `sender_key` (the member's key, or the chat address when no member
+    /// announced it) and `sender_name` (null when the member has no name).
+    fn chat_messages(&mut self, key_hex: String) -> String;
+    /// Sends a message to an active member, or to a group (the `key` of its row). It is kept first and sent at once if
+    /// their chat address is known (a group: once the members that were added have joined); if not (or if chat is down)
+    /// it waits in a local queue and goes out by itself: `{"ok":true,"sent":bool,"why"}`. `error: …` for a message that
+    /// is refused (empty, too long, not a member).
+    fn chat_send(&mut self, key_hex: String, text: String) -> String;
+    /// Makes a group with `name` and the active members in `members_hex` (keys, separated by commas). The group is in the
+    /// chat list at once. A member whose chat address has not arrived is added when it does. `{"ok":true,"convo"}`, or
+    /// `error: …`.
+    fn chat_group_create(&mut self, name: String, members_hex: String) -> String;
+    /// Adds active members (keys, separated by commas) to a group of the site; the ones in it already are skipped.
+    /// `{"ok":true}`, or `error: …`.
+    fn chat_group_add(&mut self, convo: String, members_hex: String) -> String;
+    /// A group for its header: `{"ok":true,"name","history_only","members":[{"key","name","me","pending"}]}`. A member
+    /// that waits for their chat address, or for the group to commit the add, is `pending`.
+    fn chat_group_info(&mut self, convo: String) -> String;
     fn on_context_ready(&mut self, _ctx: &RustModuleContext) {}
 }
 
@@ -106,7 +211,13 @@ include!(concat!(
     "/generated/provider_gen.rs"
 ));
 
+/// A peer's `ChainPending` is shown this long.
+const PEER_PENDING_FOR: Duration = Duration::from_secs(30 * 60);
 const HEADS_EVERY: Duration = Duration::from_secs(60);
+/// Our open meeting messages go out again this often (Delivery gives no acknowledgement).
+const MEET_EVERY: Duration = Duration::from_secs(300);
+/// A node asks its peers for the profile announces that it lacks when it comes online, then this often.
+const ANNOUNCE_REQ_EVERY: Duration = Duration::from_secs(600);
 const ANSWER_EVERY: Duration = Duration::from_secs(10);
 /// Received events reach the disk at most this often (see `Shared::save_due`).
 const SAVE_EVERY: Duration = Duration::from_secs(2);
@@ -160,6 +271,18 @@ struct Shared {
     /// Events arrived (on_wire) since the last save.
     dirty: bool,
     last_save: Instant,
+    /// The chain writes that we queue (persisted in `writes.json`). Lock order: SHARED, then the queue.
+    queue: SharedQueue,
+    /// `Wire::ChainPending` from peers: (transaction hash, kind, when). Shown, never trusted.
+    peers: Vec<(Key, WriteKind, Instant)>,
+    /// The 1:1 meetings of the site of `node` (`Meetings::for_site` loads them).
+    meets: Meetings,
+    /// When we last repeated our open meeting messages.
+    last_meet: Option<Instant>,
+    /// When we last asked the peers for profile announces.
+    last_announce_req: Option<Instant>,
+    /// The chat addresses, the conversation links and the unsent messages of the site of `node` (`chat.rs`).
+    chats: ChatBook,
 }
 
 impl Shared {
@@ -178,20 +301,6 @@ impl Shared {
             self.persist();
         }
     }
-
-    /// Seal every notice that ended `SEAL_GRACE` ago (`Node::auto_seal`: staff only, once each),
-    /// save, and queue the seals to go out.
-    fn auto_seal(&mut self) {
-        let Some(node) = self.node.as_mut() else {
-            return;
-        };
-        let seals = node.auto_seal(now());
-        if !seals.is_empty() {
-            self.outbox
-                .extend(seals.into_iter().map(|e| Wire::Event(e.bytes).encode()));
-            self.persist();
-        }
-    }
 }
 
 static SHARED: Mutex<Option<Shared>> = Mutex::new(None);
@@ -205,6 +314,34 @@ fn now() -> u64 {
 
 fn err(e: impl std::fmt::Display) -> String {
     format!("error: {e}")
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+/// The answer of a method that queued a write: it never waits for the chain.
+fn queued_reply(ids: &[u64]) -> String {
+    match ids {
+        [id] => serde_json::json!({ "ok": true, "queued": id }),
+        _ => serde_json::json!({ "ok": true, "queued": ids }),
+    }
+    .to_string()
+}
+
+/// The reply of a method that queued one entry, or its refusal.
+fn id_reply(r: Result<u64, String>) -> String {
+    r.map(|id| queued_reply(&[id])).unwrap_or_else(err)
+}
+
+/// A place edit of an admin.
+fn place(req: Place) -> String {
+    id_reply(queued(|node, q, _| ops::place_edit(node, q, req, now_ms())))
+}
+
+/// The notice methods are not part of this version (O7). The UI offers no notice, and the answer is plain.
+fn later() -> String {
+    err("Notices are not part of this version.")
 }
 
 const NO_SITE: &str = "no site yet: create or join one";
@@ -356,7 +493,7 @@ fn create_and_listen() -> Result<(), String> {
 }
 
 fn open_channel(site_hex: &str, me_hex: &str) -> Result<(), String> {
-    let topic = format!("/pukaar/1/site-{site_hex}/proto");
+    let topic = format!("/pukaar/2/site-{site_hex}/proto");
     // An existing channel (our earlier load, or a failed channelClose) already carries our site.
     delivered_once(
         "channelCreate",
@@ -369,6 +506,113 @@ fn open_channel(site_hex: &str, me_hex: &str) -> Result<(), String> {
     )
 }
 
+/// The `pukaar_sites` program on the LEZ testnet (base58 account id) and its JSON-RPC node.
+/// `PUKAAR_PROGRAM_ID` and `PUKAAR_LEZ_RPC` override them.
+const PROGRAM_ID: &str = "Gs1EWbwJKSBGRBiR7xasYtkrfCyUGJ52Vx4ASsDLooVK";
+const LEZ_RPC: &str = "https://testnet.lez.logos.co";
+
+fn env_or(name: &str, default: &str) -> String {
+    std::env::var(name).unwrap_or_else(|_| default.to_string())
+}
+
+fn program_id() -> Option<[u8; 32]> {
+    bs58::decode(env_or("PUKAAR_PROGRAM_ID", PROGRAM_ID)).into_vec().ok().and_then(|v| v.try_into().ok())
+}
+
+/// Back the roles of `node` with chain reads. The reads run on a thread (see `chain_tick`).
+fn wire_chain(node: &mut Node, dir: &Path) {
+    let program = program_id();
+    let Some(program) = program else {
+        eprintln!("pukaar: PUKAAR_PROGRAM_ID is not a base58 account id: no chain reads");
+        return;
+    };
+    let me = lez_account_id(&derive_lez_secret(&node.key.to_bytes()));
+    let chain = Chain::shared(program, node.store.site, me);
+    chain.lock().unwrap().persist_in(dir); // the accounts that earlier runs read, a removed member too
+    node.attach_chain(chain);
+    let fetched = Fetched::shared();
+    fetched.lock().unwrap().persist_in(dir, &node.store.site); // the announces that no admin batch sent yet
+    node.attach_fetched(fetched);
+}
+
+/// The Storage client of this module, made on the first sync. Its temp files and its data live in
+/// `dir`, the module data dir of this profile.
+static STORE: OnceLock<storage::LogosStore> = OnceLock::new();
+
+fn store(dir: PathBuf) -> &'static storage::LogosStore {
+    STORE.get_or_init(|| storage::LogosStore::new(dir))
+}
+
+/// The wallet of this module: the LEZ wallet crate, with the key in memory only.
+static WRITER: OnceLock<wallet::WalletWriter> = OnceLock::new();
+
+/// Start a chain read and a Storage fetch when one is due (at most one per 10 s). It never runs
+/// inside the call that the UI waits on: the thread fills the caches and the calls read the cached
+/// copies. Storage can take a minute on a cold start, which only delays the names and the settings.
+fn chain_tick() {
+    let parts = {
+        let g = SHARED.lock().unwrap();
+        let sh = g.as_ref();
+        let node = sh.and_then(|sh| sh.node.as_ref());
+        node.and_then(|n| Some((n.chain.clone()?, n.fetched.clone()?, n.key.clone(), sh?.dir.clone())))
+    };
+    let Some((chain, fetched, key, dir)) = parts else { return };
+    if !chain.lock().unwrap().start() {
+        return;
+    }
+    std::thread::spawn(move || {
+        sync_once(&HttpRpc::new(&env_or("PUKAAR_LEZ_RPC", LEZ_RPC)), store(dir), &chain, &fetched, &key);
+        // Storage failed for some file: ask the peers for it over Delivery (the outbox goes out in `flush`).
+        let asks = std::mem::take(&mut fetched.lock().unwrap().out);
+        if let Some(sh) = SHARED.lock().unwrap().as_mut() {
+            sh.outbox.extend(asks.iter().map(Wire::encode));
+        }
+    });
+}
+
+/// Run one step of the write queue when one is due (one start per 5 s, one entry per step). Like
+/// `chain_tick`, it runs on a thread: a send, a poll and an upload can take seconds and a module
+/// call never waits for them. Nothing is signed or sent unless an entry was queued by a method that
+/// the user called.
+fn write_tick() {
+    let parts = {
+        let g = SHARED.lock().unwrap();
+        let sh = g.as_ref();
+        let node = sh.and_then(|sh| sh.node.as_ref());
+        node.and_then(|n| Some((n.chain.clone()?, n.fetched.clone()?, n.key.clone(), sh?.dir.clone(), sh?.queue.clone())))
+    };
+    let (Some((chain, fetched, key, dir, queue)), Some(program)) = (parts, program_id()) else { return };
+    {
+        let mut q = queue.lock().unwrap();
+        if !q.wants_tick() || !q.start() {
+            return;
+        }
+    }
+    std::thread::spawn(move || {
+        let broadcast = |m: Wire| {
+            if let Some(sh) = SHARED.lock().unwrap().as_mut() {
+                sh.outbox.push(m.encode());
+            }
+        };
+        let rpc = HttpRpc::new(&env_or("PUKAAR_LEZ_RPC", LEZ_RPC));
+        let env = queue::Env {
+            writer: WRITER.get_or_init(|| wallet::WalletWriter::new(dir.join("wallet"), env_or("PUKAAR_LEZ_RPC", LEZ_RPC))),
+            rpc: &rpc,
+            store: store(dir.clone()),
+            chain: &chain,
+            fetched: &fetched,
+            key: &key,
+            program,
+            now_ms: now_ms(),
+            broadcast: &broadcast,
+        };
+        // A panic must not freeze the queue for good.
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| queue::tick(&queue, &env))).is_err() {
+            queue.lock().map(|mut q| q.unbusy()).ok();
+        }
+    });
+}
+
 /// Called from the Delivery event thread for every channel message; only our site's count
 /// (a channel left behind by leave_site must not feed the new site, e.g. a restore's Heads).
 fn on_wire(channel: &str, bytes: &[u8]) {
@@ -378,6 +622,11 @@ fn on_wire(channel: &str, bytes: &[u8]) {
         outbox,
         last_answer,
         dirty,
+        queue,
+        peers,
+        meets,
+        chats,
+        dir,
         ..
     }) = g.as_mut()
     else {
@@ -402,15 +651,63 @@ fn on_wire(channel: &str, bytes: &[u8]) {
             // Everyone re-sends their OWN missing events; only the kiosk (admin) and 3 elected
             // peers re-send everyone's, so a newcomer gets 3-4 copies instead of 30.
             *last_answer = Some(Instant::now());
-            let st = node.state();
-            let members: Vec<_> = st.roles.keys().copied().collect();
+            let members = node.approved_keys();
             let me = node.me();
-            let batch = if st.admin == Some(me) || should_answer(&me, &members, bytes, now() / 60) {
+            let kiosk = node.role_now(&me).is_some_and(|r| r >= Rank::Admin);
+            let batch = if kiosk || should_answer(&me, &members, bytes, now() / 60) {
                 to_resend(&node.store, &theirs)
             } else {
                 to_resend_own(&node.store, &theirs, &me)
             };
             outbox.extend(batch.into_iter().map(|b| Wire::Event(b).encode()));
+        }
+        // The account of a join request is read from the chain, and the request is kept: the admin sees
+        // it in `site_info.pending` and approves it with `grant_role`.
+        Some(Wire::JoinReq(req)) => {
+            node.on_join_req(&req);
+            queue.lock().unwrap().keep_request(&node.store.site, &req, now_ms());
+        }
+        // An admin turned our request down. Only a request that we sent, from an admin, counts.
+        Some(Wire::JoinDecline { site, request_id, admin, sig }) => {
+            ops::on_decline(node, &mut queue.lock().unwrap(), &site, &request_id, &admin, &sig);
+        }
+        // The fetchers read the file of an announce and show the newer name.
+        Some(Wire::ProfileAnnounce(a)) => {
+            node.on_announce(a);
+        }
+        // The same with the file inside: an admin can approve without a download from the author.
+        Some(Wire::ProfileBlob { announce, file }) => {
+            node.on_profile_blob(announce, file);
+        }
+        // A peer asks for the announces that it lacks: the answer is one `ProfileAnnounce` each.
+        Some(w @ Wire::AnnounceReq(_)) => {
+            outbox.extend(node.on_announce_req(&w, now() / 60).iter().map(Wire::encode));
+        }
+        // A site file over Delivery, for a node whose Storage cannot reach the one that holds it.
+        Some(w @ (Wire::BlobReq { .. } | Wire::BlobChunk { .. })) => {
+            outbox.extend(node.on_blob(&w, now() / 60).iter().map(Wire::encode));
+        }
+        // A 1:1 meeting message for us, or a free/busy summary. A change of our busy ranges gives a new summary.
+        Some(Wire::Meet(sealed)) => {
+            let (site, members) = (node.store.site, node.approved_keys());
+            outbox.extend(meets.for_site(dir, &site).on_meet(&node.key, &site, &sealed, &members, now_ms()));
+        }
+        Some(Wire::Busy(b)) => {
+            let (site, members) = (node.store.site, node.approved_keys());
+            meets.for_site(dir, &site).on_busy(&site, &b, &members);
+        }
+        // A member's chat address. The core sends what waits for them at its next background step.
+        Some(Wire::ChatAddr(m)) => {
+            let (site, members) = (node.store.site, node.approved_keys());
+            chats.for_site(dir, &site).on_addr(&site, &m, &members);
+        }
+        // Only recorded: `site_info.chain.pending_peers` shows it for a while.
+        Some(Wire::ChainPending { tx, kind }) => {
+            peers.retain(|(t, _, at)| *t != tx && at.elapsed() < PEER_PENDING_FOR);
+            peers.push((tx, kind, Instant::now()));
+            if peers.len() > 32 {
+                peers.remove(0);
+            }
         }
         None => {} // junk on the topic
     }
@@ -424,6 +721,11 @@ fn send_queued(site: &str) -> Result<(), String> {
             node: Some(node),
             outbox,
             last_heads,
+            meets,
+            chats,
+            last_meet,
+            last_announce_req,
+            dir,
             ..
         }) = g.as_mut()
         else {
@@ -432,6 +734,15 @@ fn send_queued(site: &str) -> Result<(), String> {
         if last_heads.is_none_or(|t| t.elapsed() >= HEADS_EVERY) {
             *last_heads = Some(Instant::now());
             outbox.push(heads_msg(&node.store).encode());
+        }
+        if last_announce_req.is_none_or(|t| t.elapsed() >= ANNOUNCE_REQ_EVERY) {
+            *last_announce_req = Some(Instant::now());
+            outbox.extend(node.announce_req().map(|w| w.encode()));
+        }
+        if last_meet.is_none_or(|t| t.elapsed() >= MEET_EVERY) {
+            *last_meet = Some(Instant::now());
+            outbox.extend(meets.for_site(dir, &node.store.site).resend(&node.key, &node.store.site, now_ms()));
+            outbox.extend(chats.for_site(dir, &node.store.site).resend(&node.key, &node.store.site));
         }
         std::mem::take(outbox)
     };
@@ -458,12 +769,14 @@ fn send_queued(site: &str) -> Result<(), String> {
 /// One Delivery step: bring the node up, open our site's channel, then send. The UI polls
 /// my_identity every 2 s, so this runs often.
 fn flush() {
+    chain_tick();
+    write_tick();
+    chat::tick();
     let (link, ids) = {
         let mut g = SHARED.lock().unwrap();
         let Some(sh) = g.as_mut() else {
             return;
         };
-        sh.auto_seal(); // the poll is also the clock for notice deadlines
         sh.save_due(false); // the poll is the clock for debounced saves
         if sh.retry_at.is_some_and(|t| Instant::now() < t) {
             return; // Delivery just failed: don't stall this call on it again (the outbox waits)
@@ -490,10 +803,20 @@ fn flush() {
 }
 
 fn read<T>(f: impl FnOnce(&Node) -> T) -> Result<T, String> {
-    let g = SHARED.lock().unwrap();
-    let sh = g.as_ref().ok_or("module not ready")?;
-    let node = sh.node.as_ref().ok_or(NO_SITE)?;
+    let mut g = SHARED.lock().unwrap();
+    let sh = g.as_mut().ok_or("module not ready")?;
+    let node = sh.node.as_mut().ok_or(NO_SITE)?;
+    node.apply_fetched(); // what Storage delivered since the last read
     Ok(f(node))
+}
+
+fn read_with_queue<T>(f: impl FnOnce(&Node, &Queue) -> T) -> Result<T, String> {
+    let mut g = SHARED.lock().unwrap();
+    let sh = g.as_mut().ok_or("module not ready")?;
+    let node = sh.node.as_mut().ok_or(NO_SITE)?;
+    node.apply_fetched();
+    let q = sh.queue.lock().unwrap();
+    Ok(f(node, &q))
 }
 
 /// Change our node, then save it. `f` may queue wire messages on the outbox.
@@ -503,6 +826,7 @@ fn write<T>(
     let mut g = SHARED.lock().unwrap();
     let sh = g.as_mut().ok_or("module not ready")?;
     let node = sh.node.as_mut().ok_or(NO_SITE)?;
+    node.apply_fetched();
     let r = f(node, &mut sh.outbox)?;
     sh.persist(); // our own events are never debounced
     Ok(r)
@@ -541,15 +865,16 @@ fn start_site(make: impl FnOnce(SigningKey, &Path) -> Result<Node, String>) -> S
             Ok(k) => k,
             Err(e) => return err(e),
         };
-        let node = match make(key, &sh.dir) {
+        let mut node = match make(key, &sh.dir) {
             Ok(n) => n,
             Err(e) => return err(e),
         };
+        wire_chain(&mut node, &sh.dir);
         if let Err(e) = persist::save(&node, &sh.dir) {
             return err(e);
         }
         let site = hex::encode(node.store.site);
-        // send what we just signed (genesis, or the joiner's announce) straight away
+        // send what we just signed straight away
         sh.outbox.extend(
             node.store
                 .events
@@ -561,6 +886,105 @@ fn start_site(make: impl FnOnce(SigningKey, &Path) -> Result<Node, String>) -> S
     };
     flush();
     site
+}
+
+/// Run `f` on the node and the write queue. A method that queues a write goes through here: it adds
+/// an entry and returns, it never waits for the chain, Storage or the wallet.
+fn queued<T>(f: impl FnOnce(&Node, &mut Queue, &mut Vec<Vec<u8>>) -> Result<T, String>) -> Result<T, String> {
+    let mut g = SHARED.lock().unwrap();
+    let sh = g.as_mut().ok_or("module not ready")?;
+    let node = sh.node.as_mut().ok_or(NO_SITE)?;
+    node.apply_fetched();
+    let mut q = sh.queue.lock().unwrap();
+    f(node, &mut q, &mut sh.outbox)
+}
+
+/// Run `f` on the node and the meetings of its site. A method that sends puts the wire messages on the
+/// outbox. It never waits for Delivery or Storage.
+fn meet<T>(f: impl FnOnce(&Node, &mut Meetings, &mut Vec<Vec<u8>>) -> Result<T, String>) -> Result<T, String> {
+    meet_q(|node, m, _, outbox| f(node, m, outbox))
+}
+
+/// `meet` with the write queue too, for the backup that ends in a chain write.
+fn meet_q<T>(f: impl FnOnce(&Node, &mut Meetings, &mut Queue, &mut Vec<Vec<u8>>) -> Result<T, String>) -> Result<T, String> {
+    let mut g = SHARED.lock().unwrap();
+    let sh = g.as_mut().ok_or("module not ready")?;
+    let node = sh.node.as_mut().ok_or(NO_SITE)?;
+    node.apply_fetched();
+    let mut q = sh.queue.lock().unwrap();
+    f(node, sh.meets.for_site(&sh.dir, &node.store.site), &mut q, &mut sh.outbox)
+}
+
+/// Run `f` on the node and the chat book of its site. `chat.rs` calls the chat module between two of these, never inside one.
+fn chats<T>(f: impl FnOnce(&Node, &mut ChatBook, &mut Vec<Vec<u8>>) -> Result<T, String>) -> Result<T, String> {
+    let mut g = SHARED.lock().unwrap();
+    let sh = g.as_mut().ok_or("module not ready")?;
+    let node = sh.node.as_mut().ok_or(NO_SITE)?;
+    node.apply_fetched();
+    f(node, sh.chats.for_site(&sh.dir, &node.store.site), &mut sh.outbox)
+}
+
+/// `meet` for a method that sends: the reply is `ok`, or what `reply` makes of the result.
+fn meet_send<T>(f: impl FnOnce(&Node, &mut Meetings) -> Result<(T, Vec<Vec<u8>>), String>, reply: impl FnOnce(T) -> String) -> String {
+    let r = meet(|node, m, outbox| {
+        let (t, out) = f(node, m)?;
+        outbox.extend(out);
+        Ok(t)
+    });
+    flush();
+    r.map(reply).unwrap_or_else(err)
+}
+
+/// A Storage job of the meetings on a thread of its own (the UI gives a call 20 s). `finish` runs on the
+/// result and keeps it in the meetings. Only one job runs at a time.
+fn meet_job<R: Send + 'static, W: FnOnce(&'static storage::LogosStore) -> R + Send + 'static>(
+    label: &'static str,
+    start: impl FnOnce(&Node, &Meetings) -> Result<W, String>,
+    finish: impl FnOnce(&Node, &mut Meetings, &mut Queue, R) + Send + 'static,
+) -> String {
+    let r = meet(|node, m, _| {
+        if m.job.is_some() {
+            return Err("A backup or a restore is running.".to_string());
+        }
+        let work = start(node, m)?;
+        (m.job, m.job_error) = (Some(label), None);
+        Ok((m.dir().to_path_buf(), work))
+    });
+    r.map(|(dir, work)| {
+        std::thread::spawn(move || {
+            let result = work(store(dir));
+            let _ = meet_q(|node, m, q, _| {
+                finish(node, m, q, result);
+                Ok(())
+            });
+        });
+        "ok".to_string()
+    })
+    .unwrap_or_else(err)
+}
+
+fn key_arg(hex: &str) -> Result<Key, String> {
+    parse_id(hex).ok_or_else(|| "That is not a 64-character hex key.".to_string())
+}
+
+/// Keys in hex, separated by commas.
+fn keys_arg(csv: &str) -> Result<Vec<Key>, String> {
+    csv.split(',').map(str::trim).filter(|k| !k.is_empty()).map(key_arg).collect()
+}
+
+/// A time in UTC milliseconds. The UI sends it as a JS number: a value past 32 bits reaches the core as
+/// a float (`1781234567890.0`), which an `i64` parameter refuses, so the methods take `f64`.
+fn ms_arg(v: f64) -> Result<u64, String> {
+    if v.is_finite() && v >= 0.0 {
+        Ok(v as u64)
+    } else {
+        Err("That time is not valid.".to_string())
+    }
+}
+
+/// The id of a meeting, or one of its answers: accept, decline or cancel.
+fn meet_answer(id_hex: &str, act: Act) -> String {
+    meet_send(|node, m| Ok(((), m.answer(&node.key, &node.store.site, &key_arg(id_hex)?, act, now_ms())?)), |()| "ok".into())
 }
 
 #[derive(Default)]
@@ -578,18 +1002,64 @@ impl logos_rust_sdk::AboutToUnload for Pukaar {
 
 impl PukaarCoreModule for Pukaar {
     fn site_create(&mut self, genesis_json: String) -> String {
-        match genesis_from_json(&genesis_json) {
-            Ok(g) => start_site(|key, _| Node::create_site(key, g, now())),
-            Err(e) => err(e),
+        let g = match writes::genesis(&genesis_json) {
+            Ok(g) => g,
+            Err(e) => return err(e),
+        };
+        let dir = match SHARED.lock().unwrap().as_ref() {
+            Some(sh) => sh.dir.clone(),
+            None => return err("module not ready"),
+        };
+        let made = persist::load_or_create_key(&dir).map_err(|e| e.to_string()).and_then(|key| ops::new_site(&key, &g));
+        let ns = match made {
+            Ok(ns) => ns,
+            Err(e) => return err(e),
+        };
+        let site_id = ns.site_id;
+        let started = start_site(|key, _| Ok(Node::join(key, site_id)));
+        if started.starts_with("error:") {
+            return started;
         }
+        // The files go to Storage and the site to the chain in the background (the worker), then the
+        // first profile of the admin.
+        let r = queued(|node, q, _| Ok(ops::create_site(node, q, ns, &g.admin_name, now_ms())));
+        flush();
+        r.map(|id| serde_json::json!({ "ok": true, "queued": id, "site": hex::encode(site_id) }).to_string()).unwrap_or_else(err)
     }
 
     fn site_join(&mut self, site_hex: String) -> String {
-        match parse_id(site_hex.trim()) {
-            // announce with an empty profile, so a pseudonymous joiner still appears as pending
-            Some(site) => start_site(|key, dir| Ok(persist::join_site(dir, key, site, now()))),
-            None => err("site id must be 64 hex characters"),
+        let Some(site) = parse_id(site_hex.trim()) else { return err("bad site id") };
+        let started = start_site(|key, dir| Ok(persist::join_site(dir, key, site, now())));
+        if started.starts_with("error:") {
+            return started;
         }
+        // Signed with both keys, sent, and kept: `my_identity.pending` is "requested".
+        let r = queued(|node, q, outbox| {
+            let (req, id) = ops::join(node, q, now_ms());
+            outbox.push(Wire::JoinReq(req).encode());
+            Ok(id)
+        });
+        flush();
+        r.map(|id| serde_json::json!({ "ok": true, "queued": id, "site": hex::encode(site) }).to_string()).unwrap_or_else(err)
+    }
+
+    fn reject_join(&mut self, subject_hex: String) -> String {
+        let r = queued(|node, q, outbox| {
+            outbox.push(ops::reject(node, q, &subject_hex, now_ms())?);
+            Ok(())
+        });
+        flush();
+        r.map(|()| "ok".to_string()).unwrap_or_else(err)
+    }
+
+    fn join_again(&mut self) -> String {
+        let r = queued(|node, q, outbox| {
+            let (req, id) = ops::join_again(node, q, now_ms())?;
+            outbox.push(Wire::JoinReq(req).encode());
+            Ok(id)
+        });
+        flush();
+        id_reply(r)
     }
 
     fn leave_site(&mut self) -> String {
@@ -598,6 +1068,12 @@ impl PukaarCoreModule for Pukaar {
             let sh = g.as_mut().ok_or("module not ready")?;
             let site = sh.node.as_ref().ok_or(NO_SITE)?.store.site;
             persist::leave(&sh.dir, &site).map_err(|e| e.to_string())?;
+            {
+                // Writes of this site cannot run without its node: drop them, and the requests.
+                let mut q = sh.queue.lock().unwrap();
+                q.drop_site(&site);
+                q.save();
+            }
             sh.node = None;
             sh.outbox.clear();
             sh.last_heads = None;
@@ -621,10 +1097,30 @@ impl PukaarCoreModule for Pukaar {
 
     fn my_identity(&mut self) -> String {
         flush();
-        let mut v = read(|n| n.identity_json_at(now()))
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_else(|| serde_json::json!({ "site": null }));
+        let mut v = read_with_queue(|n, q| {
+            let mut v: serde_json::Value = serde_json::from_str(&n.identity_json()).ok()?;
+            // A join request of ours is out ("requested", or "expired" after its day), or an admin turned it
+            // down ("declined"). The user can send it again in the last two cases.
+            if v["role"].is_null() {
+                if let Some((pending, until)) = ops::my_pending(n, q, now_ms()) {
+                    v["pending"] = pending.into();
+                    if let Some(u) = until {
+                        v["request_until"] = (u / 1000).into();
+                        v["request_left"] = ops::left_text(u, now_ms()).into();
+                    }
+                }
+            }
+            // The one LEZ account of the user (base58): it pays the fee of every write, so the user funds it.
+            v["account"] = pukaar_logic::chain::b58(&n.account).into();
+            Some(v)
+        })
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| serde_json::json!({ "site": null }));
+        // No site yet: the account still shows, so the user can fund it before the first write.
+        if v["account"].is_null() {
+            v["account"] = SHARED.lock().unwrap().as_ref().and_then(|sh| persist::account_b58(&sh.dir).ok()).into();
+        }
         v["delivery"] = delivery_status().into();
         v.to_string()
     }
@@ -639,7 +1135,9 @@ impl PukaarCoreModule for Pukaar {
         let r = (|| {
             let mut g = SHARED.lock().unwrap();
             let sh = g.as_mut().ok_or("module not ready")?;
-            sh.node = Some(identity::import_into(&sh.dir, &blob, &password, now())?);
+            let mut node = identity::import_into(&sh.dir, &blob, &password, now())?;
+            wire_chain(&mut node, &sh.dir);
+            sh.node = Some(node);
             Ok::<_, String>("ok".to_string())
         })();
         flush(); // opens the channel; our heads go out and peers re-send our history
@@ -652,90 +1150,89 @@ impl PukaarCoreModule for Pukaar {
             .unwrap_or_else(err)
     }
 
-    fn set_profile(&mut self, display_name: String) -> String {
-        let name = Some(display_name.trim().to_string()).filter(|n| !n.is_empty());
-        publish(Body::Profile { display_name: name })
+    fn set_profile(&mut self, display_name: String, bio: Option<String>, experience: Option<String>, socials: Option<String>, private: Option<String>) -> String {
+        // Members read the new profile as soon as it is in Storage and announced. The chain pointer
+        // follows at the next admin batch.
+        let r = queued(|node, q, _| {
+            let socials = profile::socials_from_json(socials.as_deref().unwrap_or(""))?;
+            let about = profile::About { bio: bio.unwrap_or_default(), experience: experience.unwrap_or_default(), socials, private: private.as_deref() == Some("1") };
+            ops::set_profile(node, q, &display_name, &about, now_ms())
+        });
+        flush();
+        id_reply(r)
+    }
+
+    fn set_staff_name(&mut self, subject_hex: String, name: String) -> String {
+        let r = queued(|node, q, _| ops::set_staff_name(node, q, &subject_hex, &name, now_ms()));
+        flush();
+        id_reply(r)
     }
 
     fn grant_role(&mut self, subject_hex: String, role: String, name: String) -> String {
-        let role = match role.as_str() {
-            "resident" => Role::Resident,
-            "steward" => Role::Steward,
-            "admin" => Role::Admin,
-            other => return err(format!("unknown role {other}")),
-        };
-        match parse_id(subject_hex.trim()) {
-            Some(subject) => {
-                let name = Some(name.trim().to_string()).filter(|n| !n.is_empty());
-                publish(Body::RoleGrant {
-                    subject,
-                    role,
-                    name,
-                })
-            }
-            None => err("bad key"),
-        }
+        id_reply(queued(|node, q, _| ops::grant(node, q, &subject_hex, &role, &name, now_ms())))
     }
 
     fn revoke_role(&mut self, subject_hex: String, reason: String) -> String {
-        publish_with(|n| n.revoke_role(&subject_hex, &reason, now()))
+        id_reply(queued(|node, q, _| ops::revoke(node, q, &subject_hex, &reason, now_ms())))
     }
 
     fn add_super_admin(&mut self, subject_hex: String) -> String {
-        publish_with(|n| n.add_super_admin(&subject_hex, now()))
+        id_reply(queued(|node, q, _| ops::super_admin(node, q, &subject_hex, SuperKind::Add, now_ms())))
     }
 
     fn remove_super_admin(&mut self, subject_hex: String) -> String {
-        publish_with(|n| n.remove_super_admin(&subject_hex, now()))
+        id_reply(queued(|node, q, _| ops::super_admin(node, q, &subject_hex, SuperKind::Remove, now_ms())))
     }
 
     fn transfer_super_admin(&mut self, to_hex: String) -> String {
-        publish_with(|n| n.transfer_super_admin(&to_hex, now()))
+        id_reply(queued(|node, q, _| ops::super_admin(node, q, &to_hex, SuperKind::Transfer, now_ms())))
     }
 
-    fn admin_notice(
-        &mut self,
-        subject_hex: String,
-        outcome: String,
-        deadline: i64,
-        reason: String,
-    ) -> String {
-        let Ok(deadline) = u64::try_from(deadline) else {
-            return err("bad deadline");
-        };
-        publish_with(|n| n.admin_notice(&subject_hex, &outcome, deadline, &reason, now()))
+    fn admin_notice(&mut self, _subject_hex: String, _outcome: String, _deadline: i64, _reason: String) -> String {
+        later()
     }
 
-    fn cancel_notice(&mut self, subject_hex: String) -> String {
-        publish_with(|n| n.cancel_notice(&subject_hex, now()))
+    fn cancel_notice(&mut self, _subject_hex: String) -> String {
+        later()
     }
 
-    fn end_notice_now(&mut self, subject_hex: String) -> String {
-        publish_with(|n| n.end_notice_now(&subject_hex, now()))
+    fn end_notice_now(&mut self, _subject_hex: String) -> String {
+        later()
     }
 
     fn add_location(&mut self, code: String, label: String, group: String) -> String {
-        publish_with(|n| n.add_location(&code, &label, &group, now()))
+        place(Place::Add { code: &code, label: &label, group: &group })
     }
 
     fn retire_location(&mut self, code: String, reason: String) -> String {
-        publish_with(|n| n.retire_location(&code, &reason, now()))
+        place(Place::Retire { code: &code, reason: &reason })
     }
 
     fn restore_location(&mut self, code: String, reason: String) -> String {
-        publish_with(|n| n.restore_location(&code, &reason, now()))
+        place(Place::Restore { code: &code, reason: &reason })
     }
 
     fn edit_location(&mut self, code: String, label: String, group: String) -> String {
-        publish_with(|n| n.edit_location(&code, &label, &group, now()))
+        place(Place::Edit { code: &code, label: &label, group: &group })
     }
 
     fn remove_location(&mut self, code: String, reason: String) -> String {
-        publish_with(|n| n.remove_location(&code, &reason, now()))
+        place(Place::Remove { code: &code, reason: &reason })
     }
 
     fn undo_remove_location(&mut self, code: String, reason: String) -> String {
-        publish_with(|n| n.undo_remove_location(&code, &reason, now()))
+        place(Place::Restore { code: &code, reason: &reason })
+    }
+
+    fn chain_status(&mut self) -> String {
+        flush();
+        queued(|node, q, _| Ok(ops::status(node, q, now_ms()).to_string())).unwrap_or_else(err)
+    }
+
+    fn send_batch(&mut self) -> String {
+        let r = queued(|node, q, _| ops::send_batch(node, q, now_ms()));
+        flush();
+        r.map(|ids| queued_reply(&ids)).unwrap_or_else(err)
     }
 
     fn report(
@@ -785,23 +1282,185 @@ impl PukaarCoreModule for Pukaar {
     }
 
     fn site_info(&mut self) -> String {
-        read(|n| n.site_info_json(now())).unwrap_or_else(err)
+        let r = (|| {
+            let mut g = SHARED.lock().unwrap();
+            let sh = g.as_mut().ok_or("module not ready")?;
+            let node = sh.node.as_mut().ok_or(NO_SITE)?;
+            node.apply_fetched();
+            let mut v: serde_json::Value = serde_json::from_str(&node.site_info_json()).map_err(|e| e.to_string())?;
+            let (ready, error) = storage::status();
+            storage::merge_status(&mut v["storage"], ready, error);
+            let q = sh.queue.lock().unwrap();
+            v["pending"] = ops::pending_rows(node, &q, now_ms()).into();
+            // The anchor that this device saw land: the record of the chain has no time, this has.
+            if let Some(a) = ops::last_anchor(node, &q, v["last_anchor"]["ts"].as_u64().unwrap_or(0)) {
+                v["last_anchor"] = a;
+            }
+            let peers = sh.peers.iter().filter(|(_, _, at)| at.elapsed() < PEER_PENDING_FOR);
+            v["chain"]["pending_peers"] = peers.map(|(t, k, _)| serde_json::json!({ "tx": hex::encode(&t[..5]), "kind": format!("{k:?}") })).collect::<Vec<_>>().into();
+            Ok::<_, String>(v.to_string())
+        })();
+        r.unwrap_or_else(err)
+    }
+
+    fn member_profile(&mut self, key_hex: String) -> String {
+        read(|n| n.member_profile_json(&key_hex)).and_then(|r| r).unwrap_or_else(err)
     }
 
     fn checkpoint_now(&mut self) -> String {
         read(|n| n.checkpoint_json()).unwrap_or_else(err)
     }
 
+    fn anchor_now(&mut self) -> String {
+        let Some(program) = program_id() else { return err("PUKAAR_PROGRAM_ID is not a base58 account id") };
+        // The chain read runs between the two locks: a slow node must not block the other calls.
+        let planned = read_with_queue(|n, q| ops::anchor_plan(n, q)).and_then(|p| p);
+        let r = planned.and_then(|plan| {
+            ops::anchor_read(&HttpRpc::new(&env_or("PUKAAR_LEZ_RPC", LEZ_RPC)), &program, &plan)?;
+            queued(|_, q, _| ops::anchor_push(q, plan, now_ms()))
+        });
+        flush();
+        id_reply(r)
+    }
+
     fn record_anchor(&mut self, heads_json: String, lez_ref: String) -> String {
         publish_with(|n| n.record_anchor(&heads_json, &lez_ref, now()))
     }
 
+    fn meet_list(&mut self) -> String {
+        meet_q(|node, m, q, _| {
+            let mut v = m.list_json(&node.me(), &node.names, now_ms());
+            // The pointer on the chain: the state of the newest write, so the page can say that the backup is findable.
+            v["backup"]["pointer"] = q.backup_write(&node.store.site).map_or(serde_json::Value::Null, |e| serde_json::json!({ "state": e.state_name(), "reason": e.reason }));
+            Ok(v.to_string())
+        })
+        .unwrap_or_else(err)
+    }
+
+    fn meet_slots(&mut self, other_hex: String, from_ms: f64, len_min: i64) -> String {
+        let r = (|| {
+            let (other, from, len) = (key_arg(&other_hex)?, ms_arg(from_ms)?, len_min.clamp(5, 24 * 60) as u64 * 60_000);
+            meet(|node, m, _| Ok(m.slots_json(&node.me(), &other, from, len, &node.names, now_ms()).to_string()))
+        })();
+        r.unwrap_or_else(err)
+    }
+
+    fn meet_check(&mut self, other_hex: String, start_ms: f64, end_ms: f64) -> String {
+        let r = (|| {
+            let (other, range) = (key_arg(&other_hex)?, (ms_arg(start_ms)?, ms_arg(end_ms)?));
+            meet(|node, m, _| Ok(m.clashes_json(&node.me(), &m.clashes(&node.me(), Some(&other), range, None), &node.names).to_string()))
+        })();
+        r.unwrap_or_else(err)
+    }
+
+    fn meet_propose(&mut self, other_hex: String, start_ms: f64, end_ms: f64) -> String {
+        meet_send(
+            |node, m| {
+                let to = key_arg(&other_hex)?;
+                let (me, members) = (node.me(), node.approved_keys());
+                if !members.contains(&me) || !members.contains(&to) || to == me {
+                    return Err("You can meet another member of this site once you are approved.".into());
+                }
+                m.propose(&node.key, &node.store.site, to, (ms_arg(start_ms)?, ms_arg(end_ms)?), now_ms())
+            },
+            |id| serde_json::json!({ "ok": true, "id": hex::encode(id) }).to_string(),
+        )
+    }
+
+    fn meet_accept(&mut self, id_hex: String) -> String {
+        meet_answer(&id_hex, Act::Accept)
+    }
+
+    fn meet_decline(&mut self, id_hex: String) -> String {
+        meet_answer(&id_hex, Act::Decline)
+    }
+
+    fn meet_cancel(&mut self, id_hex: String) -> String {
+        meet_answer(&id_hex, Act::Cancel)
+    }
+
+    fn meet_prefs(&mut self, share: i64, lead_min: i64) -> String {
+        meet_send(|node, m| Ok(((), m.set_prefs(&node.key, share != 0, u64::try_from(lead_min).unwrap_or(0), now_ms()))), |()| "ok".into())
+    }
+
+    fn meet_backup(&mut self) -> String {
+        meet_job(
+            "backing up",
+            |node, m| {
+                let bytes = m.backup_bytes(&node.key);
+                Ok(move |s: &'static storage::LogosStore| s.upload(&bytes).map(|cid| (cid, sha256(&bytes))))
+            },
+            |node, m, q, r| {
+                // The file is in Storage: its CID goes into our pointer record on the chain (a fee, once a backup).
+                let pointer = r.as_ref().ok().map(|(cid, sha)| ops::backup_push(node, q, cid, *sha, now_ms()));
+                m.backup_done(r.map(|(cid, _)| cid), now_ms());
+                if let Some(Err(why)) = pointer {
+                    m.job_error = Some(format!("The backup is in Storage, but its pointer was not queued for the chain: {why}"));
+                }
+            },
+        )
+    }
+
+    fn chat_start(&mut self) -> String {
+        chat::ensure().map_or_else(err, |v| v.to_string())
+    }
+
+    fn chat_threads(&mut self) -> String {
+        chat::threads().map_or_else(err, |v| v.to_string())
+    }
+
+    fn chat_mark_read(&mut self, key_hex: String) -> String {
+        chat::mark_read(&key_hex).map_or_else(err, |v| v.to_string())
+    }
+
+    fn chat_messages(&mut self, key_hex: String) -> String {
+        chat::messages(&key_hex).map_or_else(err, |v| v.to_string())
+    }
+
+    fn chat_send(&mut self, key_hex: String, text: String) -> String {
+        chat::send(&key_hex, &text).map_or_else(err, |v| v.to_string())
+    }
+
+    fn chat_group_create(&mut self, name: String, members_hex: String) -> String {
+        keys_arg(&members_hex).and_then(|who| chat::group_create(&name, &who)).map_or_else(err, |v| v.to_string())
+    }
+
+    fn chat_group_add(&mut self, convo: String, members_hex: String) -> String {
+        keys_arg(&members_hex).and_then(|who| chat::group_add(&convo, &who)).map_or_else(err, |v| v.to_string())
+    }
+
+    fn chat_group_info(&mut self, convo: String) -> String {
+        chat::group_info(&convo).map_or_else(err, |v| v.to_string())
+    }
+
+    fn meet_restore(&mut self, cid: String) -> String {
+        meet_job(
+            "restoring",
+            |node, _| {
+                let program = program_id().ok_or("PUKAAR_PROGRAM_ID is not a base58 account id")?;
+                let (site, me) = (node.store.site, node.account);
+                // The chain gives the CID; the typed one is read only when the chain has none. The chain read is slow: it runs on the thread.
+                Ok(move |s: &'static storage::LogosStore| {
+                    let src = ops::restore_source(&HttpRpc::new(&env_or("PUKAAR_LEZ_RPC", LEZ_RPC)), &program, &site, &me, &cid)?;
+                    s.download(&src.cid).and_then(|b| src.verify(b))
+                })
+            },
+            |node, m, _, r| m.restore_done(&node.key, r),
+        )
+    }
+
     fn on_context_ready(&mut self, ctx: &RustModuleContext) {
         let dir = PathBuf::from(&ctx.instance_persistence_path);
-        let node = persist::load(&dir).unwrap_or_else(|e| {
+        let dir_for_queue = dir.clone();
+        let mut node = persist::load(&dir).unwrap_or_else(|e| {
             eprintln!("pukaar: could not load replica: {e}");
             None
         });
+        let queue = Queue::shared(&dir_for_queue);
+        if let Some(n) = node.as_mut() {
+            wire_chain(n, &dir);
+            ops::remember_known(n, &queue.lock().unwrap());
+        }
         // No Delivery calls here (see Link): flush() brings the node up on the first poll.
         *SHARED.lock().unwrap() = Some(Shared {
             dir,
@@ -815,6 +1474,12 @@ impl PukaarCoreModule for Pukaar {
             retry_at: None,
             dirty: false,
             last_save: Instant::now(),
+            queue,
+            peers: vec![],
+            meets: Meetings::default(),
+            last_meet: None,
+            last_announce_req: None,
+            chats: ChatBook::default(),
         });
     }
 }
@@ -822,4 +1487,15 @@ impl PukaarCoreModule for Pukaar {
 #[no_mangle]
 pub extern "Rust" fn logos_module_install() {
     logos_install!(Pukaar);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ms_arg;
+
+    #[test]
+    fn ms_arg_takes_a_whole_float_past_32_bits() {
+        assert_eq!(ms_arg(1_781_234_567_890.0), Ok(1_781_234_567_890));
+        assert!(ms_arg(-1.0).is_err() && ms_arg(f64::NAN).is_err());
+    }
 }

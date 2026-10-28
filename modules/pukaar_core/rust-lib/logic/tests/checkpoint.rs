@@ -14,30 +14,26 @@ fn odd_promotion_differs_from_duplication() {
 
 #[test]
 fn checkpoint_signs_and_reproduces() {
-    let admin = new_key();
-    let g = genesis_event(&admin);
-    let mut full = Store::new(g.id);
-    full.insert(g.clone());
-    for e in chain(&new_key(), g.id, 3) {
+    let mut full = Store::new(SITE);
+    for e in chain(&new_key(), SITE, 3) {
         full.insert(e);
     }
     let me = new_key();
     let cp = checkpoint_now(&full, &me);
-    assert_eq!(cp.n_events, 4);
+    assert_eq!(cp.n_events, 3);
     assert!(verify_anchor(
-        &g.id,
+        &SITE,
         &cp.heads_root,
         cp.n_events,
         &cp.signer,
         &cp.sig
     ));
     assert!(
-        !verify_anchor(&g.id, &[9; 32], cp.n_events, &cp.signer, &cp.sig),
+        !verify_anchor(&SITE, &[9; 32], cp.n_events, &cp.signer, &cp.sig),
         "wrong root"
     );
     assert_eq!(root_for(&full, &cp.heads), Some(cp.heads_root));
-    let mut partial = Store::new(g.id);
-    partial.insert(g);
+    let partial = Store::new(SITE);
     assert_eq!(
         root_for(&partial, &cp.heads),
         None,

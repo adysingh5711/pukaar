@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "name": "pukaar",
+  "displayName": "Pukaar",
+  "description": "Civic fault reports that can't be quietly closed. Pukaar for Logos Basecamp.",
+  "homepage": "https://github.com/adysingh5711/pukaar",
+  "indexUrl": "https://raw.githubusercontent.com/adysingh5711/pukaar/main/public/install/index.json",
+  "trustedSigners": [
+    {
+      "did": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IlpfZkxKcnVWR3UyYnBiR0VNMlhMTElmY2FzdTFycVkycHJZM1Z0cklRR28ifQ",
+      "name": "Aditya Singh"
+    }
+  ]
+}

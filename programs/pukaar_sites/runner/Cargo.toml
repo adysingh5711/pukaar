@@ -1,0 +1,30 @@
+# Host runner: its own workspace and lockfile (see ../Cargo.toml).
+[workspace]
+resolver = "3"
+
+# Copied from the LEZ v0.3.1 workspace: patches of a git dependency are not inherited.
+[patch.crates-io]
+keccak = { git = "https://github.com/logos-blockchain/sponges", rev = "3a56e99771beedf04946eab21a4a62adc2951377" }
+
+[package]
+name = "pukaar_sites_runner"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "runner"
+path = "src/main.rs"
+
+[dependencies]
+pukaar_sites_rules = { path = "../rules", features = ["probe"] }
+wallet = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.3.1" }
+lee = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.3.1" }
+clock_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.3.1" }
+lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.3.1", features = ["host"] }
+anyhow = "1"
+borsh = "1"
+hex = "0.4"
+hkdf = "0.12"
+sha2 = "0.10"
+ed25519-dalek = { version = "2", default-features = false }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

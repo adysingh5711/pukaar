@@ -1,4 +1,4 @@
-//! Checkpoints: a Merkle root over every author's head, anchored on LEZ by `spel anchor`.
+//! Checkpoints: a Merkle root over every author's head, anchored on LEZ by the `anchor` write of the queue.
 //! RFC 6962-style domain separation; an odd node is promoted, not duplicated
 //! (duplicating allows two leaf sets with the same root).
 

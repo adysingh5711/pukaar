@@ -7,12 +7,13 @@
   "category": "civic",
   "description": "Civic fault reports that can't be quietly closed",
   "main": "pukaar_core_plugin",
-  "dependencies": ["delivery_module"],
+  "dependencies": ["delivery_module", "storage_module", "chat_module"],
   "codegen": {
     "rust": { "crate": "rust-lib", "trait": "PukaarCoreModule" }
   },
   "nix": {
     "packages": { "build": [], "runtime": [] },
+    "rust": { "toolchain": "1.98.1", "packages": { "build": ["clang", "pkg-config", "rustPlatform.bindgenHook"], "runtime": [] } },
     "external_libraries": [],
     "cmake": { "find_packages": [], "extra_sources": [], "extra_include_dirs": [], "extra_link_libraries": [] }
   }

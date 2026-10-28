@@ -20,4 +20,12 @@ endif()
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/metadata.json" METADATA_JSON)
 string(JSON MODULE_NAME GET ${METADATA_JSON} name)
 
-logos_module(NAME ${MODULE_NAME})
+# The wallet crate pulls in pcsc-sys (keycard support). A Rust staticlib drops the link flag of
+# pcsc-sys, and the macOS link allows undefined symbols, so name the PCSC framework here.
+# Linux would need pcsclite instead (not built or shipped by us).
+set(PCSC_LIBS "")
+if(APPLE)
+    set(PCSC_LIBS "-Wl,-framework,PCSC")
+endif()
+
+logos_module(NAME ${MODULE_NAME} LINK_LIBRARIES ${PCSC_LIBS})
