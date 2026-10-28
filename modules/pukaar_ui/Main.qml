@@ -62,10 +62,13 @@ Item {
     property string reminder: ""         // the pop-up text; "" = none
     property var reminded: ({})          // meeting ids that were reminded since the app opened
     function startMeet(member) { meetWith = member; openPage("meet") }
-    // ---- Messages: private 1:1 chat (chat_threads, chat_messages, chat_send). The core keeps one thread per person ----
+    // ---- Messages: private chat (chat_threads, chat_messages, chat_send). One thread per person, and one per group (a row with `group: true`, its `key` the group's id) ----
     property var chat: ({ threads: [], known: [], chat: ({}) })   // chat_threads
     property string chatWith: ""         // the member whose thread is open, "" = none
     property var chatMessages: []        // chat_messages of chatWith, oldest first
+    readonly property var chatThread: (chat.threads || []).filter(function (t) { return t.key === chatWith })[0] || ({})
+    readonly property bool chatGroup: chatThread.group === true      // the open thread is a group
+    property var groupInfo: ({ members: [] })   // chat_group_info of the open group
     function applyChat(c) {
         if (!c || !Array.isArray(c.threads)) return
         chat = c
@@ -74,8 +77,10 @@ Item {
             call("chat_mark_read", [chatWith], function () {})
     }
     function applyChatMessages(v) { if (v && Array.isArray(v.messages)) chatMessages = v.messages }
+    function applyGroupInfo(v) { if (v && Array.isArray(v.members)) groupInfo = v }
     function openChat(key) {
         chatWith = key; chatMessages = []; seen["chat_messages"] = ""      // the poll must apply the reply even when it equals the last one
+        groupInfo = ({ members: [] }); seen["chat_group_info"] = ""
         call("chat_messages", [key], applyChatMessages)
         poll("chat_threads", [], applyChat)      // fresh `known` and `unread` for the thread that opens
         openPage("messages")
@@ -323,6 +328,7 @@ Item {
         if (page === "messages" && approved) {
             steps.push(["chat_threads", [], applyChat])
             if (chatWith) steps.push(["chat_messages", [chatWith], applyChatMessages])
+            if (chatWith && chatGroup) steps.push(["chat_group_info", [chatWith], applyGroupInfo])
         }
         // only refresh the pane that is still open (a reply landing after Close must not reopen it)
         if (selected) {
@@ -822,6 +828,44 @@ Item {
             Icon { anchors.centerIn: parent; visible: check.checked; name: "tick"; size: 16; color: root.t.onPrimary }
         }
         contentItem: Label { text: check.text; color: root.ink(check.enabled); leftPadding: check.indicator.width + 8; verticalAlignment: Text.AlignVCenter }
+    }
+    // A search box over a list of people to tick (New group, Add members). `picked` is {key: true}; `clear()` resets both.
+    component MemberPicker: ColumnLayout {
+        id: mp
+        property var people: []
+        property var picked: ({})
+        readonly property int count: Object.keys(picked).length
+        readonly property var shown: {
+            var q = find.text.trim().toLowerCase()
+            return people.filter(function (m) { return !q || (m.name || "").toLowerCase().indexOf(q) >= 0 || m.key.indexOf(q) === 0 })
+        }
+        function clear() { find.clear(); picked = ({}) }
+        function focusSearch() { Qt.callLater(find.forceActiveFocus) }
+        function toggle(key, on) {
+            var p = Object.assign({}, picked)
+            if (on) p[key] = true; else delete p[key]
+            picked = p
+        }
+        spacing: 8
+        FramedField { id: find; Layout.fillWidth: true; placeholderText: "Search by name"; Accessible.name: "Search members" }
+        ListView {
+            Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumHeight: 96
+            clip: true
+            model: mp.shown
+            delegate: FramedCheck {
+                id: pick
+                required property var modelData
+                width: ListView.view.width
+                text: root.who(modelData.key, modelData.name)
+                onToggled: mp.toggle(modelData.key, checked)
+                Binding { target: pick; property: "checked"; value: !!mp.picked[pick.modelData.key] }
+            }
+            Label {
+                visible: parent.count === 0
+                anchors.centerIn: parent; color: root.t.muted
+                text: find.text ? "Nobody matches." : "There is nobody to add."
+            }
+        }
     }
     // The sidebar's tooltip: right of its parent, on the sidebar's tooltip tokens.
     component SideTip: ToolTip {
@@ -4258,9 +4302,10 @@ Item {
                         ActionButton { visible: memberPage.ok && !memberPage.v.own && root.approved; text: "Plan a 1:1 meeting"; onClicked: root.startMeet(memberPage.v) }
                     }
                 }
-                // Messages: private 1:1 chat with another active member. The chats on the left, the open thread and the send box on
-                // the right (one column on a narrow window). Only the two people can read a message. A message that cannot go yet
-                // (their chat address has not arrived) waits in a local queue and goes out by itself.
+                // Messages: private chat with another active member, or a group of active members. The chats on the left, the open
+                // thread and the send box on the right (one column on a narrow window). Only the people in a chat can read a message.
+                // A message that cannot go yet (their chat address has not arrived, or a member of the group has not joined) waits in
+                // a local queue and goes out by itself.
                 ColumnLayout {
                     id: chatPage
                     enabled: !root.syncing
@@ -4273,11 +4318,22 @@ Item {
                     readonly property var others: root.members.filter(function (m) { return m.key !== root.me.key })
                     // Only people with a sent, received or waiting message are listed. A new chat is empty until one exists.
                     property bool picking: false          // the New chat picker replaces the chat list
+                    property bool grouping: false         // the New group form replaces the chat list
+                    property bool showMembers: false      // the members of the open group replace its messages
+                    readonly property bool membersShown: root.chatGroup && showMembers
+                    readonly property bool readOnly: root.chatGroup && root.chatThread.history_only === true
+                    readonly property int joining: root.chatThread.pending || 0
+                    readonly property var addable: {   // active members that are not in the open group
+                        var inn = ({})
+                        ;(root.groupInfo.members || []).forEach(function (m) { inn[m.key] = true })
+                        return others.filter(function (m) { return !inn[m.key] })
+                    }
                     readonly property var picks: {
                         var q = picker.text.trim().toLowerCase()
                         return others.filter(function (m) { return !q || (m.name || "").toLowerCase().indexOf(q) >= 0 || m.key.indexOf(q) === 0 })
                     }
-                    readonly property string currentName: root.who(root.chatWith, (others.filter(function (m) { return m.key === root.chatWith })[0] || ({})).name)
+                    readonly property string currentName: root.chatGroup ? (root.chatThread.name || "Group")
+                                                          : root.who(root.chatWith, (others.filter(function (m) { return m.key === root.chatWith })[0] || ({})).name)
                     readonly property bool hasAddress: known.indexOf(root.chatWith) >= 0
                     readonly property bool twoPane: width >= 640
                     readonly property bool online: st.delivery === "online"
@@ -4290,9 +4346,25 @@ Item {
                             root.call("chat_messages", [key], root.applyChatMessages)
                         })
                     }
+                    function createGroup() {
+                        var name = groupName.text.trim()
+                        root.run("chat_group_create", [name, Object.keys(groupPick.picked).join(",")], function (r) {
+                            groupName.clear(); groupPick.clear()
+                            root.notice = "The group " + name + " is made. A member is added as soon as their chat address is known, and joins within a minute or two."
+                            root.call("chat_threads", [], function (c) { root.applyChat(c); root.openChat(r.convo) })
+                        })
+                    }
+                    function addMembers() {
+                        var convo = root.chatWith
+                        root.run("chat_group_add", [convo, Object.keys(addPick.picked).join(",")], function () {
+                            addPick.clear()
+                            root.notice = "The members are added. They join within a minute or two."
+                            root.call("chat_group_info", [convo], root.applyGroupInfo)
+                        })
+                    }
                     PageHead {
                         title: "Messages"
-                        lede: "Write privately to another active member. Only the two of you can read the messages."
+                        lede: "Write privately to another active member, or to a group of them. Only the people in a chat can read the messages."
                     }
                     Flash { when: !!chatPage.link.error; delay: 3000; err: true; lead: "Chat is not running."; text: chatPage.link.error || "" }
                     Flash { when: !!chatPage.problem; delay: 3000; err: true; lead: "The chat module did not answer."; text: chatPage.problem }
@@ -4303,13 +4375,25 @@ Item {
                         when: !!chatPage.link.starting || (!!chatPage.link.ok && chatPage.st.delivery === "initialising")
                         text: "Chat is starting. Messages that you write now are kept and sent when it is ready."
                     }
-                    Connections { target: root; function onChatWithChanged() { chatPage.picking = false; picker.clear() } }   // a chat opened from People
-                    ActionButton {
+                    Connections {   // a chat opened from People, or a group just made
+                        target: root
+                        function onChatWithChanged() { chatPage.picking = false; chatPage.grouping = false; chatPage.showMembers = false; picker.clear(); addPick.clear() }
+                    }
+                    RowLayout {
                         visible: chatPage.twoPane || root.chatWith === ""
-                        text: chatPage.picking ? "Cancel" : "New chat"
-                        iconName: chatPage.picking ? "" : "cmt"
-                        Accessible.name: chatPage.picking ? "Cancel the new chat" : "Start a new chat"
-                        onClicked: { chatPage.picking = !chatPage.picking; picker.clear() }
+                        spacing: 8
+                        ActionButton {
+                            text: chatPage.picking ? "Cancel" : "New chat"
+                            iconName: chatPage.picking ? "" : "cmt"
+                            Accessible.name: chatPage.picking ? "Cancel the new chat" : "Start a new chat"
+                            onClicked: { chatPage.picking = !chatPage.picking; chatPage.grouping = false; picker.clear() }
+                        }
+                        ActionButton {
+                            text: chatPage.grouping ? "Cancel" : "New group"
+                            iconName: chatPage.grouping ? "" : "members"
+                            Accessible.name: chatPage.grouping ? "Cancel the new group" : "Start a new group"
+                            onClicked: { chatPage.grouping = !chatPage.grouping; chatPage.picking = false; groupName.clear(); groupPick.clear() }
+                        }
                     }
                     RowLayout {
                         Layout.fillWidth: true; Layout.fillHeight: true; Layout.bottomMargin: 16
@@ -4323,31 +4407,38 @@ Item {
                                 id: chatList
                                 anchors { fill: parent; margins: 1 }
                                 clip: true
-                                visible: !chatPage.picking
+                                visible: !chatPage.picking && !chatPage.grouping
                                 model: chatPage.threads
                                 delegate: ItemDelegate {
                                     id: chatRow
                                     required property var modelData
                                     width: ListView.view.width
                                     highlighted: modelData.key === root.chatWith
-                                    Accessible.name: "Chat with " + root.who(modelData.key, modelData.name) + ". " + modelData.preview
+                                    readonly property string title: modelData.group ? modelData.name : root.who(modelData.key, modelData.name)
+                                    Accessible.name: (modelData.group ? "Group " : "Chat with ") + title + ". " + modelData.preview
                                     onClicked: root.openChat(modelData.key)
                                     background: Rectangle { color: chatRow.highlighted ? root.t.sbActBg : chatRow.hovered ? root.t.hover : "transparent" }
                                     contentItem: ColumnLayout {
                                         spacing: 2
                                         RowLayout {
                                             Layout.fillWidth: true
-                                            Label { Layout.fillWidth: true; elide: Text.ElideRight; textFormat: Text.PlainText; font.weight: Font.DemiBold; color: root.t.fg; text: root.who(chatRow.modelData.key, chatRow.modelData.name) }
+                                            Icon { visible: chatRow.modelData.group === true; name: "members"; size: 14; color: root.t.muted }
+                                            Label { Layout.fillWidth: true; elide: Text.ElideRight; textFormat: Text.PlainText; font.weight: Font.DemiBold; color: root.t.fg; text: chatRow.title }
                                             Label { text: root.chatTime(chatRow.modelData.last_ms); font.pointSize: root.smallSize; color: root.t.muted }
+                                        }
+                                        Label {
+                                            visible: chatRow.modelData.group === true
+                                            Layout.fillWidth: true; elide: Text.ElideRight; font.pointSize: root.smallSize; color: root.t.muted
+                                            text: (chatRow.modelData.members || 1) + ((chatRow.modelData.members || 1) === 1 ? " member" : " members") + (chatRow.modelData.pending > 0 ? ", " + chatRow.modelData.pending + " joining" : "")
                                         }
                                         Label { Layout.fillWidth: true; elide: Text.ElideRight; textFormat: Text.PlainText; font.pointSize: root.smallSize; color: root.t.muted; text: chatRow.modelData.preview || "No messages yet" }
                                     }
                                 }
                             }
                             Blank {
-                                visible: !chatPage.picking && chatPage.threads.length === 0
+                                visible: !chatPage.picking && !chatPage.grouping && chatPage.threads.length === 0
                                 anchors.centerIn: parent; width: parent.width - 32
-                                icon: "cmt"; title: "No chats yet"; text: "Press New chat to write to a member."
+                                icon: "cmt"; title: "No chats yet"; text: "Press New chat to write to a member, or New group to write to several."
                             }
                             ColumnLayout {   // the New chat picker: the other active members
                                 visible: chatPage.picking
@@ -4374,6 +4465,21 @@ Item {
                                     }
                                 }
                             }
+                            ColumnLayout {   // the New group form: a name, then the members to add
+                                visible: chatPage.grouping
+                                anchors { fill: parent; margins: 8 }
+                                spacing: 8
+                                FramedField { id: groupName; Layout.fillWidth: true; placeholderText: "Group name"; maximumLength: 60; Accessible.name: "Group name" }
+                                MemberPicker { id: groupPick; Layout.fillWidth: true; Layout.fillHeight: true; people: chatPage.others }
+                                ActionButton {
+                                    Layout.fillWidth: true
+                                    text: "Create group" + (groupPick.count > 0 ? " with " + groupPick.count : "")
+                                    kind: "primary"
+                                    allowed: groupName.text.trim() !== "" && groupPick.count > 0
+                                    Accessible.name: "Create the group"
+                                    onClicked: chatPage.createGroup()
+                                }
+                            }
                         }
                         Frame {   // the open thread and the send box
                             visible: chatPage.twoPane || root.chatWith !== ""
@@ -4382,7 +4488,7 @@ Item {
                             Blank {
                                 visible: root.chatWith === ""
                                 anchors.centerIn: parent; width: parent.width - 32
-                                icon: "cmt"; title: "Pick a person"; text: "Choose a chat on the left, or press New chat."
+                                icon: "cmt"; title: "Pick a chat"; text: "Choose a chat on the left, or press New chat or New group."
                             }
                             ColumnLayout {
                                 visible: root.chatWith !== ""
@@ -4391,11 +4497,68 @@ Item {
                                 RowLayout {
                                     Layout.fillWidth: true; spacing: 12
                                     LinkButton { visible: !chatPage.twoPane; text: "‹  Back"; Accessible.name: "Back to the chats"; onClicked: root.chatWith = "" }
-                                    Label { Layout.fillWidth: true; elide: Text.ElideRight; textFormat: Text.PlainText; font.weight: Font.DemiBold; font.pointSize: root.baseSize * 16 / 14; text: chatPage.currentName }
+                                    Icon { visible: root.chatGroup; name: "members"; size: 18; color: root.t.muted }
+                                    ColumnLayout {
+                                        Layout.fillWidth: true; spacing: 0
+                                        Label { Layout.fillWidth: true; elide: Text.ElideRight; textFormat: Text.PlainText; font.weight: Font.DemiBold; font.pointSize: root.baseSize * 16 / 14; text: chatPage.currentName }
+                                        Label {
+                                            visible: root.chatGroup
+                                            Layout.fillWidth: true; elide: Text.ElideRight; font.pointSize: root.smallSize; color: root.t.muted
+                                            text: (root.chatThread.members || 1) + ((root.chatThread.members || 1) === 1 ? " member" : " members") + (chatPage.joining > 0 ? ", " + chatPage.joining + " joining" : "")
+                                        }
+                                    }
+                                    ActionButton {
+                                        visible: root.chatGroup
+                                        text: chatPage.showMembers ? "Messages" : "Members"
+                                        Accessible.name: chatPage.showMembers ? "Back to the messages" : "Show the members of the group"
+                                        onClicked: chatPage.showMembers = !chatPage.showMembers
+                                    }
+                                    ActionButton {
+                                        visible: root.chatGroup && !chatPage.readOnly
+                                        text: "Add members"; iconName: "plus"
+                                        Accessible.name: "Add members to the group"
+                                        onClicked: { chatPage.showMembers = true; addPick.focusSearch() }
+                                    }
                                 }
-                                Help { when: !chatPage.hasAddress; delay: 3000; text: "Their chat address has not arrived yet. Your message waits in the queue and goes out when it arrives." }
+                                Help { when: !root.chatGroup && !chatPage.hasAddress; delay: 3000; text: "Their chat address has not arrived yet. Your message waits in the queue and goes out when it arrives." }
+                                Help {
+                                    when: root.chatGroup && chatPage.joining > 0 && !chatPage.showMembers; delay: 3000
+                                    text: "Some members have not joined yet. This can take a minute or two. A member who joins later does not see the messages sent before."
+                                }
+                                Flash {
+                                    when: chatPage.readOnly; delay: 3000; tone: "warn"; icon: "warn"
+                                    text: "This group is from before a restart. You can read it, and you cannot write in it until a member adds you again."
+                                }
+                                ColumnLayout {   // the members of the group, and a list to add more from
+                                    visible: chatPage.membersShown
+                                    Layout.fillWidth: true; Layout.fillHeight: true
+                                    spacing: 8
+                                    Label { font.weight: Font.DemiBold; text: "In the group" }
+                                    ListView {
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: Math.min(contentHeight, 150)
+                                        clip: true
+                                        model: root.groupInfo.members || []
+                                        delegate: Label {
+                                            required property var modelData
+                                            width: ListView.view.width; elide: Text.ElideRight; textFormat: Text.PlainText; color: root.t.fg
+                                            text: (modelData.me ? "You" : root.who(modelData.key, modelData.name)) + (modelData.pending ? " (joining)" : "")
+                                        }
+                                    }
+                                    Label { visible: !chatPage.readOnly; font.weight: Font.DemiBold; text: "Add members" }
+                                    MemberPicker { id: addPick; visible: !chatPage.readOnly; Layout.fillWidth: true; Layout.fillHeight: true; people: chatPage.addable }
+                                    ActionButton {
+                                        visible: !chatPage.readOnly
+                                        Layout.alignment: Qt.AlignRight
+                                        text: "Add" + (addPick.count > 0 ? " " + addPick.count : "")
+                                        kind: "primary"; allowed: addPick.count > 0
+                                        Accessible.name: "Add the selected members to the group"
+                                        onClicked: chatPage.addMembers()
+                                    }
+                                }
                                 ListView {
                                     id: thread
+                                    visible: !chatPage.membersShown
                                     Layout.fillWidth: true; Layout.fillHeight: true
                                     clip: true; spacing: 6
                                     model: root.chatMessages
@@ -4410,6 +4573,12 @@ Item {
                                         width: ListView.view.width
                                         spacing: 6
                                         Help { visible: bubble.startsNew; horizontalAlignment: Text.AlignHCenter; text: "The messages above are from before a restart and are read only. New messages start here." }
+                                        Label {   // in a group: who wrote it
+                                            visible: root.chatGroup && !bubble.mine && !!bubble.modelData.sender_key
+                                            Layout.alignment: Qt.AlignLeft
+                                            textFormat: Text.PlainText; font.pointSize: root.smallSize; font.weight: Font.DemiBold; color: root.t.muted
+                                            text: root.who(bubble.modelData.sender_key || "", bubble.modelData.sender_name)
+                                        }
                                         Rectangle {
                                             Layout.alignment: bubble.mine ? Qt.AlignRight : Qt.AlignLeft
                                             Layout.maximumWidth: thread.width * 0.8
@@ -4432,15 +4601,17 @@ Item {
                                     }
                                 }
                                 Blank {
-                                    visible: root.chatMessages.length === 0
+                                    visible: root.chatMessages.length === 0 && !chatPage.membersShown
                                     Layout.fillHeight: true
                                     icon: "cmt"; title: "No messages yet"; text: "Write the first message below."
                                 }
                                 RowLayout {
+                                    visible: !chatPage.membersShown
                                     Layout.fillWidth: true; spacing: 8
                                     FramedField {
                                         id: draft
                                         Layout.fillWidth: true
+                                        enabled: !chatPage.readOnly
                                         placeholderText: "Write a message"; maximumLength: 4000
                                         Accessible.name: "Message to " + chatPage.currentName
                                         onAccepted: sendButton.submit()
@@ -4448,7 +4619,7 @@ Item {
                                     ActionButton {
                                         id: sendButton
                                         text: "Send"; kind: "primary"
-                                        allowed: draft.text.trim() !== ""
+                                        allowed: draft.text.trim() !== "" && !chatPage.readOnly
                                         Accessible.name: "Send the message to " + chatPage.currentName
                                         onClicked: chatPage.send()
                                     }
