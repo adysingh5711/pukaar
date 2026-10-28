@@ -13,7 +13,7 @@ use crate::reducer::{issue_of, reduce, Config, Issue, RoleFn, State, Status};
 use crate::rpc::{rank_name, SharedChain};
 use crate::store::{Accept, Store};
 use ed25519_dalek::SigningKey;
-use pukaar_sites_rules::Rank;
+use pukaar_sites_rules::{MemberStatus, Rank};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
@@ -308,6 +308,34 @@ impl Node {
             row["reason"] = json!(t);
         }
         row
+    }
+
+    /// The page of one member: the profile as read (`names`, `about`), the role, the joining time and where the
+    /// chain pointer stands. `state` is "ready", "loading" (a file is announced or pointed to but not read) or
+    /// "none". `pointer` is "announced" while a newer announce waits for an admin batch. It reads caches only.
+    pub fn member_profile_json(&self, key_hex: &str) -> Result<String, String> {
+        let key = parse_id(key_hex.trim()).ok_or("bad member key")?;
+        let (m, rank) = {
+            let c = self.chain.as_ref().ok_or("the chain is not connected")?.lock().unwrap();
+            (c.member_by_key(&key).ok_or("not a member of this site")?, c.role_at(&key, 0))
+        };
+        let announced = self.fetched.as_ref().and_then(|f| f.lock().unwrap().announce_of(&key)).map(|a| a.version).filter(|v| *v > m.profile_version);
+        let about = self.about.get(&key);
+        let state = match (about, m.profile_cid.is_empty() && announced.is_none()) {
+            (Some(_), _) => "ready",
+            (None, true) => "none",
+            (None, false) => "loading",
+        };
+        Ok(json!({
+            "key": hex::encode(key), "fingerprint": fingerprint(&key), "own": key == self.me(),
+            "name": self.names.get(&key), "role": rank.map(rank_name), "super_admin": rank == Some(Rank::SuperAdmin),
+            "name_signed_by_admin": self.signed.contains(&key),
+            "removed": m.status == MemberStatus::Removed || m.revoked.is_some(),
+            "granted_at_ms": m.granted_at_ms,
+            "state": state, "pointer": if announced.is_some() { "announced" } else { "on_chain" }, "announced_version": announced,
+            "bio": about.map(|a| &a.bio), "experience": about.map(|a| &a.experience), "socials": about.map(|a| &a.socials),
+        })
+        .to_string())
     }
 
     /// Our identity, with the chain role we hold now.

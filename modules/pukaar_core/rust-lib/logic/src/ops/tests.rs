@@ -659,10 +659,16 @@ use pukaar_sites_rules::Instruction;
 /// Member `n` with `role`, whose chain pointer is a profile file signed by user `signer`.
 fn pointed(w: &World, n: u8, role: Role, signer: u8, name: &str, version: u64) {
     let body = profile::Body { display_name: name.into(), ..Default::default() };
-    let file = profile::build(&key(signer), &w.site_id(), &acct(n), version, 1, &body, None, &[pk(1)]).unwrap();
+    let granted = w.creator.granted_at_ms;
+    pointed_with(w, n, role, signer, &body, version, granted);
+}
+
+/// `pointed` with a whole body and a joining time.
+fn pointed_with(w: &World, n: u8, role: Role, signer: u8, body: &profile::Body, version: u64, granted_at_ms: u64) {
+    let file = profile::build(&key(signer), &w.site_id(), &acct(n), version, 1, body, None, &[pk(1)]).unwrap();
     let bytes = profile::to_bytes(&file);
     let mut m = w.member(n, role);
-    (m.profile_cid, m.profile_sha256, m.profile_version) = (w.store.put(&bytes), sha256(&bytes), version);
+    (m.profile_cid, m.profile_sha256, m.profile_version, m.granted_at_ms) = (w.store.put(&bytes), sha256(&bytes), version, granted_at_ms);
     w.put_member(&m);
 }
 
@@ -895,4 +901,46 @@ fn the_anchor_that_this_device_saw_replaces_an_older_one_in_site_info() {
     let a = last_anchor(&n, &q, 0).unwrap();
     assert_eq!((a["ts"].as_u64(), a["block"].as_u64(), a["events_covered"].as_u64(), a["reproducible"].as_bool()), (Some(9_000), Some(77), Some(12), Some(true)));
     assert!(last_anchor(&n, &q, 9_000).is_none(), "the one in the record is as new");
+}
+
+/// What the member page of `who` gets from the node of member 1, after the fetchers ran.
+fn page(w: &World, who: u8) -> Value {
+    let mut n = node(w, 1);
+    n.apply_fetched();
+    serde_json::from_str(&n.member_profile_json(&hexk(who)).unwrap()).unwrap()
+}
+
+#[test]
+fn a_member_page_has_the_profile_the_role_the_joining_time_and_the_pointer_state() {
+    let w = World::new();
+    let body = profile::Body { display_name: "Asha".into(), bio: "nurse".into(), experience: "10 years".into(), socials: vec![("github".into(), "github.com/asha".into()), ("blog".into(), "bad".into())] };
+    pointed_with(&w, 2, Role::Resident, 2, &body, 1, 1_700_000_000_000);
+    read(&w);
+    let v = page(&w, 2);
+    assert_eq!((v["name"].as_str(), v["role"].as_str(), v["state"].as_str(), v["pointer"].as_str()), (Some("Asha"), Some("Resident"), Some("ready"), Some("on_chain")));
+    assert_eq!((v["bio"].as_str(), v["experience"].as_str(), v["granted_at_ms"].as_u64()), (Some("nurse"), Some("10 years"), Some(1_700_000_000_000)));
+    assert_eq!(v["socials"], json!([["github", "github.com/asha"]]), "a link with an unknown label is dropped");
+    assert_eq!((v["own"].as_bool(), page(&w, 1)["own"].as_bool()), (Some(false), Some(true)));
+    // A newer announce that the chain does not hold yet.
+    assert!(w.fetched.lock().unwrap().note_announce(Announce::sign(&key(2), w.site_id(), 2, "zNew", [9; 32])));
+    let v = page(&w, 2);
+    assert_eq!((v["pointer"].as_str(), v["announced_version"].as_u64()), (Some("announced"), Some(2)));
+    // A stranger and junk are errors.
+    let n = node(&w, 1);
+    assert!(n.member_profile_json(&hexk(9)).is_err() && n.member_profile_json("zz").is_err());
+}
+
+#[test]
+fn a_member_page_says_loading_none_or_removed() {
+    let w = World::new();
+    let mut gone = w.member(3, Role::Resident);
+    gone.status = MemberStatus::Removed;
+    w.put_member(&gone);
+    let mut waiting = w.member(2, Role::Resident);
+    waiting.profile_cid = "zMissing".into(); // the file is not in Storage
+    w.put_member(&waiting);
+    read(&w);
+    let (loading, removed) = (page(&w, 2), page(&w, 3));
+    assert_eq!((loading["state"].as_str(), loading["name"].is_null()), (Some("loading"), true));
+    assert_eq!((removed["state"].as_str(), removed["removed"].as_bool(), removed["role"].is_null()), (Some("none"), Some(true), true));
 }

@@ -332,7 +332,7 @@ impl Chain {
         json!({
             "key": hex::encode(m.pukaar_key), "fingerprint": fingerprint(&m.pukaar_key),
             "name": names.get(&m.pukaar_key), "super_admin": sup, "demotions": [],
-            "account": b58(&m.user),
+            "account": b58(&m.user), "granted_at_ms": m.granted_at_ms,
         })
     }
 
@@ -371,10 +371,14 @@ impl Chain {
         json!({ "members": members, "super_admins": supers, "revoked": revoked })
     }
 
+    /// The record of the member with this Pukaar key, removed or not.
+    pub fn member_by_key(&self, key: &Key) -> Option<Member> {
+        self.roster.members().find(|m| m.pukaar_key == *key).cloned()
+    }
+
     /// Our own removal, if the chain holds one.
     pub fn revocation_of(&self, key: &Key, names: &BTreeMap<Key, String>) -> Option<Value> {
-        let m = self.roster.members().find(|m| m.pukaar_key == *key)?;
-        self.revoked_row(m, names)
+        self.revoked_row(&self.member_by_key(key)?, names)
     }
 }
 
@@ -617,6 +621,9 @@ mod tests {
         let t2 = members.iter().find(|m| m["key"] == hex::encode(key(2))).unwrap();
         assert_eq!((t2["role"].as_str(), t2["name"].as_str(), t2["super_admin"].as_bool()), (Some("Admin"), Some("Beta"), Some(false)));
         assert_eq!(t2["fingerprint"].as_str().unwrap().len(), 6);
+        // The joining time comes from the member record.
+        let granted = c.lock().unwrap().snapshot().1.iter().find(|m| m.pukaar_key == key(2)).unwrap().granted_at_ms;
+        assert_eq!(t2["granted_at_ms"].as_u64(), Some(granted));
         assert!(t2["demotions"].as_array().unwrap().is_empty());
         let t1 = members.iter().find(|m| m["super_admin"] == true).unwrap();
         assert_eq!(t1["role"], "Admin", "a super admin is an Admin with the flag");

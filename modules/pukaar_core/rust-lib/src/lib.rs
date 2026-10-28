@@ -127,6 +127,9 @@ pub trait PukaarCoreModule: Send + 'static {
     fn list_issues(&mut self) -> String;
     fn issue_timeline(&mut self, issue_hex: String) -> String;
     fn site_info(&mut self) -> String;
+    /// The page of one member of this site, removed ones too: name, role, joining time (`granted_at_ms`), bio,
+    /// experience, `socials` and the pointer state. It reads caches only. `error: …` for a key that is no member.
+    fn member_profile(&mut self, key_hex: String) -> String;
     fn checkpoint_now(&mut self) -> String;
     /// Any active member. Queues one `anchor` write for the record as it is now: `{"ok":true,"queued":id}`. It costs
     /// about 523,304 lepta from the account of the member. It reads the chain first and refuses a record that is
@@ -1206,6 +1209,10 @@ impl PukaarCoreModule for Pukaar {
             Ok::<_, String>(v.to_string())
         })();
         r.unwrap_or_else(err)
+    }
+
+    fn member_profile(&mut self, key_hex: String) -> String {
+        read(|n| n.member_profile_json(&key_hex)).and_then(|r| r).unwrap_or_else(err)
     }
 
     fn checkpoint_now(&mut self) -> String {
