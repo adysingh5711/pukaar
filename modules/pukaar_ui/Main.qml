@@ -4308,7 +4308,7 @@ Item {
                                     FramedField {
                                         id: draft
                                         Layout.fillWidth: true
-                                        placeholderText: "Write a message"; maxLength: 4000
+                                        placeholderText: "Write a message"; maximumLength: 4000
                                         Accessible.name: "Message to " + chatPage.currentName
                                         onAccepted: sendButton.submit()
                                     }
