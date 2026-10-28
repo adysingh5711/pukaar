@@ -104,7 +104,8 @@ Item {
     }
     // A local timer: the first confirmed meeting that starts within the lead time, once. It runs only while the app is open.
     function checkReminders() {
-        var now = Date.now(), lead = (meets.lead_min || 10) * 60000
+        var now = Date.now(), lead = (meets.lead_min >= 0 ? meets.lead_min : 10) * 60000   // 0 = no reminder
+        if (lead === 0) return
         var due = (meets.meetings || []).filter(function (m) {
             return m.status === "confirmed" && !reminded[m.id] && m.start_ms - now <= lead && m.start_ms > now - 60000
         })
@@ -4059,6 +4060,8 @@ Item {
                     property var view: null          // meet_slots of the target
                     property string slotsError: ""   // why the times did not load, "" when they did
                     property var clash: null         // meet_check of the pick
+                    property string customError: ""  // why a typed length or time was refused, "" when fine
+                    property string leadError: ""    // the same for the reminder
                     readonly property var all: root.meets.meetings || []
                     readonly property var backup: root.meets.backup || ({})
                     readonly property var requests: all.filter(function (m) { return m.status === "proposed" && m.you === "invitee" })
@@ -4075,6 +4078,40 @@ Item {
                             .concat(ok.filter(function (s) { return s.mine || s.theirs }).slice(0, 8))
                     }
                     readonly property var lines: root.clashLines(clash)
+                    // The whole number in a typed text when it is from lo to hi, else -1.
+                    function whole(text, lo, hi) {
+                        var t = String(text).trim(), n = /^\d{1,4}$/.test(t) ? Number(t) : -1
+                        return n >= lo && n <= hi ? n : -1
+                    }
+                    function setLen(n) { customError = ""; lenMin = n; pick = null; clash = null; load() }
+                    function customLength(text) {
+                        var n = whole(text, 5, 480)
+                        if (n < 0) customError = "Type a whole number of minutes for the length, 5 to 480."
+                        else setLen(n)
+                    }
+                    // A pick, from a listed slot or a typed time: the proposal carries this start and end itself.
+                    function choose(slot) {
+                        pick = slot; clash = null
+                        root.call("meet_check", [target.key, slot.start_ms, slot.end_ms], function (c) { if (c && c.mine) clash = c })
+                    }
+                    // A typed date (YYYY-MM-DD) and time (HH:MM, 24 hours), both in local time. The core keeps UTC.
+                    function customStart(date, time) {
+                        var d = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(date.trim()), h = /^(\d{1,2}):(\d{2})$/.exec(time.trim())
+                        var s = d && h ? new Date(+d[1], d[2] - 1, +d[3], +h[1], +h[2]) : null
+                        if (!s || s.getMonth() !== d[2] - 1 || s.getDate() !== +d[3] || s.getHours() !== +h[1]) {
+                            customError = "Type the date as YYYY-MM-DD and the time as HH:MM (24 hours), for example 2026-11-03 and 14:30."
+                            return
+                        }
+                        if (s.getTime() < Date.now()) { customError = "That time has already passed. Pick a time in the future."; return }
+                        customError = ""
+                        choose({ start_ms: s.getTime(), end_ms: s.getTime() + lenMin * 60000 })
+                    }
+                    // The reminder lead in minutes, 0 = none. The segmented choices and the typed number both come here.
+                    function setLead(n) {
+                        if (n < 0) { leadError = "Type a whole number of minutes for the reminder, 0 to 1440. 0 means no reminder."; return }
+                        leadError = ""
+                        root.run("meet_prefs", [root.meets.share === false ? 0 : 1, n])
+                    }
                     function load() {
                         if (target) root.call("meet_slots", [target.key, Date.now(), lenMin], function (v) {
                             var ok = !!v && Array.isArray(v.slots)
@@ -4118,10 +4155,41 @@ Item {
                             Segmented {
                                 name: "Length of the meeting"; options: ["30 min", "60 min", "90 min"]
                                 current: [30, 60, 90].indexOf(meetPage.lenMin)
-                                onPicked: function (i) { meetPage.lenMin = [30, 60, 90][i]; meetPage.pick = null; meetPage.clash = null; meetPage.load() }
+                                onPicked: function (i) { meetPage.setLen([30, 60, 90][i]) }
                             }
                             LinkButton { text: "Close"; onClicked: root.meetWith = null }
                         }
+                        RowLayout {
+                            spacing: 8
+                            Label { text: "Other length" }
+                            FramedField {
+                                id: lenField
+                                Layout.preferredWidth: 72; maximumLength: 3; placeholderText: "45"
+                                inputMethodHints: Qt.ImhDigitsOnly
+                                validator: RegularExpressionValidator { regularExpression: /[0-9]*/ }
+                                Accessible.name: "Meeting length in minutes"
+                                onAccepted: useLen.submit()
+                            }
+                            Label { text: "minutes, 5 to 480"; color: root.t.muted; font.pointSize: root.smallSize }
+                            ActionButton { id: useLen; text: "Use"; onClicked: meetPage.customLength(lenField.text) }
+                        }
+                        RowLayout {
+                            spacing: 8
+                            Label { text: "Other start" }
+                            FramedField {
+                                id: dateField
+                                Layout.preferredWidth: 132; maximumLength: 10; placeholderText: "2026-11-03"
+                                Accessible.name: "Start date, year-month-day, in your local time"
+                            }
+                            FramedField {
+                                id: timeField
+                                Layout.preferredWidth: 76; maximumLength: 5; placeholderText: "14:30"
+                                Accessible.name: "Start time, hour:minute, 24 hours, in your local time"
+                                onAccepted: useStart.submit()
+                            }
+                            ActionButton { id: useStart; text: "Use"; onClicked: meetPage.customStart(dateField.text, timeField.text) }
+                        }
+                        Flash { visible: meetPage.customError !== ""; err: true; text: meetPage.customError }
                         Flash { visible: meetPage.slotsError !== ""; err: true; text: "The free times could not load: " + meetPage.slotsError }
                         Help {
                             visible: !!meetPage.view
@@ -4140,14 +4208,12 @@ Item {
                                     kind: meetPage.pick && meetPage.pick.start_ms === modelData.start_ms ? "primary" : "default"
                                     text: root.when(modelData.start_ms / 1000, "ddd d MMM HH:mm") + (busy ? " (busy)" : "")
                                     Accessible.name: text
-                                    onClicked: {
-                                        meetPage.pick = modelData; meetPage.clash = null
-                                        root.call("meet_check", [meetPage.target.key, modelData.start_ms, modelData.end_ms], function (c) { if (c && c.mine) meetPage.clash = c })
-                                    }
+                                    onClicked: meetPage.choose(modelData)
                                 }
                             }
                         }
                         Help { visible: !!meetPage.view && meetPage.slots.length === 0; text: "No slots between 8:00 and 20:00 in the next 7 days." }
+                        Help { visible: !!meetPage.pick; text: meetPage.pick ? "Chosen, in your local time: " + root.meetTime(meetPage.pick) : "" }
                         Flash {
                             visible: meetPage.lines.length > 0
                             tone: "warn"; icon: "warn"; lead: "This time clashes."
@@ -4201,12 +4267,27 @@ Item {
                         spacing: 12
                         Label { text: "Remind me" }
                         Segmented {
-                            name: "Reminder before a meeting"; options: ["5 min", "10 min", "15 min", "30 min", "60 min"]
-                            current: [5, 10, 15, 30, 60].indexOf(root.meets.lead_min)
-                            onPicked: function (i) { root.run("meet_prefs", [root.meets.share === false ? 0 : 1, [5, 10, 15, 30, 60][i]]) }
+                            name: "Reminder before a meeting"; options: ["Off", "5 min", "10 min", "15 min", "30 min", "60 min"]
+                            current: [0, 5, 10, 15, 30, 60].indexOf(root.meets.lead_min)
+                            onPicked: function (i) { meetPage.setLead([0, 5, 10, 15, 30, 60][i]) }
                         }
-                        Label { text: "before. The reminder shows only while this app is open."; color: root.t.muted; font.pointSize: root.smallSize }
+                        Label { text: root.meets.lead_min === 0 ? "No reminder shows." : "before. The reminder shows only while this app is open."; color: root.t.muted; font.pointSize: root.smallSize }
                     }
+                    RowLayout {
+                        spacing: 8
+                        Label { text: "Other reminder" }
+                        FramedField {
+                            id: leadField
+                            Layout.preferredWidth: 72; maximumLength: 4; placeholderText: "20"
+                            inputMethodHints: Qt.ImhDigitsOnly
+                            validator: RegularExpressionValidator { regularExpression: /[0-9]*/ }
+                            Accessible.name: "Reminder in minutes before the meeting, 0 for none"
+                            onAccepted: useLead.submit()
+                        }
+                        Label { text: "minutes before, 0 to 1440 (0 = none)"; color: root.t.muted; font.pointSize: root.smallSize }
+                        ActionButton { id: useLead; text: "Set"; onClicked: meetPage.setLead(meetPage.whole(leadField.text, 0, 1440)) }
+                    }
+                    Flash { visible: meetPage.leadError !== ""; err: true; text: meetPage.leadError }
                     Heading { text: "Backup" }
                     Help { text: "A backup puts your meeting history in Storage. The file is encrypted with a key from your account. Then its CID goes into one record of yours on the chain, so a new device can find it. The chain write costs a small fee. Meeting details never go on the chain. If Storage is not reachable, the backup is skipped and your local history stays." }
                     Flash { visible: !!meetPage.backup.error; err: true; text: meetPage.backup.error || "" }
