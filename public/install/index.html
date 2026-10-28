@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Install Pukaar in Logos Basecamp</title>
+<meta name="description" content="Two ways to install Pukaar in Logos Basecamp: add a package source, or install the files by hand.">
+<style>
+  :root {
+    --bg: #fafaf8; --fg: #1d1d1b; --muted: #5f5f5a; --line: #deded8;
+    --card: #ffffff; --accent: #b3261e; --accent-fg: #ffffff; --code: #efefea;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #151514; --fg: #ecece8; --muted: #a2a29b; --line: #34342f;
+      --card: #1d1d1b; --accent: #ff7a70; --accent-fg: #151514; --code: #262624;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 17px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 42rem; margin: 0 auto; padding: 2.5rem 16px 4rem; }
+  h1 { font-size: 2rem; line-height: 1.2; margin: 0 0 .5rem; }
+  h2 { font-size: 1.3rem; margin: 2.5rem 0 .75rem; }
+  p, li { margin: .5rem 0; }
+  .lead { color: var(--muted); font-size: 1.1rem; }
+  section { background: var(--card); border: 1px solid var(--line);
+    border-radius: 10px; padding: 1rem 1.25rem; margin-top: 1.25rem; }
+  section h2 { margin-top: .25rem; }
+  ol, ul { padding-left: 1.4rem; }
+  code { background: var(--code); padding: .1em .35em; border-radius: 4px;
+    font: .9em ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+  .url { display: flex; gap: .5rem; align-items: stretch; margin: .75rem 0; }
+  .url code { flex: 1; padding: .6rem .75rem; display: block; border: 1px solid var(--line); }
+  button { font: inherit; cursor: pointer; border: 0; border-radius: 6px;
+    background: var(--accent); color: var(--accent-fg); padding: 0 1rem; min-height: 44px; }
+  a { color: var(--accent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .note { border-left: 3px solid var(--accent); padding-left: .75rem; color: var(--muted); }
+  footer { margin-top: 2.5rem; color: var(--muted); font-size: .9rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Install Pukaar in Logos Basecamp</h1>
+  <p class="lead">Pukaar is an app for reporting faults in your neighbourhood, such as a broken light or a blocked drain.
+    A report is only closed when the person who filed it, or two other residents, confirm the fix.</p>
+
+  <section id="source">
+    <h2>Option 1: Add a package source</h2>
+    <p>Basecamp keeps a list of sources it can install apps from. Add the Pukaar source once. Then Basecamp installs Pukaar and the modules it needs.</p>
+    <div class="url">
+      <code id="repo-url">Loading...</code>
+      <button id="copy" type="button">Copy</button>
+    </div>
+    <ol>
+      <li>Copy the link above.</li>
+      <li>Open Basecamp, then open <strong>Package Manager</strong>.</li>
+      <li>Choose <strong>Add source</strong> (it may be called <strong>Add repository</strong>) and paste the link.</li>
+      <li>Wait for the list to refresh. Find <strong>Pukaar</strong> and choose <strong>Install</strong>.</li>
+      <li>Basecamp asks to install the modules Pukaar needs. Accept. Then do the restart step below.</li>
+    </ol>
+    <p class="note">If Basecamp warns that the package is not signed or not trusted, read the warning before you accept.</p>
+  </section>
+
+  <section id="hand">
+    <h2>Option 2: Install by hand</h2>
+    <p>Use this if you cannot add a source. Download the files, then in Basecamp open <strong>Package Manager</strong> and choose <strong>Install Local Package</strong> for each file. Install them in this order. Skip any module that Basecamp already has.</p>
+    <ol>
+      <li><a href="https://github.com/logos-co/logos-modules-release/releases/download/delivery_module-v0.4.0/delivery_module-0.4.0.lgx"><code>delivery_module-0.4.0.lgx</code></a> (sends your messages)</li>
+      <li><a href="https://github.com/logos-co/logos-modules-release/releases/download/storage_module-v3.0.2/storage_module-3.0.2.lgx"><code>storage_module-3.0.2.lgx</code></a> (keeps files)</li>
+      <li><a href="https://github.com/logos-co/logos-modules-release/releases/download/chat_module-v0.3.0/chat_module-0.3.0.lgx"><code>chat_module-0.3.0.lgx</code></a> (private chats)</li>
+      <li><a id="dl-core" href="#"><code>logos-pukaar_core-module-lib.lgx</code></a> (Pukaar core)</li>
+      <li><a id="dl-ui" href="#"><code>logos-pukaar_ui-module.lgx</code></a> (the Pukaar screens)</li>
+    </ol>
+    <p>The first three come from the official Logos module catalog. The last two come from the <a id="releases" href="#">Pukaar releases page</a>, with a <code>SHA256SUMS</code> file you can use to check them.</p>
+  </section>
+
+  <section id="restart">
+    <h2>After you install: restart Basecamp fully</h2>
+    <p>Quit Basecamp completely, then start it again. Closing the window is not enough. Delivery keeps the network it was first started with, so a full restart is the only way it picks up the right one.</p>
+    <p>Then open Pukaar. To join a site, paste its site id under <strong>Join a site</strong>. To start a new site, choose <strong>Create a site</strong>.</p>
+  </section>
+
+  <section id="needs">
+    <h2>What you need</h2>
+    <ul>
+      <li><a href="https://github.com/logos-co/logos-basecamp/releases/tag/0.3.1">Logos Basecamp 0.3.1</a>.</li>
+      <li>A Mac with Apple silicon. The current packages are built for <code>darwin-arm64</code> only.</li>
+      <li>An internet connection. Messages travel over the Logos Delivery development network.</li>
+      <li>Every person at a site must run a Pukaar build that uses the same network.</li>
+    </ul>
+  </section>
+
+  <section id="limits">
+    <h2>Known limits</h2>
+    <ul>
+      <li>This is a pilot. It is not ready for a large public site.</li>
+      <li>There is no relay for sites with no internet yet.</li>
+      <li>One Basecamp profile holds one Pukaar identity. To run two people on one computer, give each its own Basecamp profile.</li>
+      <li>The proof anchored on the Logos chain is only as lasting as the test network it uses.</li>
+    </ul>
+  </section>
+
+  <footer>Source code and full notes: <a href="https://github.com/adysingh5711/pukaar">github.com/adysingh5711/pukaar</a></footer>
+</main>
+
+<script>
+  // Set these once the files are hosted.
+  // REPO_JSON_URL: the public address of logos-repo.json (what Basecamp needs).
+  // RELEASES_URL:  the GitHub releases page that holds the two Pukaar .lgx files.
+  const REPO_JSON_URL = "https://raw.githubusercontent.com/adysingh5711/pukaar/main/public/install/logos-repo.json"; // PLACEHOLDER: change if you host it elsewhere
+  const RELEASES_URL = "https://github.com/adysingh5711/pukaar/releases";
+
+  const $ = (id) => document.getElementById(id);
+  $("repo-url").textContent = REPO_JSON_URL;
+  $("releases").href = RELEASES_URL + "/latest";
+  $("dl-core").href = RELEASES_URL + "/latest/download/logos-pukaar_core-module-lib.lgx";
+  $("dl-ui").href = RELEASES_URL + "/latest/download/logos-pukaar_ui-module.lgx";
+
+  $("copy").addEventListener("click", async (e) => {
+    const b = e.currentTarget;
+    try {
+      await navigator.clipboard.writeText(REPO_JSON_URL);
+      b.textContent = "Copied";
+    } catch (_) {
+      // Fallback: select the text so the person can copy it by hand.
+      getSelection().selectAllChildren($("repo-url"));
+      b.textContent = "Press Ctrl/Cmd+C";
+    }
+    setTimeout(() => (b.textContent = "Copy"), 2000);
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 2,
+  "repositoryName": "pukaar",
+  "generatedAt": "2026-10-28T07:30:20Z",
+  "packages": [
+    {
+      "name": "pukaar_core",
+      "versions": [
+        {
+          "releasedAt": "2026-10-28T07:30:20Z",
+          "publisherRef": "pukaar_core-v0.3.0",
+          "url": "https://github.com/adysingh5711/pukaar/releases/download/v0.3.0/logos-pukaar_core-module-lib.lgx",
+          "urls": [
+            "https://github.com/adysingh5711/pukaar/releases/download/v0.3.0/logos-pukaar_core-module-lib.lgx"
+          ],
+          "size": 21951083,
+          "sha256": "aaa12fc0d476295411ee6e4aac6b68a0235b8ca7b8fa9b206bf95953925a384f",
+          "rootHash": "d023fe2b5e5b404fa36f147f3c941c159a49212469fd0a28817a753a2292d4b9",
+          "manifest": {
+            "author": "",
+            "category": "civic",
+            "dependencies": [
+              "delivery_module",
+              "storage_module",
+              "chat_module"
+            ],
+            "description": "Civic fault reports that can't be quietly closed",
+            "display_name": "Pukaar Core",
+            "hashes": {
+              "assets": "a7b0f3fb9d82ca35e104502917b673e48a1ecd19f81094a5b76e619901939b48",
+              "root": "d023fe2b5e5b404fa36f147f3c941c159a49212469fd0a28817a753a2292d4b9",
+              "variants": "549a60d15834a70050e2128b0e224d45bdb899f4d8df43d11cde7638cc9a4cdd",
+              "variants/darwin-arm64": "54e6a3ce72f9064089e91f9707de8fb1dcebb5e0e23f4d6a1b7af8a8cb67b13c"
+            },
+            "icon": "",
+            "main": {
+              "darwin-arm64": "pukaar_core_plugin.dylib"
+            },
+            "manifestVersion": "0.6.0",
+            "name": "pukaar_core",
+            "type": "core",
+            "version": "0.3.0"
+          }
+        }
+      ]
+    },
+    {
+      "name": "pukaar_ui",
+      "versions": [
+        {
+          "releasedAt": "2026-10-28T07:30:20Z",
+          "publisherRef": "pukaar_ui-v0.3.0",
+          "url": "https://github.com/adysingh5711/pukaar/releases/download/v0.3.0/logos-pukaar_ui-module.lgx",
+          "urls": [
+            "https://github.com/adysingh5711/pukaar/releases/download/v0.3.0/logos-pukaar_ui-module.lgx"
+          ],
+          "size": 110264,
+          "sha256": "b28be18088a31b44b2d828bf40383480ef442739c6f50749366caed16ca851ff",
+          "rootHash": "1b8f144521dfcf08edbc801ba6d149db49a11bca01ef645a536e799c7a032138",
+          "manifest": {
+            "author": "",
+            "category": "civic",
+            "dependencies": [
+              "pukaar_core"
+            ],
+            "description": "Report, track and confirm fixes at your site",
+            "display_name": "Pukaar",
+            "hashes": {
+              "assets": "66f202e0e9c390f72085fbca89a1f512e416c06595dc6ef1eeea91a5f736a5a4",
+              "root": "1b8f144521dfcf08edbc801ba6d149db49a11bca01ef645a536e799c7a032138",
+              "variants": "7f37d435e7c329e22cb7a21eb4a9e9ab43bc7b58bb876ee20750e843c49ac463",
+              "variants/darwin-arm64": "80ab26d54242b7c487c0b44ef19c259c59062a8ff255c3d56be83da7a5179f20"
+            },
+            "icon": "assets/icon.png",
+            "main": {},
+            "manifestVersion": "0.6.0",
+            "name": "pukaar_ui",
+            "type": "ui_qml",
+            "version": "0.3.0",
+            "view": "Main.qml"
+          }
+        }
+      ]
+    }
+  ]
+}
