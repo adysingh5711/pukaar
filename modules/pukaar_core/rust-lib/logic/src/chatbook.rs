@@ -8,6 +8,8 @@
 //! - which person each conversation belongs to (`links`).
 //! - the queue: a message that is not sent yet (the other address has not arrived, or the module is down)
 //!   waits here, per person, and goes out when the core can send it.
+//! - groups (the module's `group` conversations): which ones are ours, the members still to be added (their address
+//!   has not arrived), the unsent messages and the read mark of each group, keyed by its conversation id.
 
 use crate::event::Key;
 use crate::meet::Signed;
@@ -31,6 +33,7 @@ pub const MAX_TEXT: usize = 4000;
 /// module joined within about a second in the field; the background step runs every 5 s.
 const SETTLE_MS: u64 = 8_000;
 const PREVIEW_CHARS: usize = 160;
+pub const MAX_GROUP_NAME: usize = 60;
 
 /// The body of an announce: `ts` is the clock of the sender and the newest wins.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -57,16 +60,49 @@ struct Link {
     addr: String,
 }
 
-/// How far we have read the thread with `who`: the `last_ms` of its newest conversation at that time.
+/// How far we have read a thread (a person's `Key`, or a group's conversation id): the `last_ms` of its newest
+/// conversation at that time. A file from before groups wrote `who`.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-struct Read {
-    who: Key,
+struct Read<K> {
+    #[serde(alias = "who")]
+    id: K,
     ms: u64,
+}
+
+/// Move the mark of `id` forward to `ms`, never back. False when nothing changed.
+fn advance<K: PartialEq + Clone>(marks: &mut Vec<Read<K>>, id: &K, ms: u64) -> bool {
+    match marks.iter_mut().find(|r| r.id == *id) {
+        Some(r) if r.ms >= ms => return false,
+        Some(r) => r.ms = ms,
+        None => marks.push(Read { id: id.clone(), ms }),
+    }
+    true
+}
+
+/// A thread is unread when a live conversation has a message after the mark. A history-only one cannot get a new message.
+fn unread<K: PartialEq>(marks: &[Read<K>], id: &K, convos: &[&Convo]) -> bool {
+    let read = marks.iter().find(|r| r.id == *id).map_or(0, |r| r.ms);
+    convos.iter().any(|c| !c.history_only && c.last_ms > read)
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Queued {
     pub to: Key,
+    pub text: String,
+    pub ts_ms: u64,
+}
+
+/// A member that is to be added to a group once their chat address is known.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+struct Invite {
+    convo: String,
+    who: Key,
+}
+
+/// A message to a group that is not sent yet.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct GroupQueued {
+    pub convo: String,
     pub text: String,
     pub ts_ms: u64,
 }
@@ -78,7 +114,17 @@ pub struct ChatBook {
     queue: Vec<Queued>,
     /// Absent in a file from before the unread dot.
     #[serde(default)]
-    read: Vec<Read>,
+    read: Vec<Read<Key>>,
+    /// The groups of this site (conversation ids): made here, or joined with a member that we know. Absent in a file
+    /// from before groups.
+    #[serde(default)]
+    groups: Vec<String>,
+    #[serde(default)]
+    invites: Vec<Invite>,
+    #[serde(default)]
+    group_queue: Vec<GroupQueued>,
+    #[serde(default)]
+    group_read: Vec<Read<String>>,
     #[serde(skip)]
     pub site: Key,
     #[serde(skip)]
@@ -90,6 +136,10 @@ pub struct ChatBook {
     /// a message sent before that goes to a topic that nobody listens to yet and is lost.
     #[serde(skip)]
     opened: Vec<(String, u64)>,
+    /// Per group, from its roster the last time we looked: members in, invites not committed, and since when the
+    /// roster has been the same.
+    #[serde(skip)]
+    rosters: BTreeMap<String, (usize, usize, u64)>,
 }
 
 impl SiteFile for ChatBook {
@@ -129,6 +179,18 @@ pub struct Convo {
     pub history_only: bool,
     #[serde(default)]
     pub kind: String,
+    /// A group's shared name.
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+/// One element of the module's `list_group_members`: an account address, and whether the group has not
+/// committed it yet (it cannot read the group until then).
+#[derive(Deserialize, Clone, Debug)]
+pub struct Member {
+    pub address: String,
+    #[serde(default)]
+    pub pending: bool,
 }
 
 /// One element of the module's `get_messages`.
@@ -148,17 +210,72 @@ pub fn list_of<T: DeserializeOwned>(v: Value) -> Result<Vec<T>, String> {
     serde_json::from_value(v).map_err(|e| e.to_string())
 }
 
+fn row(from_self: bool, content: &str, ts_ms: u64, old: bool, queued: bool) -> Value {
+    json!({ "from_self": from_self, "content": content, "ts_ms": ts_ms, "old": old, "queued": queued })
+}
+
+/// `rows` oldest first (stable: the order inside a conversation stays), then the unsent messages `(time, text)`.
+fn ordered<'a>(
+    mut rows: Vec<(u64, Value)>,
+    unsent: impl Iterator<Item = (u64, &'a str)>,
+) -> Vec<Value> {
+    rows.sort_by_key(|r| r.0);
+    rows.into_iter()
+        .map(|r| r.1)
+        .chain(unsent.map(|(ts, text)| row(true, text, ts, false, true)))
+        .collect()
+}
+
 /// The messages of a thread, oldest first: each conversation's messages (`old` for a conversation that
 /// is history only), then the unsent ones, marked `queued`.
 #[must_use]
 pub fn thread_messages(parts: Vec<(bool, Vec<Msg>)>, queued: &[&Queued]) -> Vec<Value> {
-    let mut rows: Vec<(u64, Value)> = parts
+    let rows = parts
         .into_iter()
-        .flat_map(|(old, msgs)| msgs.into_iter().map(move |m| (m.timestamp_ms, json!({ "from_self": m.from_self, "content": m.content, "ts_ms": m.timestamp_ms, "old": old, "queued": false }))))
+        .flat_map(|(old, msgs)| {
+            msgs.into_iter().map(move |m| {
+                (
+                    m.timestamp_ms,
+                    row(m.from_self, &m.content, m.timestamp_ms, old, false),
+                )
+            })
+        })
         .collect();
-    rows.sort_by_key(|r| r.0); // stable: the order inside a conversation stays
-    let unsent = queued.iter().map(|q| (q.ts_ms, json!({ "from_self": true, "content": q.text, "ts_ms": q.ts_ms, "old": false, "queued": true })));
-    rows.into_iter().chain(unsent).map(|r| r.1).collect()
+    ordered(rows, queued.iter().map(|q| (q.ts_ms, q.text.as_str())))
+}
+
+/// A message text that can be kept: trimmed, 1 to `MAX_TEXT` characters.
+fn clean(text: &str) -> Result<&str, String> {
+    let text = text.trim();
+    if text.is_empty() || text.len() > MAX_TEXT {
+        return Err(format!("A message needs 1 to {MAX_TEXT} characters."));
+    }
+    Ok(text)
+}
+
+fn preview_of(text: &str) -> String {
+    text.chars().take(PREVIEW_CHARS).collect()
+}
+
+/// Drop the first `n` items that `is` picks.
+fn drop_first<T>(items: &mut Vec<T>, mut n: usize, is: impl Fn(&T) -> bool) {
+    items.retain(|i| {
+        !is(i) || n == 0 || {
+            n -= 1;
+            false
+        }
+    });
+}
+
+/// The items once each, in order of first appearance.
+fn distinct<T: PartialEq + Clone>(items: impl Iterator<Item = T>) -> Vec<T> {
+    let mut out: Vec<T> = vec![];
+    for i in items {
+        if !out.contains(&i) {
+            out.push(i);
+        }
+    }
+    out
 }
 
 impl ChatBook {
@@ -291,10 +408,7 @@ impl ChatBook {
 
     /// Keep a message for `to` until it can be sent.
     pub fn enqueue(&mut self, to: Key, text: &str, now_ms: u64) -> Result<(), String> {
-        let text = text.trim();
-        if text.is_empty() || text.len() > MAX_TEXT {
-            return Err(format!("A message needs 1 to {MAX_TEXT} characters."));
-        }
+        let text = clean(text)?;
         if self.queued(&to).count() >= MAX_QUEUED {
             return Err("There are too many unsent messages to this person.".into());
         }
@@ -315,23 +429,14 @@ impl ChatBook {
     /// The people that have unsent messages.
     #[must_use]
     pub fn queue_targets(&self) -> Vec<Key> {
-        let mut t: Vec<Key> = vec![];
-        for q in &self.queue {
-            if !t.contains(&q.to) {
-                t.push(q.to);
-            }
-        }
-        t
+        distinct(self.queue.iter().map(|q| q.to))
     }
 
     /// The thread with `who` is read up to `ms` (never back).
     pub fn mark_read(&mut self, who: &Key, ms: u64) {
-        match self.read.iter_mut().find(|r| r.who == *who) {
-            Some(r) if r.ms >= ms => return,
-            Some(r) => r.ms = ms,
-            None => self.read.push(Read { who: *who, ms }),
+        if advance(&mut self.read, who, ms) {
+            self.save();
         }
-        self.save();
     }
 
     /// The thread with `who` is read up to the newest message of its conversations.
@@ -346,26 +451,15 @@ impl ChatBook {
         }
     }
 
-    /// A live conversation with a message after the last read. A history-only one cannot get a new message.
-    fn is_unread(&self, who: &Key, convos: &[&Convo]) -> bool {
-        let read = self.read.iter().find(|r| r.who == *who).map_or(0, |r| r.ms);
-        convos.iter().any(|c| !c.history_only && c.last_ms > read)
-    }
-
     /// The first `n` unsent messages to `who` were sent.
     pub fn unqueue(&mut self, who: &Key, n: usize) {
-        let mut left = n;
-        self.queue.retain(|q| {
-            q.to != *who || left == 0 || {
-                left -= 1;
-                false
-            }
-        });
+        drop_first(&mut self.queue, n, |q| q.to == *who);
         self.save();
     }
 
-    /// The chat list, newest first: one row per active member that we have a message with, or an unsent one.
-    /// A linked conversation without any message (it was only opened) is not listed.
+    /// The chat list, newest first: one row per active member that we have a message with, or an unsent one, and one
+    /// per group of the site (a group is listed as soon as it exists). A linked conversation without any message
+    /// (it was only opened) is not listed.
     #[must_use]
     pub fn threads_json(
         &self,
@@ -403,18 +497,248 @@ impl ChatBook {
                 let row = json!({
                     "key": hex::encode(who),
                     "name": names.get(who),
-                    "preview": preview.chars().take(PREVIEW_CHARS).collect::<String>(),
+                    "preview": preview_of(&preview),
                     "last_ms": last_ms,
                     "queued": self.queued(who).count(),
                     "history_only": !mine.is_empty() && mine.iter().all(|c| c.history_only),
                     "has_address": self.latest(who).is_some(),
-                    "unread": self.is_unread(who, &mine),
+                    "unread": unread(&self.read, who, &mine),
                 });
                 Some((last_ms, row))
             })
+            .chain(self.group_rows(convos))
             .collect();
         rows.sort_by_key(|r| std::cmp::Reverse(r.0));
         rows.into_iter().map(|r| r.1).collect()
+    }
+
+    // ---- groups ----
+
+    /// Our address in the chat module, from the last announce.
+    #[must_use]
+    pub fn my_addr(&self) -> Option<&str> {
+        self.mine.as_ref().map(|(_, a)| a.as_str())
+    }
+
+    #[must_use]
+    pub fn is_group(&self, convo: &str) -> bool {
+        self.groups.iter().any(|g| g == convo)
+    }
+
+    /// `convo` is a group that we made: it is ours, and `who` are to be added when their address is known.
+    pub fn start_group(&mut self, convo: &str, who: &[Key]) {
+        if !self.is_group(convo) {
+            self.groups.push(convo.to_owned());
+        }
+        for w in who {
+            self.want(convo, *w);
+        }
+        self.save();
+    }
+
+    /// Keep `who` to be added to `convo`, once.
+    pub fn want(&mut self, convo: &str, who: Key) {
+        if !self
+            .invites
+            .iter()
+            .any(|i| i.convo == convo && i.who == who)
+        {
+            self.invites.push(Invite {
+                convo: convo.to_owned(),
+                who,
+            });
+            self.save();
+        }
+    }
+
+    /// The members still to be added to `convo`.
+    pub fn waiting<'a>(&'a self, convo: &'a str) -> impl Iterator<Item = &'a Key> + 'a {
+        self.invites
+            .iter()
+            .filter(move |i| i.convo == convo)
+            .map(|i| &i.who)
+    }
+
+    /// `who` was handed to the module to be added to `convo`.
+    pub fn invited(&mut self, convo: &str, who: &Key) {
+        self.invites.retain(|i| i.convo != convo || i.who != *who);
+        self.save();
+    }
+
+    /// The members to add now: `(group, member, their newest address)`. An invite to a member who is no longer
+    /// active, or to a group that is not live any more (from before a restart), is forgotten. An invite whose
+    /// address has not arrived stays.
+    pub fn due_invites(&mut self, members: &[Key], live: &[Convo]) -> Vec<(String, Key, String)> {
+        let kept = self.invites.len();
+        self.invites.retain(|i| {
+            members.contains(&i.who) && live.iter().any(|c| c.id == i.convo && !c.history_only)
+        });
+        if self.invites.len() != kept {
+            self.save();
+        }
+        self.invites
+            .iter()
+            .filter_map(|i| Some((i.convo.clone(), i.who, self.latest(&i.who)?.to_owned())))
+            .collect()
+    }
+
+    /// We looked at the roster of `convo`. A group that we did not know is ours when a member of the site that we
+    /// have an address for is in it. Gives true when a message can go in now: the roster has not changed for
+    /// `SETTLE_MS` (a member that was just added needs that time to join, and a message sent before is lost to
+    /// them), and somebody else is in the group or nobody is being added.
+    pub fn group_seen(
+        &mut self,
+        convo: &str,
+        roster: &[Member],
+        members: &[Key],
+        me: &Key,
+        now: u64,
+    ) -> bool {
+        if !self.is_group(convo) {
+            let ours = roster
+                .iter()
+                .filter_map(|m| self.who_of(&m.address))
+                .any(|w| w != *me && members.contains(&w));
+            if !ours {
+                return false;
+            }
+            self.groups.push(convo.to_owned());
+            self.save();
+        }
+        let pending = roster.iter().filter(|m| m.pending).count();
+        let sig = (roster.len() - pending, pending);
+        let since = match self.rosters.get(convo) {
+            Some(&(inn, out, at)) if (inn, out) == sig => at,
+            _ => now,
+        };
+        self.rosters.insert(convo.to_owned(), (sig.0, sig.1, since));
+        let alone = sig.0 <= 1 && (pending > 0 || self.waiting(convo).next().is_some());
+        !alone && now.saturating_sub(since) >= SETTLE_MS
+    }
+
+    /// The groups of the chat list: one row each, also when nothing was said in it.
+    fn group_rows<'a>(&'a self, convos: &'a [Convo]) -> impl Iterator<Item = (u64, Value)> + 'a {
+        self.groups.iter().filter_map(move |id| {
+            let c = convos.iter().find(|c| c.id == *id)?;
+            let (preview, last_ms) = match self.queued_group(id).last() {
+                Some(q) => (format!("Not sent yet: {}", q.text), q.ts_ms),
+                None => (c.preview.clone().unwrap_or_default(), c.last_ms),
+            };
+            let (members, pending, _) = self.rosters.get(id).copied().unwrap_or_default();
+            let row = json!({
+                "key": id,
+                "group": true,
+                "name": c.name.as_deref().unwrap_or("Group"),
+                "members": members,
+                "pending": pending,
+                "preview": preview_of(&preview),
+                "last_ms": last_ms,
+                "queued": self.queued_group(id).count(),
+                "history_only": c.history_only,
+                "has_address": true,
+                "unread": unread(&self.group_read, id, &[c]),
+            });
+            Some((last_ms, row))
+        })
+    }
+
+    /// The members of `convo` for the screen: those in the group, those the group has not committed, and those
+    /// that wait for their chat address. `key` is the member's key, or the address when we do not know whose it is.
+    #[must_use]
+    pub fn roster_json(
+        &self,
+        convo: &str,
+        roster: &[Member],
+        names: &BTreeMap<Key, String>,
+    ) -> Vec<Value> {
+        let mine = self.my_addr();
+        let known = |who: Option<Key>, key: &str, pending: bool, me: bool| json!({ "key": who.map_or_else(|| key.to_owned(), hex::encode), "name": who.and_then(|w| names.get(&w)), "me": me, "pending": pending });
+        let inn = roster.iter().map(|m| {
+            known(
+                self.who_of(&m.address),
+                &m.address,
+                m.pending,
+                mine == Some(m.address.as_str()),
+            )
+        });
+        let waiting = self
+            .waiting(convo)
+            .map(|w| known(Some(*w), "", true, false));
+        inn.chain(waiting).collect()
+    }
+
+    /// Keep a message for the group `convo` until it can be sent.
+    pub fn enqueue_group(&mut self, convo: &str, text: &str, now_ms: u64) -> Result<(), String> {
+        let text = clean(text)?;
+        if self.queued_group(convo).count() >= MAX_QUEUED {
+            return Err("There are too many unsent messages to this group.".into());
+        }
+        self.group_queue.push(GroupQueued {
+            convo: convo.to_owned(),
+            text: text.to_owned(),
+            ts_ms: now_ms,
+        });
+        self.save();
+        Ok(())
+    }
+
+    /// The unsent messages to the group `convo`, oldest first.
+    pub fn queued_group<'a>(
+        &'a self,
+        convo: &'a str,
+    ) -> impl Iterator<Item = &'a GroupQueued> + 'a {
+        self.group_queue.iter().filter(move |q| q.convo == convo)
+    }
+
+    /// The groups that have unsent messages.
+    #[must_use]
+    pub fn group_targets(&self) -> Vec<String> {
+        distinct(self.group_queue.iter().map(|q| q.convo.clone()))
+    }
+
+    /// The first `n` unsent messages to `convo` were sent.
+    pub fn unqueue_group(&mut self, convo: &str, n: usize) {
+        drop_first(&mut self.group_queue, n, |q| q.convo == convo);
+        self.save();
+    }
+
+    /// The group `convo` is read up to `ms` (never back).
+    pub fn mark_group_read_at(&mut self, convo: &str, ms: u64) {
+        if advance(&mut self.group_read, &convo.to_owned(), ms) {
+            self.save();
+        }
+    }
+
+    /// The group `convo` is read up to its newest message.
+    pub fn mark_group_read(&mut self, convo: &str, convos: &[Convo]) {
+        if let Some(c) = convos.iter().find(|c| c.id == convo) {
+            self.mark_group_read_at(convo, c.last_ms);
+        }
+    }
+
+    /// The messages of the group `convo`, oldest first, then the unsent ones. Each message that came in names its
+    /// sender (`sender_name`, and `sender_key`: the member's key, or the address when no member announced it).
+    #[must_use]
+    pub fn group_thread(
+        &self,
+        msgs: Vec<Msg>,
+        queued: &[&GroupQueued],
+        names: &BTreeMap<Key, String>,
+        old: bool,
+    ) -> Vec<Value> {
+        let rows = msgs
+            .into_iter()
+            .map(|m| {
+                let mut r = row(m.from_self, &m.content, m.timestamp_ms, old, false);
+                if let Some(addr) = m.sender.as_deref().filter(|_| !m.from_self) {
+                    let who = self.who_of(addr);
+                    r["sender_key"] = json!(who.map_or_else(|| addr.to_owned(), hex::encode));
+                    r["sender_name"] = json!(who.and_then(|w| names.get(&w)));
+                }
+                (m.timestamp_ms, r)
+            })
+            .collect();
+        ordered(rows, queued.iter().map(|q| (q.ts_ms, q.text.as_str())))
     }
 }
 
@@ -662,6 +986,7 @@ mod tests {
             message_count: 0,
             history_only: false,
             kind: "direct".into(),
+            name: None,
         }];
         let list = |b: &ChatBook| b.threads_json(&empty, &BTreeMap::new(), &[a, me], &me);
         assert_eq!(list(&mine).as_array().unwrap().len(), 0);
@@ -683,6 +1008,7 @@ mod tests {
             message_count: 1,
             history_only,
             kind: "direct".into(),
+            name: None,
         };
         let convos = [
             convo("c1", NOW, true),
@@ -732,6 +1058,7 @@ mod tests {
             message_count: 0,
             history_only,
             kind: "direct".into(),
+            name: None,
         };
         let unread = |b: &ChatBook, convos: &[Convo]| {
             b.threads_json(convos, &BTreeMap::new(), &[a, me], &me)[0]["unread"].clone()
@@ -761,6 +1088,276 @@ mod tests {
             unread(&mine, &live),
             json!(false),
             "the mark never goes back"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn group_convo(id: &str, name: &str, last_ms: u64, history_only: bool) -> Convo {
+        Convo {
+            id: id.into(),
+            last_ms,
+            preview: Some("hello all".into()),
+            message_count: u64::from(last_ms > 0),
+            history_only,
+            kind: "group".into(),
+            name: Some(name.into()),
+        }
+    }
+
+    fn roster(addrs: &[(&str, bool)]) -> Vec<Member> {
+        addrs
+            .iter()
+            .map(|(a, pending)| Member {
+                address: (*a).into(),
+                pending: *pending,
+            })
+            .collect()
+    }
+
+    /// A book that knows the chat address of `who` (as announced on the site channel).
+    fn knows(b: &mut ChatBook, seed: u8, addr: &str, members: &[Key]) -> Key {
+        let (k, who) = person(seed);
+        let m = addr_msg(&mut book(), &k, addr, NOW).unwrap();
+        b.on_addr(&SITE, &m, members);
+        who
+    }
+
+    #[test]
+    fn a_group_is_listed_at_once_with_its_name_and_member_count_and_only_when_it_is_ours() {
+        let ((_, a), (_, b), (_, me)) = (person(1), person(3), person(2));
+        let mut mine = book();
+        mine.start_group("g1", &[a, b]);
+        let convos = [
+            group_convo("g1", "Book club", 0, false),
+            group_convo("not-ours", "Other app", NOW, false),
+        ];
+        let list = |bk: &ChatBook| bk.threads_json(&convos, &BTreeMap::new(), &[a, b, me], &me);
+        let rows = list(&mine);
+        let rows = rows.as_array().unwrap();
+        assert_eq!(
+            rows.len(),
+            1,
+            "a new group shows without any message; a group of another app does not"
+        );
+        assert_eq!(
+            (
+                rows[0]["key"].as_str(),
+                rows[0]["group"].clone(),
+                rows[0]["name"].as_str()
+            ),
+            (Some("g1"), json!(true), Some("Book club"))
+        );
+        let ours = roster(&[("me", false), ("addr-a", false), ("addr-b", true)]);
+        mine.group_seen("g1", &ours, &[a, b, me], &me, NOW);
+        let rows = list(&mine);
+        assert_eq!(
+            (rows[0]["members"].clone(), rows[0]["pending"].clone()),
+            (json!(2), json!(1))
+        );
+        assert!(mine.is_group("g1") && !mine.is_group("not-ours"));
+    }
+
+    #[test]
+    fn a_group_that_someone_made_is_ours_once_a_member_we_know_is_in_it() {
+        let ((_, a), (_, me)) = (person(1), person(2));
+        let mut mine = book();
+        knows(&mut mine, 1, "addr-a", &[a, me]);
+        let with = |who: &str| roster(&[(who, false), ("me", false)]);
+        assert!(!mine.group_seen("g", &with("stranger"), &[a, me], &me, NOW));
+        assert!(!mine.is_group("g"), "nobody of the site is in it");
+        mine.group_seen("g", &with("addr-a"), &[me], &me, NOW);
+        assert!(
+            !mine.is_group("g"),
+            "a member who left the site does not count"
+        );
+        mine.group_seen("g", &with("addr-a"), &[a, me], &me, NOW);
+        assert!(mine.is_group("g"));
+    }
+
+    #[test]
+    fn a_member_is_added_once_and_goes_in_only_when_their_address_is_known_and_the_group_is_live() {
+        let ((_, me), (_, c)) = (person(2), person(5));
+        let mut mine = book();
+        let a = knows(&mut mine, 1, "addr-a", &[person(1).1, me, c]);
+        let all = [a, c, me];
+        mine.start_group("g1", &[a, c]);
+        mine.want("g1", a); // asked twice
+        let live = [group_convo("g1", "Club", 0, false)];
+        let due = mine.due_invites(&all, &live);
+        assert_eq!(
+            due,
+            vec![("g1".to_owned(), a, "addr-a".to_owned())],
+            "c has no address yet, so c waits"
+        );
+        assert_eq!(mine.waiting("g1").count(), 2);
+        mine.invited("g1", &a);
+        assert!(mine.due_invites(&all, &live).is_empty());
+        assert_eq!(mine.waiting("g1").collect::<Vec<_>>(), [&c]);
+        assert!(
+            mine.due_invites(&[a, me], &live).is_empty(),
+            "a member who left the site is dropped"
+        );
+        assert_eq!(mine.waiting("g1").count(), 0);
+        mine.want("g1", a);
+        assert!(
+            mine.due_invites(&all, &[group_convo("g1", "Club", 0, true)])
+                .is_empty(),
+            "a group from before a restart cannot take members"
+        );
+        assert_eq!(mine.waiting("g1").count(), 0);
+    }
+
+    #[test]
+    fn nothing_is_sent_into_a_group_until_its_members_had_time_to_join_and_what_waits_is_kept() {
+        let (_, me) = person(2);
+        let mut mine = book();
+        mine.start_group("g1", &[person(1).1]);
+        let alone = roster(&[("me", false)]);
+        assert!(
+            !mine.group_seen("g1", &alone, &[me], &me, NOW),
+            "only me, and an invite is waiting"
+        );
+        let joined = roster(&[("me", false), ("addr-a", false)]);
+        assert!(
+            !mine.group_seen("g1", &joined, &[me], &me, NOW + 1),
+            "the roster just changed"
+        );
+        assert!(
+            !mine.group_seen("g1", &joined, &[me], &me, NOW + SETTLE_MS),
+            "a new member was added {} ms ago",
+            SETTLE_MS - 1
+        );
+        assert!(mine.group_seen("g1", &joined, &[me], &me, NOW + 1 + SETTLE_MS));
+        mine.enqueue_group("g1", " hi ", NOW).unwrap();
+        assert!(mine.enqueue_group("g1", "  ", NOW).is_err());
+        assert_eq!(
+            mine.queued_group("g1")
+                .map(|q| q.text.as_str())
+                .collect::<Vec<_>>(),
+            ["hi"]
+        );
+        assert_eq!(mine.group_targets(), ["g1"]);
+        mine.unqueue_group("g1", 1);
+        assert!(mine.group_targets().is_empty());
+    }
+
+    #[test]
+    fn a_group_message_shows_who_sent_it_by_the_address_book_and_a_short_key_when_unknown() {
+        let (_, me) = person(2);
+        let mut mine = book();
+        let a = knows(&mut mine, 1, "addr-asha-0123456789", &[person(1).1, me]);
+        let names = BTreeMap::from([(a, "Asha".to_string())]);
+        let msg = |from_self, text: &str, ts, sender: Option<&str>| Msg {
+            from_self,
+            content: text.into(),
+            timestamp_ms: ts,
+            sender: sender.map(Into::into),
+        };
+        let unsent = GroupQueued {
+            convo: "g1".into(),
+            text: "later".into(),
+            ts_ms: 40,
+        };
+        let rows = mine.group_thread(
+            vec![
+                msg(false, "from a stranger", 30, Some("addr-stranger-99")),
+                msg(true, "mine", 20, None),
+                msg(false, "from Asha", 10, Some("addr-asha-0123456789")),
+            ],
+            &[&unsent],
+            &names,
+            false,
+        );
+        let text: Vec<_> = rows
+            .iter()
+            .map(|r| r["content"].as_str().unwrap())
+            .collect();
+        assert_eq!(text, ["from Asha", "mine", "from a stranger", "later"]);
+        assert_eq!(
+            (
+                rows[0]["sender_name"].as_str(),
+                rows[0]["sender_key"].as_str()
+            ),
+            (Some("Asha"), Some(hex::encode(a).as_str()))
+        );
+        assert_eq!(
+            (
+                rows[2]["sender_name"].clone(),
+                rows[2]["sender_key"].as_str()
+            ),
+            (Value::Null, Some("addr-stranger-99"))
+        );
+        assert!(
+            rows[1]["sender_key"].is_null(),
+            "our own message has no sender"
+        );
+        assert_eq!(rows[3]["queued"], true);
+    }
+
+    #[test]
+    fn the_members_of_a_group_show_names_us_and_who_still_waits_and_unread_is_kept_per_group() {
+        let dir = std::env::temp_dir().join(format!("pukaar-chat-group-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (_, me) = person(2);
+        let mut mine = ChatBook::load(&dir, SITE);
+        let a = knows(&mut mine, 1, "addr-a", &[person(1).1, me]);
+        mine.announce(&person(2).0, &SITE, "addr-me", NOW);
+        let c = person(5).1;
+        mine.start_group("g1", &[c]);
+        let names = BTreeMap::from([(a, "Asha".to_string())]);
+        let members = mine.roster_json(
+            "g1",
+            &roster(&[("addr-me", false), ("addr-a", true), ("addr-x", false)]),
+            &names,
+        );
+        let view: Vec<_> = members
+            .iter()
+            .map(|m| {
+                (
+                    m["name"].as_str().unwrap_or(""),
+                    m["me"].as_bool().unwrap(),
+                    m["pending"].as_bool().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            view,
+            [
+                ("", true, false),
+                ("Asha", false, true),
+                ("", false, false),
+                ("", false, true)
+            ],
+            "the last one waits for an address"
+        );
+        let convos = |last_ms, old| [group_convo("g1", "Club", last_ms, old)];
+        let unread = |b: &ChatBook, c: &[Convo]| {
+            b.threads_json(c, &BTreeMap::new(), &[a, c_key(), me], &me)[0]["unread"].clone()
+        };
+        fn c_key() -> Key {
+            person(5).1
+        }
+        assert_eq!(
+            unread(&mine, &convos(NOW, false)),
+            json!(true),
+            "never read"
+        );
+        mine.mark_group_read("g1", &convos(NOW, false));
+        assert_eq!(unread(&mine, &convos(NOW, false)), json!(false));
+        assert_eq!(
+            unread(&mine, &convos(NOW + 1, false)),
+            json!(true),
+            "a newer message"
+        );
+        assert_eq!(
+            unread(&ChatBook::load(&dir, SITE), &convos(NOW, false)),
+            json!(false),
+            "the mark is kept in the file, with the group"
+        );
+        assert_eq!(
+            unread(&mine, &convos(NOW + 9, true)),
+            json!(false),
+            "a group from before a restart is never unread"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
