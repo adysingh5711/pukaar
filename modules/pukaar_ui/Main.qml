@@ -4167,18 +4167,13 @@ Item {
                     readonly property var st: link.status || ({})
                     readonly property string problem: root.chat.problem || ""   // the chat module did not answer the list
                     readonly property var others: root.members.filter(function (m) { return m.key !== root.me.key })
-                    // the chats first, then the members that we have no chat with yet
-                    readonly property var rows: {
-                        var has = {}
-                        var chats = threads.map(function (t) { has[t.key] = true; return Object.assign({ group: "Chats" }, t) })
-                        var fresh = others.filter(function (m) { return !has[m.key] }).map(function (m) {
-                            return { group: "Start a chat", key: m.key, name: m.name, last_ms: 0, queued: 0,
-                                     preview: known.indexOf(m.key) >= 0 ? "No messages yet" : "Chat address has not arrived yet" }
-                        })
-                        return chats.concat(fresh)
+                    // Only people with a sent, received or waiting message are listed. A new chat is empty until one exists.
+                    property bool picking: false          // the New chat picker replaces the chat list
+                    readonly property var picks: {
+                        var q = picker.text.trim().toLowerCase()
+                        return others.filter(function (m) { return !q || (m.name || "").toLowerCase().indexOf(q) >= 0 || m.key.indexOf(q) === 0 })
                     }
-                    readonly property var current: rows.filter(function (r) { return r.key === root.chatWith })[0] || null
-                    readonly property string currentName: current ? root.who(current.key, current.name) : ""
+                    readonly property string currentName: root.who(root.chatWith, (others.filter(function (m) { return m.key === root.chatWith })[0] || ({})).name)
                     readonly property bool hasAddress: known.indexOf(root.chatWith) >= 0
                     readonly property bool twoPane: width >= 640
                     readonly property bool online: st.delivery === "online"
@@ -4203,6 +4198,14 @@ Item {
                         visible: !!chatPage.link.starting || (!!chatPage.link.ok && chatPage.st.delivery === "initialising")
                         text: "Chat is starting. Messages that you write now are kept and sent when it is ready."
                     }
+                    Connections { target: root; function onChatWithChanged() { chatPage.picking = false; picker.clear() } }   // a chat opened from People
+                    ActionButton {
+                        visible: chatPage.twoPane || root.chatWith === ""
+                        text: chatPage.picking ? "Cancel" : "New chat"
+                        iconName: chatPage.picking ? "" : "cmt"
+                        Accessible.name: chatPage.picking ? "Cancel the new chat" : "Start a new chat"
+                        onClicked: { chatPage.picking = !chatPage.picking; picker.clear() }
+                    }
                     RowLayout {
                         Layout.fillWidth: true; Layout.fillHeight: true; Layout.bottomMargin: 16
                         spacing: 8
@@ -4215,13 +4218,8 @@ Item {
                                 id: chatList
                                 anchors { fill: parent; margins: 1 }
                                 clip: true
-                                model: chatPage.rows
-                                section.property: "group"
-                                section.delegate: Label {
-                                    required property string section
-                                    leftPadding: 12; topPadding: 10; bottomPadding: 4
-                                    text: section; font.pointSize: root.smallSize; font.weight: Font.DemiBold; color: root.t.muted
-                                }
+                                visible: !chatPage.picking
+                                model: chatPage.threads
                                 delegate: ItemDelegate {
                                     id: chatRow
                                     required property var modelData
@@ -4241,6 +4239,36 @@ Item {
                                     }
                                 }
                             }
+                            Blank {
+                                visible: !chatPage.picking && chatPage.threads.length === 0
+                                anchors.centerIn: parent; width: parent.width - 32
+                                icon: "cmt"; title: "No chats yet"; text: "Press New chat to write to a member."
+                            }
+                            ColumnLayout {   // the New chat picker: the other active members
+                                visible: chatPage.picking
+                                anchors { fill: parent; margins: 8 }
+                                spacing: 8
+                                FramedField { id: picker; Layout.fillWidth: true; placeholderText: "Search by name"; Accessible.name: "Search members" }
+                                ListView {
+                                    Layout.fillWidth: true; Layout.fillHeight: true
+                                    clip: true
+                                    model: chatPage.picks
+                                    delegate: ItemDelegate {
+                                        id: pick
+                                        required property var modelData
+                                        width: ListView.view.width
+                                        Accessible.name: "Start a chat with " + root.who(modelData.key, modelData.name)
+                                        onClicked: root.openChat(modelData.key)
+                                        background: Rectangle { color: pick.hovered ? root.t.hover : "transparent" }
+                                        contentItem: Label { elide: Text.ElideRight; textFormat: Text.PlainText; color: root.t.fg; text: root.who(pick.modelData.key, pick.modelData.name) }
+                                    }
+                                    Label {
+                                        visible: parent.count === 0
+                                        anchors.centerIn: parent; color: root.t.muted
+                                        text: picker.text ? "Nobody matches." : "There is nobody else to message yet."
+                                    }
+                                }
+                            }
                         }
                         Frame {   // the open thread and the send box
                             visible: chatPage.twoPane || root.chatWith !== ""
@@ -4249,7 +4277,7 @@ Item {
                             Blank {
                                 visible: root.chatWith === ""
                                 anchors.centerIn: parent; width: parent.width - 32
-                                icon: "cmt"; title: "Pick a person"; text: "Choose a chat on the left, or a member to start one."
+                                icon: "cmt"; title: "Pick a person"; text: "Choose a chat on the left, or press New chat."
                             }
                             ColumnLayout {
                                 visible: root.chatWith !== ""
