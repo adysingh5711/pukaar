@@ -15,6 +15,7 @@ modules/pukaar_core/modules/
 /dist/
 # local agent config, not part of the repo
 .claude/
+.agents/
 # cargo-fuzz local outputs (Task 14), never commit fuzzer-generated inputs
 modules/pukaar_core/rust-lib/logic/fuzz/corpus/
 modules/pukaar_core/rust-lib/logic/fuzz/artifacts/
@@ -30,6 +31,7 @@ graphify-out/manifest.json
 graphify-out/graph.html
 graphify-out/.graphify_*
 graphify-out/cost.json
+graphify-out/2026-*
 
 bug-report/
 
@@ -61,3 +63,16 @@ UX-AUDIT.md
 design/
 
 Grant.md 
+
+# Local section notes (not for the repo)
+pukar-sections.md
+blockchain-port-possibility.md
+adi-guru-meet1.md
+port-plan.md 
+
+# pukaar_sites guest ELF (built by programs/pukaar_sites/build.sh)
+programs/pukaar_sites/*.bin
+pow-lez-bridge.md
+1-1-meet.md
+chat-module.md
+other-user-profile.md
