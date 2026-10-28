@@ -29,7 +29,13 @@ const BACKUP_SCHEMA: &str = "pukaar.meetings/1";
 pub const MAX_MEET_BYTES: usize = 1024;
 /// The busy ranges that one summary holds: the next ones in time.
 pub const MAX_RANGES: usize = 64;
+/// The longest meeting that a received proposal may have (the invitee side stays as it was).
 const MAX_LEN_MS: u64 = 24 * 3_600_000;
+/// The length a member can choose for a new meeting, in minutes.
+pub const MIN_LEN_MIN: u64 = 5;
+pub const MAX_LEN_MIN: u64 = 8 * 60;
+/// The longest reminder lead time, in minutes. 0 means no reminder.
+pub const MAX_LEAD_MIN: u64 = 24 * 60;
 /// Meetings with one person that we keep, so one member cannot fill the disk.
 const MAX_PER_PEER: usize = 200;
 /// Slots start on this step (UTC).
@@ -38,6 +44,20 @@ pub const DEFAULT_LEAD_MIN: u64 = 10;
 
 /// A start and an end, in ms.
 pub type Range = (u64, u64);
+
+/// A meeting length in ms, or the refusal in plain words. Takes ms so a start and end pair can use it too.
+pub fn check_len_ms(len: u64) -> Result<u64, String> {
+    if (MIN_LEN_MIN * 60_000..=MAX_LEN_MIN * 60_000).contains(&len) {
+        Ok(len)
+    } else {
+        Err(format!("A meeting must last {MIN_LEN_MIN} to {MAX_LEN_MIN} minutes."))
+    }
+}
+
+/// A reminder lead time in minutes (0 = none), or the refusal in plain words.
+pub fn check_lead_min(min: u64) -> Result<u64, String> {
+    if min <= MAX_LEAD_MIN { Ok(min) } else { Err(format!("The reminder time must be 0 to {MAX_LEAD_MIN} minutes.")) }
+}
 
 fn hit(a: Range, b: Range) -> bool {
     a.0 < b.1 && b.0 < a.1
@@ -343,9 +363,13 @@ impl Meetings {
     /// Propose a meeting with `to`. It does not matter if the time clashes: the app only warns.
     /// Gives the id and the messages to send.
     pub fn propose(&mut self, key: &SigningKey, site: &Key, to: Key, range: Range, now: u64) -> Result<(Key, Vec<Vec<u8>>), String> {
-        if range.1 <= now {
-            return Err("That time is already over.".into());
+        if range.1 <= range.0 {
+            return Err("The meeting must end after it starts.".into());
         }
+        if range.0 < now {
+            return Err("That start time has already passed.".into());
+        }
+        check_len_ms(range.1 - range.0)?;
         let me = key.verifying_key().to_bytes();
         let stamp = [&me[..], &to, &range.0.to_be_bytes(), &range.1.to_be_bytes(), &now.to_be_bytes()].concat();
         let id = sha256(&[MEET_DOMAIN, &stamp].concat());
@@ -429,9 +453,9 @@ impl Meetings {
         own.chain((self.busy_ts > 0).then(|| self.busy_wire(key, site, now))).collect()
     }
 
-    /// Change what we share and how early the reminder comes. Gives the summary to send when sharing changed.
+    /// Change what we share and how early the reminder comes (0 = no reminder). Gives the summary to send when sharing changed.
     pub fn set_prefs(&mut self, key: &SigningKey, share: bool, lead_min: u64, now: u64) -> Vec<Vec<u8>> {
-        self.lead_min = lead_min.clamp(1, 24 * 60);
+        self.lead_min = lead_min.min(MAX_LEAD_MIN);
         let changed = self.share != share;
         self.share = share;
         self.save();
@@ -663,6 +687,38 @@ mod tests {
         b.deliver(off, &mut a, &members);
         assert!(a.m.peer_ranges(&b.pk()).is_none());
         assert!(a.m.slots_json(&a.pk(), &b.pk(), NOW, HOUR, &BTreeMap::new(), NOW)["shared"] == false);
+    }
+
+    #[test]
+    fn a_custom_time_and_length_is_checked_and_carries_its_own_start_and_end() {
+        let (mut a, mut b, members) = pair();
+        let min = 60_000;
+        let to = b.pk();
+        let try_range = |a: &mut Person, r: Range| a.m.propose(&a.key, &SITE, to, r, NOW).map(|_| ());
+        // An odd start (not on the half hour) and a custom length of 45 minutes pass.
+        let (start, end) = (NOW + 7 * min, NOW + 52 * min);
+        let (id, out) = a.m.propose(&a.key, &SITE, b.pk(), (start, end), NOW).unwrap();
+        a.deliver(out, &mut b, &members);
+        // The invitee learns the start and end from the proposal itself.
+        assert_eq!(b.m.find(&id).unwrap().range(), (start, end));
+        assert!(try_range(&mut a, (NOW + HOUR, NOW + HOUR + 5 * min)).is_ok());
+        assert!(try_range(&mut a, (NOW + 2 * HOUR, NOW + 10 * HOUR)).is_ok());
+        assert!(try_range(&mut a, (NOW + HOUR, NOW + HOUR + 4 * min)).is_err());
+        assert!(try_range(&mut a, (NOW + HOUR, NOW + 9 * HOUR + min)).is_err());
+        assert!(try_range(&mut a, (NOW + HOUR, NOW + HOUR)).is_err());
+        assert!(try_range(&mut a, (NOW + 2 * HOUR, NOW + HOUR)).is_err());
+        assert!(try_range(&mut a, (NOW - min, NOW + HOUR)).is_err());
+        assert!(check_len_ms(4 * min).is_err() && check_len_ms(481 * min).is_err() && check_len_ms(45 * min) == Ok(45 * min));
+    }
+
+    #[test]
+    fn a_custom_reminder_lead_is_kept_zero_means_none_and_too_long_is_refused() {
+        let mut a = Person::new(1);
+        a.m.set_prefs(&a.key, true, 45, NOW);
+        assert_eq!(a.m.list_json(&a.pk(), &BTreeMap::new(), NOW)["lead_min"], 45);
+        a.m.set_prefs(&a.key, true, 0, NOW);
+        assert_eq!(a.m.list_json(&a.pk(), &BTreeMap::new(), NOW)["lead_min"], 0);
+        assert!(check_lead_min(MAX_LEAD_MIN + 1).is_err() && check_lead_min(MAX_LEAD_MIN) == Ok(MAX_LEAD_MIN));
     }
 
     #[test]

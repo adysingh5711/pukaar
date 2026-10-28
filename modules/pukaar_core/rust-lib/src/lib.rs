@@ -15,7 +15,7 @@ use pukaar_logic::fetch::{sync_once, Fetched, Store as _};
 use pukaar_logic::identity;
 use pukaar_logic::node::{action_body, parse_id, Node};
 use pukaar_logic::lezkey::{derive_lez_secret, lez_account_id};
-use pukaar_logic::meet::{Act, Meetings};
+use pukaar_logic::meet::{check_lead_min, check_len_ms, Act, Meetings};
 use pukaar_logic::persist::{self, SiteFile as _};
 use pukaar_logic::profile;
 use pukaar_logic::ops::{self, Place, SuperKind};
@@ -149,7 +149,7 @@ pub trait PukaarCoreModule: Send + 'static {
     fn meet_list(&mut self) -> String;
     /// The free/busy view for a meeting with `other_hex`: our busy ranges, theirs when they share, and the
     /// next 7 days of slots of `len_min` minutes from `from_ms`: `{"shared","mine","theirs","slots"}`.
-    fn meet_slots(&mut self, other_hex: String, from_ms: f64, len_min: i64) -> String;
+    fn meet_slots(&mut self, other_hex: String, from_ms: f64, len_min: f64) -> String;
     /// What a time runs into, in our calendar and in the summary of `other_hex`: `{"mine":[…],"theirs":[…]}`.
     fn meet_check(&mut self, other_hex: String, start_ms: f64, end_ms: f64) -> String;
     /// Saves a proposal and sends it, sealed, to `other_hex`: `{"ok":true,"id":hex}`. A clash does not stop it.
@@ -161,7 +161,7 @@ pub trait PukaarCoreModule: Send + 'static {
     /// Either side cancels a confirmed meeting, or the requester cancels a proposal. `ok` or `error: …`.
     fn meet_cancel(&mut self, id_hex: String) -> String;
     /// Share the free/busy summary with the site (1) or with nobody (0), and the reminder lead time in minutes.
-    fn meet_prefs(&mut self, share: i64, lead_min: i64) -> String;
+    fn meet_prefs(&mut self, share: i64, lead_min: f64) -> String;
     /// Encrypts the meeting history and uploads it to Storage in the background. `meet_list().backup` shows the result.
     fn meet_backup(&mut self) -> String;
     /// Reads the CID of your backup from the chain (a typed `cid` is used only when the chain has none), downloads it
@@ -982,6 +982,15 @@ fn ms_arg(v: f64) -> Result<u64, String> {
     }
 }
 
+/// A whole number of minutes. Like the times, a number from the page can arrive as a float.
+fn mins_arg(v: f64) -> Result<u64, String> {
+    if v.is_finite() && v >= 0.0 && v.fract() == 0.0 {
+        Ok(v as u64)
+    } else {
+        Err("Minutes must be a whole number.".to_string())
+    }
+}
+
 /// The id of a meeting, or one of its answers: accept, decline or cancel.
 fn meet_answer(id_hex: &str, act: Act) -> String {
     meet_send(|node, m| Ok(((), m.answer(&node.key, &node.store.site, &key_arg(id_hex)?, act, now_ms())?)), |()| "ok".into())
@@ -1337,9 +1346,9 @@ impl PukaarCoreModule for Pukaar {
         .unwrap_or_else(err)
     }
 
-    fn meet_slots(&mut self, other_hex: String, from_ms: f64, len_min: i64) -> String {
+    fn meet_slots(&mut self, other_hex: String, from_ms: f64, len_min: f64) -> String {
         let r = (|| {
-            let (other, from, len) = (key_arg(&other_hex)?, ms_arg(from_ms)?, len_min.clamp(5, 24 * 60) as u64 * 60_000);
+            let (other, from, len) = (key_arg(&other_hex)?, ms_arg(from_ms)?, check_len_ms(mins_arg(len_min)?.saturating_mul(60_000))?);
             meet(|node, m, _| Ok(m.slots_json(&node.me(), &other, from, len, &node.names, now_ms()).to_string()))
         })();
         r.unwrap_or_else(err)
@@ -1379,8 +1388,8 @@ impl PukaarCoreModule for Pukaar {
         meet_answer(&id_hex, Act::Cancel)
     }
 
-    fn meet_prefs(&mut self, share: i64, lead_min: i64) -> String {
-        meet_send(|node, m| Ok(((), m.set_prefs(&node.key, share != 0, u64::try_from(lead_min).unwrap_or(0), now_ms()))), |()| "ok".into())
+    fn meet_prefs(&mut self, share: i64, lead_min: f64) -> String {
+        meet_send(|node, m| Ok(((), m.set_prefs(&node.key, share != 0, check_lead_min(mins_arg(lead_min)?)?, now_ms()))), |()| "ok".into())
     }
 
     fn meet_backup(&mut self) -> String {
@@ -1492,6 +1501,12 @@ pub extern "Rust" fn logos_module_install() {
 #[cfg(test)]
 mod tests {
     use super::ms_arg;
+
+    #[test]
+    fn mins_arg_takes_a_whole_float_and_refuses_the_rest() {
+        assert_eq!(mins_arg(45.0), Ok(45));
+        assert!(mins_arg(4.5).is_err() && mins_arg(-1.0).is_err() && mins_arg(f64::NAN).is_err());
+    }
 
     #[test]
     fn ms_arg_takes_a_whole_float_past_32_bits() {
