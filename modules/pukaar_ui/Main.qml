@@ -40,7 +40,7 @@ Item {
     readonly property bool removed: inSite && !approved && !!me.revoked && me.pending !== "requested" && !pending.some(function (p) { return p.key === me.key })
     readonly property bool unapproved: !approved && !removed      // no role, and it is ours to ask for: read the fingerprint at the kiosk
     // Joined and not yet granted a role: our request is out (my_identity.pending), or the site data is here.
-    readonly property bool awaitingApproval: inSite && unapproved && me.pending !== "declined" && (me.pending === "requested" || !!info.name)
+    readonly property bool awaitingApproval: inSite && unapproved && me.pending !== "declined" && me.pending !== "expired" && (me.pending === "requested" || !!info.name)
     readonly property bool isAdmin: me.role === "Admin"
     readonly property bool isSuper: !!me.super_admin     // changes admins; at most two per site
     readonly property int superCount: (info.super_admins || []).length
@@ -440,6 +440,10 @@ Item {
     property real now: Date.now() / 1000
     Timer { interval: 60000; running: true; repeat: true; onTriggered: root.now = Date.now() / 1000 }
     function hoursSince(ts) { return Math.floor((now - ts) / 3600) }
+    // When a join request stops being valid, in plain words (the core gives `until`, unix seconds, and `left`).
+    function validLine(until, left) {
+        return "Your request is valid until " + when(until, "ddd d MMM, HH:mm") + (left ? " (" + left + " left)" : "") + ". After that you can send it again."
+    }
     function dur(h) { return h < 48 ? h + " h" : Math.floor(h / 24) + " d" }
     function age(ts) { var h = hoursSince(ts); return h < 1 ? "just now" : dur(h) + " ago" }
     // The card's red lines. SLA flags are computed by the core (site SLA hours); this only words them.
@@ -2213,10 +2217,20 @@ Item {
             icon: "res"
             lead: "Request sent."
             text: (root.me.pending === "requested" ? "Your request is with the admin. " : "")
+                  + (root.me.request_until ? root.validLine(root.me.request_until, root.me.request_left) + " " : "")
                   + "Waiting for the admin to approve you. Your fingerprint: " + (root.me.fingerprint || "")
                   + ". Read it aloud at the kiosk. After approval you can report faults, confirm fixes and comment."
             buttonText: "Cancel and send again"
             buttonEffect: "This sends a new request with your profile. The old request stays valid until it expires."
+            onActivated: root.run("join_again", [])
+        }
+        Flash {   // the day of the request is over: no admin sees it any more, and it can be sent again
+            visible: root.inSite && root.unapproved && root.me.pending === "expired"
+            icon: "warn"
+            lead: "Request expired."
+            text: "Your request was valid until " + (root.me.request_until ? root.when(root.me.request_until, "ddd d MMM, HH:mm") : "the end of its day")
+                  + ". No admin can approve it now. You can send it again."
+            buttonText: "Send again"
             onActivated: root.run("join_again", [])
         }
         Flash {   // an admin turned the request down: it can be sent again, also when no admin is online
@@ -2839,6 +2853,10 @@ Item {
                                     }
                                 }
                                 WriteMark { account: pendingRow.modelData.account || ""; queued: !!pendingRow.modelData.queued }
+                                Help {
+                                    visible: !!pendingRow.modelData.valid_until
+                                    text: "Valid until " + root.when(pendingRow.modelData.valid_until, "ddd d MMM, HH:mm") + (pendingRow.modelData.left ? " (" + pendingRow.modelData.left + " left)." : ".")
+                                }
                                 ConfirmButton {   // free: nothing goes to the chain
                                     text: "Reject"; name: "Reject: " + pendingRow.person; confirmText: "Confirm reject"
                                     effect: "They can send the request again."

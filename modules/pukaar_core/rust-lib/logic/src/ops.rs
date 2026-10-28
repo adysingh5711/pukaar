@@ -426,6 +426,28 @@ pub fn request_waits(node: &Node, q: &Queue) -> bool {
     nonce > used
 }
 
+/// How long a join request still holds, in plain words: "45 min", "23 h", "2 d". Empty when it is over.
+pub fn left_text(until_ms: u64, now_ms: u64) -> String {
+    let s = until_ms.saturating_sub(now_ms) / 1000;
+    match s {
+        0 => String::new(),
+        1..=3599 => format!("{} min", s.div_ceil(60)),
+        3600..=172_799 => format!("{} h", s / 3600),
+        _ => format!("{} d", s / 86_400),
+    }
+}
+
+/// `my_identity.pending` of a user without a role, and when our request stops being valid (ms): "requested"
+/// while it holds, "expired" after `valid_until` (an admin no longer sees it: the user sends it again),
+/// "declined" when an admin turned it down. `None` when no request is out.
+pub fn my_pending(node: &Node, q: &Queue, now_ms: u64) -> Option<(&'static str, Option<u64>)> {
+    if request_waits(node, q) {
+        let until = q.mine_valid_until();
+        return Some((if until.is_some_and(|u| u <= now_ms) { "expired" } else { "requested" }, until));
+    }
+    q.declined.then_some(("declined", None))
+}
+
 /// Tell the chain cache about the accounts that the queue knows, so it reads them again after a restart.
 pub fn remember_known(node: &Node, q: &Queue) {
     let Some(c) = &node.chain else { return };
@@ -465,6 +487,8 @@ pub fn pending_rows(node: &Node, q: &Queue, now: u64) -> Vec<Value> {
                 "key": hex::encode(b.pukaar_ed_pk), "fingerprint": fingerprint(&b.pukaar_ed_pk),
                 "name": node.names.get(&b.pukaar_ed_pk), "account": b58(&b.user_account),
                 "queued": q.is_queued_approval(&node.store.site, &b.pukaar_ed_pk),
+                // When the request stops being valid (unix seconds) and the time left in words.
+                "valid_until": b.valid_until_ms / 1000, "left": left_text(b.valid_until_ms, now),
             })
         })
         .collect()

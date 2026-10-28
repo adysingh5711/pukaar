@@ -469,6 +469,11 @@ impl Queue {
         self.mine.as_deref().and_then(body_of).map(|b| b.nonce)
     }
 
+    /// When the join request that we sent stops being valid (ms).
+    pub fn mine_valid_until(&self) -> Option<u64> {
+        self.mine.as_deref().and_then(body_of).map(|b| b.valid_until_ms)
+    }
+
     /// The accounts that this node wrote about (any entry) or got a join request from. After a restart
     /// they bring back a member that no keyring lists any more, for example a removed one.
     pub fn accounts(&self, site: &Key) -> Vec<AccountId> {

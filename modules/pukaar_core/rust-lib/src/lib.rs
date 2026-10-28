@@ -257,9 +257,9 @@ fn place(req: Place) -> String {
     id_reply(queued(|node, q, _| ops::place_edit(node, q, req, now_ms())))
 }
 
-/// The notice methods stay off until the time rules (O7).
+/// The notice methods are not part of this version (O7). The UI offers no notice, and the answer is plain.
 fn later() -> String {
-    err("available after a later phase")
+    err("Notices are not part of this version.")
 }
 
 const NO_SITE: &str = "no site yet: create or join one";
@@ -891,11 +891,16 @@ impl PukaarCoreModule for Pukaar {
         flush();
         let mut v = read_with_queue(|n, q| {
             let mut v: serde_json::Value = serde_json::from_str(&n.identity_json()).ok()?;
-            // A join request of ours is out, and no admin has approved it yet.
-            if v["role"].is_null() && ops::request_waits(n, q) {
-                v["pending"] = "requested".into();
-            } else if v["role"].is_null() && q.declined {
-                v["pending"] = "declined".into(); // an admin turned the request down: the user can send it again
+            // A join request of ours is out ("requested", or "expired" after its day), or an admin turned it
+            // down ("declined"). The user can send it again in the last two cases.
+            if v["role"].is_null() {
+                if let Some((pending, until)) = ops::my_pending(n, q, now_ms()) {
+                    v["pending"] = pending.into();
+                    if let Some(u) = until {
+                        v["request_until"] = (u / 1000).into();
+                        v["request_left"] = ops::left_text(u, now_ms()).into();
+                    }
+                }
             }
             // The one LEZ account of the user (base58): it pays the fee of every write, so the user funds it.
             v["account"] = pukaar_logic::chain::b58(&n.account).into();

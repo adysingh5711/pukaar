@@ -103,8 +103,41 @@ fn an_approval_needs_the_request_and_the_profile() {
     // A double click replaces, it does not stack.
     grant(&n, &mut q, &hexk(4), "resident", "", NOW).unwrap();
     assert_eq!(q.held(&site).count(), 1);
+    // Each row says when the request stops being valid, and the time left.
+    let row = &pending_rows(&n, &q, NOW + 3_600_000)[0];
+    assert_eq!((row["valid_until"].as_u64(), row["left"].as_str()), (Some((NOW + REQUEST_VALID_MS) / 1000), Some("23 h")));
     // The request expires: it is gone from the list and cannot be granted.
     assert!(pending_rows(&n, &q, NOW + REQUEST_VALID_MS + 1).is_empty());
+}
+
+#[test]
+fn the_time_left_of_a_request_is_in_plain_words() {
+    let h = 3_600_000;
+    let cases = [(0, ""), (999, ""), (1_000, "1 min"), (61_000, "2 min"), (59 * 60_000, "59 min"), (h, "1 h"), (23 * h + 59 * 60_000, "23 h"), (47 * h, "47 h"), (48 * h, "2 d"), (REQUEST_VALID_MS, "24 h")];
+    for (left, want) in cases {
+        assert_eq!(left_text(5_000 + left, 5_000), want, "{left} ms left");
+    }
+    assert_eq!(left_text(1_000, 5_000), "", "past");
+}
+
+#[test]
+fn my_identity_says_requested_then_expired_then_requested_again() {
+    let w = World::new();
+    let mut q = locked(&w);
+    let n = node(&w, 2);
+    assert_eq!(my_pending(&n, &q, NOW), None, "no request sent");
+    let until = NOW + REQUEST_VALID_MS;
+    join(&n, &mut q, NOW);
+    assert_eq!(my_pending(&n, &q, NOW), Some(("requested", Some(until))));
+    assert_eq!(my_pending(&n, &q, until - 1), Some(("requested", Some(until))), "valid to the last ms");
+    // Past `valid_until` the request is expired: the UI says so and offers to send it again.
+    assert_eq!(my_pending(&n, &q, until + 1), Some(("expired", Some(until))));
+    // Send again: a new request with a new day.
+    join_again(&n, &mut q, until + 1).unwrap();
+    assert_eq!(my_pending(&n, &q, until + 1), Some(("requested", Some(until + 1 + REQUEST_VALID_MS))));
+    // A decline wins over nothing: no request, declined.
+    (q.mine, q.declined) = (None, true);
+    assert_eq!(my_pending(&n, &q, until + 1), Some(("declined", None)));
 }
 
 #[test]
