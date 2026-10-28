@@ -7,11 +7,11 @@
 //! doubles removed. The signer pays the fee (O1: the derived account is the one account).
 //! The caller reads the chain clock and the claimed rank, and gives them in `Ctx`.
 
-use crate::chain::{checkpoint_pda, member_pda, site_pda, AccountId};
+use crate::chain::{backup_pda, checkpoint_pda, member_pda, site_pda, AccountId};
 use crate::event::{sha256, Location, OTHER_LOCATION};
 use crate::fetch::{Details, Places, DETAILS_SCHEMA};
 use pukaar_sites_rules::{
-    seed, AnchorIx, ApproveBatchIx, ApproveEntry, ApproveItem, Auth, CheckpointRecord, CreateSite, CreateSiteIx, GateConfig, Instruction,
+    seed, AnchorIx, ApproveBatchIx, SetBackupIx, ApproveEntry, ApproveItem, Auth, CheckpointRecord, CreateSite, CreateSiteIx, GateConfig, Instruction,
     JoinBody, Pointer, ProfileItem, Rank, RevokeBatchIx, RevokeItem, Role, RoleItem, SetPointerIx, SetProfileBatchIx, SetRoleBatchIx,
     SuperAdminIx, JOIN_BODY_LEN,
 };
@@ -184,6 +184,13 @@ pub fn anchor(ctx: &Ctx, heads_root: [u8; 32], n_events: u64, signer_pk: [u8; 32
     let record = CheckpointRecord { site_id: ctx.site_id, heads_root, n_events, signer_pk, sig_r: [0; 32], sig_s: [0; 32] };
     let pdas = vec![member_pda(&ctx.program, &ctx.site_id, &ctx.signer), checkpoint_pda(&ctx.program, &ctx.site_id, &heads_root)];
     ctx.tx(Instruction::Anchor(AnchorIx { record, now_ms: ctx.now_ms }), pdas)
+}
+
+/// `set_backup`: our own backup pointer, made by the first backup and overwritten by the next. Any active member may.
+pub fn set_backup(ctx: &Ctx, cid: &str, sha256: [u8; 32]) -> Tx {
+    let ix = SetBackupIx { site_id: ctx.site_id, now_ms: ctx.now_ms, cid: cid.into(), sha256 };
+    let pdas = vec![member_pda(&ctx.program, &ctx.site_id, &ctx.signer), backup_pda(&ctx.program, &ctx.site_id, &ctx.signer)];
+    ctx.tx(Instruction::SetBackup(ix), pdas)
 }
 
 /// The SHA-256 of a revoke reason: the chain keeps it, `details.json` keeps the text.
@@ -514,6 +521,17 @@ mod tests {
         let twice = ok.replace("}],", "},{\"code\":\"W-01\",\"label\":\"x\",\"group\":\"y\"}],");
         assert!(genesis(&twice).unwrap_err().contains("used twice"));
         assert!(genesis("{}").is_err() && genesis("nope").is_err());
+    }
+
+    #[test]
+    fn set_backup_is_the_runner_instruction_on_our_member_and_our_pointer() {
+        let t = set_backup(&ctx(), "cidone", [3; 32]);
+        let ix = SetBackupIx { site_id: SITE, now_ms: 1_700_000_000_000, cid: "cidone".into(), sha256: [3; 32] };
+        assert_eq!(t.ix, by_hand(Instruction::SetBackup(ix)));
+        assert_eq!(t.ix[0], 13, "the index of the instruction never moves");
+        // signer, clock, then our Member and our pointer (the order of the runner)
+        assert_eq!((t.accounts[2].id, t.accounts[3].id), (member_pda(&PROGRAM, &SITE, &SIGNER), backup_pda(&PROGRAM, &SITE, &SIGNER)));
+        assert_eq!(t.accounts.len(), 4);
     }
 
     #[test]

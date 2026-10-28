@@ -1,10 +1,10 @@
 //! The queue against a fake chain, a fake Storage and a fake wallet. Nothing is sent anywhere.
 
 use super::*;
-use crate::chain::{b58, checkpoint_pda, AccountId};
+use crate::chain::{b58, backup_pda, checkpoint_pda, AccountId};
 use crate::fetch::Fetched;
 use crate::rpc::{claim_of, Chain, CLAIM_MARGIN_MS};
-use pukaar_sites_rules::{apply_create, CheckpointRecord, CreateSite, GateConfig, Instruction};
+use pukaar_sites_rules::{apply_create, BackupPointer, CheckpointRecord, CreateSite, GateConfig, Instruction};
 use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
@@ -1022,6 +1022,53 @@ fn an_anchor_waits_for_funds_like_any_write() {
     w.rpc.fund(&acct(1), 1);
     let id = w.push(anchor_intent(3), St::Queued, vec![]);
     w.tick(T0);
+    assert_eq!((w.entry(id).state, w.sent().len()), (St::Queued, 0));
+    assert!(w.entry(id).reason.unwrap().starts_with(SHORT_OF_FUNDS));
+}
+
+// ---- backup pointer ----
+
+fn backup_record(w: &World, cid: &str, sha: u8, rev: u64) -> BackupPointer {
+    BackupPointer { version: 1, site_id: w.site_id(), user: acct(1), cid: cid.into(), sha256: [sha; 32], rev, updated_at_ms: 1 }
+}
+
+fn backup_intent(cid: &str) -> Intent {
+    Intent::Backup { cid: cid.into(), sha: [4; 32] }
+}
+
+#[test]
+fn a_backup_overwrites_the_pointer_and_is_done_when_the_chain_shows_the_new_cid() {
+    let w = World::new();
+    let at = backup_pda(&PROGRAM, &w.site_id(), &acct(1));
+    // An older backup is on the chain: the new CID still goes out, to the same account.
+    w.rpc.put(&at, &PROGRAM, backup_record(&w, "oldcid", 3, 1).encode());
+    let id = w.push(backup_intent("newcid"), St::Queued, vec![]);
+    w.tick(T0);
+    assert_eq!((w.entry(id).state, w.sent().len()), (St::Sent, 1));
+    let ctx = Ctx { program: PROGRAM, site_id: w.site_id(), signer: acct(1), claimed: Rank::SuperAdmin, now_ms: claim_of(CLOCK_NOW) };
+    let tx = &w.sent()[0];
+    assert_eq!(*tx, writes::set_backup(&ctx, "newcid", [4; 32]));
+    assert_eq!((tx.accounts[2].id, tx.accounts[3].id), (member_pda(&PROGRAM, &w.site_id(), &acct(1)), at));
+    assert!(w.out.lock().unwrap().is_empty(), "a backup pointer is for us alone: nothing goes to the site");
+    w.tick(T0 + 5_000);
+    assert_eq!(w.entry(id).state, St::Sent, "the chain still shows the old CID");
+    w.rpc.put(&at, &PROGRAM, backup_record(&w, "newcid", 4, 2).encode());
+    w.tick(T0 + 10_000);
+    assert_eq!(w.entry(id).state, St::Done);
+    assert_eq!(w.q.lock().unwrap().status_json(&w.site_id(), T0)["writes"][0]["kind"], "backup");
+    assert_eq!(w.q.lock().unwrap().backup_write(&w.site_id()).map(Entry::state_name), Some("included"));
+}
+
+#[test]
+fn a_backup_that_the_chain_holds_already_is_not_sent_and_waits_for_funds_like_any_write() {
+    let w = World::new();
+    w.rpc.put(&backup_pda(&PROGRAM, &w.site_id(), &acct(1)), &PROGRAM, backup_record(&w, "samecid", 4, 1).encode());
+    let id = w.push(backup_intent("samecid"), St::Queued, vec![]);
+    w.tick(T0);
+    assert_eq!((w.entry(id).state, w.sent().len()), (St::Done, 0));
+    w.rpc.fund(&acct(1), 1);
+    let id = w.push(backup_intent("othercid"), St::Queued, vec![]);
+    w.tick(T0 + 5_000);
     assert_eq!((w.entry(id).state, w.sent().len()), (St::Queued, 0));
     assert!(w.entry(id).reason.unwrap().starts_with(SHORT_OF_FUNDS));
 }

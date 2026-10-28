@@ -333,7 +333,7 @@ Item {
                                         confirming: "confirming", included: "on the chain", rejected: "rejected" })
     readonly property var kindText: ({ create_site: "Site", approve: "Approval", set_role: "Role change", revoke: "Revoke",
         set_profile: "Profile update", staff_name: "Staff name", profile: "Profile", set_details: "Site details", set_places: "Places change",
-        super_admin_add: "Super admin change", super_admin_remove: "Super admin change", super_admin_transfer: "Super admin change", anchor: "Anchor" })
+        super_admin_add: "Super admin change", super_admin_remove: "Super admin change", super_admin_transfer: "Super admin change", anchor: "Anchor", backup: "Meetings backup" })
     // The held kinds that Send changes sends: approvals, role changes, revokes and profile refreshes.
     readonly property var batchKinds: ["approve", "set_role", "revoke", "set_profile"]
     readonly property var writes: chain.writes || []
@@ -4014,22 +4014,28 @@ Item {
                         Label { text: "before. The reminder shows only while this app is open."; color: root.t.muted; font.pointSize: root.smallSize }
                     }
                     Heading { text: "Backup" }
-                    Help { text: "A backup puts your meeting history in Storage. The file is encrypted with a key from your account. Meeting details never go on the chain. If Storage is not reachable, the backup is skipped and your local history stays." }
+                    Help { text: "A backup puts your meeting history in Storage. The file is encrypted with a key from your account. Then its CID goes into one record of yours on the chain, so a new device can find it. The chain write costs a small fee. Meeting details never go on the chain. If Storage is not reachable, the backup is skipped and your local history stays." }
                     Flash { visible: !!meetPage.backup.error; err: true; text: meetPage.backup.error || "" }
                     Note {
                         visible: !!meetPage.backup.cid
                         text: "Last backup: " + root.when((meetPage.backup.at_ms || 0) / 1000, "d MMM HH:mm") + ". CID: " + (meetPage.backup.cid || "")
                         font.family: "monospace"
                     }
+                    Note {
+                        visible: !!meetPage.backup.pointer
+                        text: !meetPage.backup.pointer ? "" : meetPage.backup.pointer.state === "rejected" ? "The pointer on the chain was rejected: " + (meetPage.backup.pointer.reason || "")
+                            : meetPage.backup.pointer.state === "included" ? "The pointer is on the chain. A new device can find this backup."
+                            : "The pointer is going to the chain (" + (root.stateText[meetPage.backup.pointer.state] || meetPage.backup.pointer.state) + ")."
+                    }
                     ActionButton {
                         text: meetPage.backup.job ? "Working: " + meetPage.backup.job + "…" : "Back up now"
                         allowed: !meetPage.backup.job
                         onClicked: root.run("meet_backup", [])
                     }
-                    Help { text: "A pointer on the chain, so a new device can find the backup alone, is not part of this version. Keep the CID. On a new device, paste it here." }
+                    Help { text: "Restore reads the CID of your latest backup from the chain and downloads it from Storage. Type a CID only if the chain has no pointer of yours." }
                     LabelledField {
                         id: restoreCid
-                        label: "Restore a backup"; placeholder: "CID of the backup"; mono: true
+                        label: "Restore your backup"; placeholder: "CID (only if the chain has none)"; mono: true
                         buttonText: "Restore"
                         missing: meetPage.backup.job ? "A backup or a restore is running." : ""
                         onSubmitted: root.run("meet_restore", [restoreCid.text])

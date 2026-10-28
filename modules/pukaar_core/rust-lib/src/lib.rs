@@ -8,7 +8,7 @@
 mod wallet;
 mod storage;
 
-use pukaar_logic::event::{Body, Event, Key, SigningKey};
+use pukaar_logic::event::{sha256, Body, Event, Key, SigningKey};
 use pukaar_logic::fetch::{sync_once, Fetched, Store as _};
 use pukaar_logic::identity;
 use pukaar_logic::node::{action_body, parse_id, Node};
@@ -162,7 +162,8 @@ pub trait PukaarCoreModule: Send + 'static {
     fn meet_prefs(&mut self, share: i64, lead_min: i64) -> String;
     /// Encrypts the meeting history and uploads it to Storage in the background. `meet_list().backup` shows the result.
     fn meet_backup(&mut self) -> String;
-    /// Downloads the backup with this CID from Storage in the background and adds the meetings that are missing.
+    /// Reads the CID of your backup from the chain (a typed `cid` is used only when the chain has none), downloads it
+    /// from Storage in the background and adds the meetings that are missing.
     fn meet_restore(&mut self, cid: String) -> String;
     fn on_context_ready(&mut self, _ctx: &RustModuleContext) {}
 }
@@ -853,11 +854,17 @@ fn queued<T>(f: impl FnOnce(&Node, &mut Queue, &mut Vec<Vec<u8>>) -> Result<T, S
 /// Run `f` on the node and the meetings of its site. A method that sends puts the wire messages on the
 /// outbox. It never waits for Delivery or Storage.
 fn meet<T>(f: impl FnOnce(&Node, &mut Meetings, &mut Vec<Vec<u8>>) -> Result<T, String>) -> Result<T, String> {
+    meet_q(|node, m, _, outbox| f(node, m, outbox))
+}
+
+/// `meet` with the write queue too, for the backup that ends in a chain write.
+fn meet_q<T>(f: impl FnOnce(&Node, &mut Meetings, &mut Queue, &mut Vec<Vec<u8>>) -> Result<T, String>) -> Result<T, String> {
     let mut g = SHARED.lock().unwrap();
     let sh = g.as_mut().ok_or("module not ready")?;
     let node = sh.node.as_mut().ok_or(NO_SITE)?;
     node.apply_fetched();
-    f(node, sh.meets.for_site(&sh.dir, &node.store.site), &mut sh.outbox)
+    let mut q = sh.queue.lock().unwrap();
+    f(node, sh.meets.for_site(&sh.dir, &node.store.site), &mut q, &mut sh.outbox)
 }
 
 /// `meet` for a method that sends: the reply is `ok`, or what `reply` makes of the result.
@@ -876,7 +883,7 @@ fn meet_send<T>(f: impl FnOnce(&Node, &mut Meetings) -> Result<(T, Vec<Vec<u8>>)
 fn meet_job<R: Send + 'static, W: FnOnce(&'static storage::LogosStore) -> R + Send + 'static>(
     label: &'static str,
     start: impl FnOnce(&Node, &Meetings) -> Result<W, String>,
-    finish: impl FnOnce(&Node, &mut Meetings, R) + Send + 'static,
+    finish: impl FnOnce(&Node, &mut Meetings, &mut Queue, R) + Send + 'static,
 ) -> String {
     let r = meet(|node, m, _| {
         if m.job.is_some() {
@@ -889,8 +896,8 @@ fn meet_job<R: Send + 'static, W: FnOnce(&'static storage::LogosStore) -> R + Se
     r.map(|(dir, work)| {
         std::thread::spawn(move || {
             let result = work(store(dir));
-            let _ = meet(|node, m, _| {
-                finish(node, m, result);
+            let _ = meet_q(|node, m, q, _| {
+                finish(node, m, q, result);
                 Ok(())
             });
         });
@@ -1253,7 +1260,13 @@ impl PukaarCoreModule for Pukaar {
     }
 
     fn meet_list(&mut self) -> String {
-        meet(|node, m, _| Ok(m.list_json(&node.me(), &node.names, now_ms()).to_string())).unwrap_or_else(err)
+        meet_q(|node, m, q, _| {
+            let mut v = m.list_json(&node.me(), &node.names, now_ms());
+            // The pointer on the chain: the state of the newest write, so the page can say that the backup is findable.
+            v["backup"]["pointer"] = q.backup_write(&node.store.site).map_or(serde_json::Value::Null, |e| serde_json::json!({ "state": e.state_name(), "reason": e.reason }));
+            Ok(v.to_string())
+        })
+        .unwrap_or_else(err)
     }
 
     fn meet_slots(&mut self, other_hex: String, from_ms: i64, len_min: i64) -> String {
@@ -1307,21 +1320,32 @@ impl PukaarCoreModule for Pukaar {
             "backing up",
             |node, m| {
                 let bytes = m.backup_bytes(&node.key);
-                Ok(move |s: &'static storage::LogosStore| s.upload(&bytes))
+                Ok(move |s: &'static storage::LogosStore| s.upload(&bytes).map(|cid| (cid, sha256(&bytes))))
             },
-            |_, m, r| m.backup_done(r, now_ms()),
+            |node, m, q, r| {
+                // The file is in Storage: its CID goes into our pointer record on the chain (a fee, once a backup).
+                let pointer = r.as_ref().ok().map(|(cid, sha)| ops::backup_push(node, q, cid, *sha, now_ms()));
+                m.backup_done(r.map(|(cid, _)| cid), now_ms());
+                if let Some(Err(why)) = pointer {
+                    m.job_error = Some(format!("The backup is in Storage, but its pointer was not queued for the chain: {why}"));
+                }
+            },
         )
     }
 
     fn meet_restore(&mut self, cid: String) -> String {
-        let cid = cid.trim().to_string();
-        if cid.is_empty() {
-            return err("Type the CID of the backup.");
-        }
         meet_job(
             "restoring",
-            |_, _| Ok(move |s: &'static storage::LogosStore| s.download(&cid)),
-            |node, m, r| m.restore_done(&node.key, r),
+            |node, _| {
+                let program = program_id().ok_or("PUKAAR_PROGRAM_ID is not a base58 account id")?;
+                let (site, me) = (node.store.site, node.account);
+                // The chain gives the CID; the typed one is read only when the chain has none. The chain read is slow: it runs on the thread.
+                Ok(move |s: &'static storage::LogosStore| {
+                    let src = ops::restore_source(&HttpRpc::new(&env_or("PUKAAR_LEZ_RPC", LEZ_RPC)), &program, &site, &me, &cid)?;
+                    s.download(&src.cid).and_then(|b| src.verify(b))
+                })
+            },
+            |node, m, _, r| m.restore_done(&node.key, r),
         )
     }
 

@@ -16,7 +16,7 @@
 //!   back before an entry is `Done`.
 //! - A failed send, a rejection or a timeout is never retried by the queue. The user acts again.
 
-use crate::chain::{checkpoint_pda, decode_checkpoint, decode_member, decode_site, member_pda, site_pda, AccountId};
+use crate::chain::{backup_pda, checkpoint_pda, decode_backup, decode_checkpoint, decode_member, decode_site, member_pda, site_pda, AccountId};
 use crate::event::{sha256, Key};
 use crate::fetch::{Details, Places, SharedFetched, Store};
 use crate::joinreq;
@@ -26,7 +26,7 @@ use crate::rpc::{balance, claim_ms, clock_ms, get_account, last_block, lez, Rpc,
 use crate::sync::{Wire, WriteKind};
 use crate::writes::{self, Ctx, PlaceOp, Pointed, SuperOp, Tx};
 use ed25519_dalek::SigningKey;
-use pukaar_sites_rules::{request_id, ApproveItem, CheckpointRecord, JoinBody, Member, MemberStatus, Pointer, ProfileItem, Rank, Role, Site, JOIN_BODY_LEN, JOIN_REQ_LEN};
+use pukaar_sites_rules::{request_id, ApproveItem, BackupPointer, CheckpointRecord, JoinBody, Member, MemberStatus, Pointer, ProfileItem, Rank, Role, Site, JOIN_BODY_LEN, JOIN_REQ_LEN};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -138,6 +138,9 @@ pub enum Intent {
     /// `anchor`: the Merkle root over everyone's heads, written once for each (site, root). No file. `signer` is
     /// our Pukaar key (the member record must hold it). It costs a fee of its own (about 523,304 lepta).
     Anchor { heads_root: Key, n_events: u64, signer: Key },
+    /// `set_backup`: the CID of our encrypted meetings backup goes in our own pointer record, which each backup
+    /// overwrites. The file is in Storage already. No one else needs to see it, so no `Wire::ChainPending`.
+    Backup { cid: String, sha: Key },
     /// O5: an admin signs the name of a staff member. Blob: the profile file. The pointer goes to the chain
     /// at once with `set_profile_batch`, one item.
     StaffName { user: AccountId, key: Key, name: String, version: u64 },
@@ -158,7 +161,7 @@ pub enum Intent {
 }
 
 impl Intent {
-    /// The kind that a `Wire::ChainPending` names. `None` for a job that is no chain write.
+    /// The kind that a `Wire::ChainPending` names. `None` for a job that is no chain write, and for a backup pointer.
     pub fn kind(&self) -> Option<WriteKind> {
         use Intent::*;
         Some(match self {
@@ -170,7 +173,7 @@ impl Intent {
             Details { .. } | Places { .. } => WriteKind::SetSite,
             SuperAdd(_) | SuperRemove(_) | SuperTransfer(_) => WriteKind::SuperAdmin,
             Anchor { .. } => WriteKind::Anchor,
-            Publish { .. } => return None,
+            Backup { .. } | Publish { .. } => return None,
         })
     }
 
@@ -189,6 +192,7 @@ impl Intent {
             SuperRemove(_) => "super_admin_remove",
             SuperTransfer(_) => "super_admin_transfer",
             Anchor { .. } => "anchor",
+            Backup { .. } => "backup",
             Publish { .. } => "profile",
         }
     }
@@ -254,6 +258,8 @@ impl Intent {
             SuperTransfer(t) => site.is_some_and(|s| s.is_super(t) && !s.is_super(me)),
             // The record of this root is on the chain (ours, or one of another member or device).
             Anchor { .. } => r.anchored.is_some(),
+            // Our pointer already holds this CID (a repeat of the send after a restart).
+            Backup { cid, .. } => r.backup.as_ref().is_some_and(|b| b.cid == *cid),
             Publish { .. } => false,
         }
     }
@@ -460,6 +466,11 @@ impl Queue {
         self.busy = false;
     }
 
+    /// The newest backup pointer write of `site`, for the Meetings page.
+    pub fn backup_write(&self, site: &Key) -> Option<&Entry> {
+        self.entries.iter().rev().find(|e| e.site == *site && matches!(e.intent, Intent::Backup { .. }))
+    }
+
     /// The writes that wait for `send_batch`.
     pub fn held(&self, site: &Key) -> impl Iterator<Item = &Entry> {
         let site = *site;
@@ -664,6 +675,8 @@ struct Reads {
     members: HashMap<AccountId, Member>,
     /// The checkpoint record of an `Anchor` entry, when the chain holds one. Read for that kind only.
     anchored: Option<CheckpointRecord>,
+    /// Our backup pointer record, when the chain holds one. Read for that kind only.
+    backup: Option<BackupPointer>,
 }
 
 fn read_site(env: &Env, site: &Key) -> Result<Option<Site>, String> {
@@ -693,7 +706,14 @@ fn reads(env: &Env, e: &Entry) -> Result<Reads, String> {
             anchored = Some(decode_checkpoint(&d)?);
         }
     }
-    Ok(Reads { site, members, anchored })
+    let mut backup = None;
+    if matches!(e.intent, Intent::Backup { .. }) {
+        let d = get_account(env.rpc, &env.program, &backup_pda(&env.program, &e.site, &env.me()))?;
+        if !d.is_empty() {
+            backup = Some(decode_backup(&d)?);
+        }
+    }
+    Ok(Reads { site, members, anchored, backup })
 }
 
 fn claimed(r: &Reads, me: &AccountId) -> Rank {
@@ -978,6 +998,7 @@ fn build(ctx: &Ctx, e: &Entry, r: &Reads) -> Result<Tx, String> {
         Intent::SuperRemove(t) => writes::super_admin(ctx, SuperOp::Remove, *t),
         Intent::SuperTransfer(t) => writes::super_admin(ctx, SuperOp::Transfer, *t),
         Intent::Anchor { heads_root, n_events, signer } => writes::anchor(ctx, *heads_root, *n_events, *signer),
+        Intent::Backup { cid, sha } => writes::set_backup(ctx, cid, *sha),
         Intent::Publish { .. } => return Err("a profile is no chain write".into()),
     })
 }

@@ -5,7 +5,7 @@
 //!
 //! Held writes (approvals, role changes, revokes) wait for `send_batch`. The others are queued at once.
 
-use crate::chain::{b58, checkpoint_pda, AccountId};
+use crate::chain::{b58, backup_pda, checkpoint_pda, decode_backup, AccountId};
 use crate::checkpoint::checkpoint_now;
 use crate::event::{Key, Location, MAX_TEXT};
 use crate::fetch::{is_staff, takes_announce};
@@ -351,6 +351,44 @@ pub fn last_anchor(node: &Node, q: &Queue, older_ts: u64) -> Option<Value> {
         "ts": a.at_ms / 1000, "block": a.block, "tx": a.tx, "by": hex::encode(node.me()), "by_name": node.names.get(&node.me()),
         "events_covered": a.n_events, "reproducible": true, "root": hex::encode(a.heads_root),
     }))
+}
+
+// ---- backup pointer ----
+
+/// Queue the pointer write for a backup that is in Storage already: any active member may. A newer backup goes
+/// behind an older open one, and the last one wins on the chain.
+pub fn backup_push(node: &Node, q: &mut Queue, cid: &str, sha: Key, now: u64) -> Result<u64, String> {
+    view(node)?.need(Action::Anchor, None)?; // the rule of `set_backup` is the one of `anchor`: any active member
+    Ok(q.push(node.store.site, Intent::Backup { cid: cid.into(), sha }, St::Queued, vec![], now))
+}
+
+/// The file that a restore asks Storage for, with the SHA-256 that the chain holds for it (none for a typed CID).
+#[derive(Debug, PartialEq, Eq)]
+pub struct BackupSource {
+    pub cid: String,
+    pub sha: Option<Key>,
+}
+
+impl BackupSource {
+    /// The downloaded bytes, when they are the ones that the chain points to.
+    pub fn verify(&self, bytes: Vec<u8>) -> Result<Vec<u8>, String> {
+        match self.sha {
+            Some(sha) if crate::event::sha256(&bytes) != sha => Err("The file in Storage does not match the SHA-256 on the chain.".into()),
+            _ => Ok(bytes),
+        }
+    }
+}
+
+/// The CID of our latest backup: the pointer on the chain first. A typed CID is the fallback when the chain holds
+/// no pointer or cannot be read.
+pub fn restore_source(rpc: &dyn Rpc, program: &AccountId, site: &Key, me: &AccountId, typed: &str) -> Result<BackupSource, String> {
+    let typed = typed.trim();
+    let fallback = |why: String| if typed.is_empty() { Err(why) } else { Ok(BackupSource { cid: typed.into(), sha: None }) };
+    match get_account(rpc, program, &backup_pda(program, site, me)).and_then(|d| if d.is_empty() { Ok(None) } else { decode_backup(&d).map(Some) }) {
+        Ok(Some(p)) => Ok(BackupSource { cid: p.cid, sha: Some(p.sha256) }),
+        Ok(None) => fallback("The chain holds no backup of yours yet, so there is no backup to restore. If you have a CID, type it.".into()),
+        Err(e) => fallback(format!("Could not read the chain to find your backup: {e}. If you have a CID, type it.")),
+    }
 }
 
 // ---- places ----

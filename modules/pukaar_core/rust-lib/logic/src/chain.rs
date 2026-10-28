@@ -3,7 +3,7 @@
 //! Pure functions, no network. Step 2.3 fetches JSON-RPC `getAccount` and hands the text to
 //! `shard_of`. The record layouts and the PDA seeds are the types of `pukaar_sites_rules`.
 
-use pukaar_sites_rules::{seed, CheckpointRecord, Effective, Member, Rank, Site, RECORD_VERSION};
+use pukaar_sites_rules::{seed, BackupPointer, CheckpointRecord, Effective, Member, Rank, Site, RECORD_VERSION};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
@@ -30,6 +30,11 @@ pub fn member_pda(program: &AccountId, site_id: &[u8; 32], user_account: &Accoun
 
 pub fn checkpoint_pda(program: &AccountId, site_id: &[u8; 32], heads_root: &[u8; 32]) -> AccountId {
     pda(program, &seed::checkpoint(site_id, heads_root))
+}
+
+/// The backup pointer of one (site, user): one fixed address, overwritten by each backup.
+pub fn backup_pda(program: &AccountId, site_id: &[u8; 32], user_account: &AccountId) -> AccountId {
+    pda(program, &seed::backup(site_id, user_account))
 }
 
 /// The base58 form of an account id, as the wallet and the RPC print it.
@@ -74,6 +79,11 @@ pub fn decode_member(data: &[u8]) -> Result<Member, String> {
 
 pub fn decode_checkpoint(data: &[u8]) -> Result<CheckpointRecord, String> {
     CheckpointRecord::decode(data).ok_or_else(|| "not a Checkpoint record".to_string())
+}
+
+pub fn decode_backup(data: &[u8]) -> Result<BackupPointer, String> {
+    let b = BackupPointer::decode(data).ok_or("not a Backup record")?;
+    check_version(b.version).map(|()| b)
 }
 
 /// The records of one site that the app has read: the `Site` and every `Member`.

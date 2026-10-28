@@ -981,3 +981,46 @@ fn a_private_profile_shows_other_members_the_name_and_role_only() {
     let me: Value = serde_json::from_str(&n.identity_json()).unwrap();
     assert_eq!((me["bio"].as_str(), me["private"].as_bool()), (Some("nurse"), Some(true)));
 }
+
+// ---- backup pointer ----
+
+fn pointer(w: &World, cid: &str) -> pukaar_sites_rules::BackupPointer {
+    pukaar_sites_rules::BackupPointer { version: 1, site_id: w.site_id(), user: acct(2), cid: cid.into(), sha256: [6; 32], rev: 1, updated_at_ms: 1 }
+}
+
+#[test]
+fn a_member_queues_a_backup_pointer_and_a_stranger_does_not() {
+    let w = World::new();
+    w.put_member(&w.member(2, Role::Resident));
+    let mut q = locked(&w);
+    let id = backup_push(&node(&w, 2), &mut q, "cidtwo", [6; 32], NOW).unwrap();
+    let e = q.entries.iter().find(|e| e.id == id).unwrap();
+    assert_eq!((e.state, &e.intent), (St::Queued, &Intent::Backup { cid: "cidtwo".into(), sha: [6; 32] }));
+    assert!(backup_push(&node(&w, 9), &mut q, "cidnine", [6; 32], NOW).unwrap_err().contains("not an approved member"));
+    assert_eq!(q.entries.len(), 1);
+}
+
+#[test]
+fn a_restore_takes_the_cid_from_the_chain_and_a_typed_cid_only_as_a_fallback() {
+    let w = World::new();
+    let at = crate::chain::backup_pda(&PROGRAM, &w.site_id(), &acct(2));
+    // Nothing on the chain: the typed CID is used, and without one the error says what to do.
+    let typed = restore_source(&*w.rpc, &PROGRAM, &w.site_id(), &acct(2), " typedcid ").unwrap();
+    assert_eq!((typed.cid.as_str(), typed.sha), ("typedcid", None));
+    assert!(restore_source(&*w.rpc, &PROGRAM, &w.site_id(), &acct(2), "").unwrap_err().contains("no backup"));
+    // The chain holds one: it wins over the typed CID, and its SHA-256 is kept.
+    w.rpc.put(&at, &PROGRAM, pointer(&w, "chaincid").encode());
+    let src = restore_source(&*w.rpc, &PROGRAM, &w.site_id(), &acct(2), "typedcid").unwrap();
+    assert_eq!((src.cid.as_str(), src.sha), ("chaincid", Some([6; 32])));
+    // The chain cannot be read: the typed CID still works.
+    assert_eq!(restore_source(&Offline, &PROGRAM, &w.site_id(), &acct(2), "typedcid").unwrap().cid, "typedcid");
+    assert!(restore_source(&Offline, &PROGRAM, &w.site_id(), &acct(2), "").unwrap_err().contains("Could not read the chain"));
+}
+
+#[test]
+fn a_file_that_does_not_match_the_chain_hash_is_refused() {
+    let src = BackupSource { cid: "c".into(), sha: Some(crate::event::sha256(b"good")) };
+    assert_eq!(src.verify(b"good".to_vec()), Ok(b"good".to_vec()));
+    assert!(src.verify(b"evil".to_vec()).unwrap_err().contains("does not match"));
+    assert_eq!(BackupSource { cid: "c".into(), sha: None }.verify(b"any".to_vec()), Ok(b"any".to_vec()));
+}
