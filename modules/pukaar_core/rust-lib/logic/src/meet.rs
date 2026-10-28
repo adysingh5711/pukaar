@@ -18,6 +18,7 @@ use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::Sha256;
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -36,6 +37,9 @@ pub const MIN_LEN_MIN: u64 = 5;
 pub const MAX_LEN_MIN: u64 = 8 * 60;
 /// The longest reminder lead time, in minutes. 0 means no reminder.
 pub const MAX_LEAD_MIN: u64 = 24 * 60;
+/// The longest description of a meeting. The byte cap keeps a sealed proposal under `MAX_MEET_BYTES` for any script.
+pub const MAX_DESC_CHARS: usize = 500;
+const MAX_DESC_BYTES: usize = 640;
 /// Meetings with one person that we keep, so one member cannot fill the disk.
 const MAX_PER_PEER: usize = 200;
 /// Slots start on this step (UTC).
@@ -59,6 +63,18 @@ pub fn check_lead_min(min: u64) -> Result<u64, String> {
     if min <= MAX_LEAD_MIN { Ok(min) } else { Err(format!("The reminder time must be 0 to {MAX_LEAD_MIN} minutes.")) }
 }
 
+/// A meeting description (plain text, may be empty), trimmed, or the refusal in plain words.
+pub fn check_desc(desc: &str) -> Result<&str, String> {
+    let d = desc.trim();
+    if d.chars().count() > MAX_DESC_CHARS || d.len() > MAX_DESC_BYTES {
+        Err(format!("The description can have up to {MAX_DESC_CHARS} characters."))
+    } else if d.chars().any(char::is_control) {
+        Err("The description cannot have control characters or line breaks.".into())
+    } else {
+        Ok(d)
+    }
+}
+
 fn hit(a: Range, b: Range) -> bool {
     a.0 < b.1 && b.0 < a.1
 }
@@ -69,6 +85,24 @@ pub enum Status {
     Confirmed,
     Declined,
     Cancelled,
+}
+
+/// What one person did to a meeting.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Did {
+    Proposed,
+    Accepted,
+    Declined,
+    Cancelled,
+}
+
+/// One entry of the history of a meeting: who did it, and when this device saw it (UTC ms).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Step {
+    pub who: Key,
+    pub did: Did,
+    pub at_ms: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -85,6 +119,12 @@ pub struct Meeting {
     /// The invitee's signed accept message (postcard of `Msg`): proof that the meeting happened.
     #[serde(default)]
     pub accept: Option<Vec<u8>>,
+    /// What the requester wrote about the meeting (plain text, may be empty).
+    #[serde(default)]
+    pub desc: String,
+    /// Who proposed, accepted, declined or cancelled, and when. Rows from before it existed have none: see `steps`.
+    #[serde(default)]
+    pub log: Vec<Step>,
 }
 
 impl Meeting {
@@ -94,6 +134,25 @@ impl Meeting {
 
     fn other(&self, me: &Key) -> Key {
         if self.requester == *me { self.invitee } else { self.requester }
+    }
+
+    /// The history of the meeting. A row saved before the log existed gets its actors from the status and
+    /// its fields, with the time 0 (unknown).
+    fn steps(&self) -> Cow<'_, [Step]> {
+        if !self.log.is_empty() {
+            return Cow::Borrowed(&self.log);
+        }
+        let step = |who, did| Step { who, did, at_ms: 0 };
+        let mut v = vec![step(self.requester, Did::Proposed)];
+        if self.accept.is_some() {
+            v.push(step(self.invitee, Did::Accepted));
+        }
+        match (self.status, self.cancelled_by) {
+            (Status::Declined, _) => v.push(step(self.invitee, Did::Declined)),
+            (Status::Cancelled, Some(who)) => v.push(step(who, Did::Cancelled)),
+            _ => {}
+        }
+        Cow::Owned(v)
     }
 
     /// The status the member sees: a proposal that nobody accepted before its end is "unaccepted".
@@ -114,6 +173,24 @@ pub enum Kind {
     Accept { id: Key },
     Decline { id: Key },
     Cancel { id: Key },
+    /// A proposal with a description. Added after the others, so older messages still read the same.
+    ProposeNote { id: Key, start_ms: u64, end_ms: u64, desc: String },
+}
+
+impl Kind {
+    /// A proposal: the old plain one when there is no description, so an older app can still read it.
+    fn propose(id: Key, start_ms: u64, end_ms: u64, desc: &str) -> Kind {
+        if desc.is_empty() { Kind::Propose { id, start_ms, end_ms } } else { Kind::ProposeNote { id, start_ms, end_ms, desc: desc.to_owned() } }
+    }
+
+    /// The id, start, end and description when this is a proposal of either form.
+    fn proposal(&self) -> Option<(&Key, u64, u64, &str)> {
+        match self {
+            Kind::Propose { id, start_ms, end_ms } => Some((id, *start_ms, *end_ms, "")),
+            Kind::ProposeNote { id, start_ms, end_ms, desc } => Some((id, *start_ms, *end_ms, desc)),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -303,35 +380,55 @@ impl Meetings {
 
     /// The one place where a message changes a meeting, ours or a peer's. `m` was checked for its
     /// signature. The reason of a refusal is plain text for the user.
-    fn apply(&mut self, m: &Msg) -> Result<(), &'static str> {
+    fn apply(&mut self, m: &Msg, now: u64) -> Result<(), &'static str> {
         let Body { from, to, kind } = &m.body;
-        if let Kind::Propose { id, start_ms, end_ms } = kind {
-            let ok = end_ms > start_ms && end_ms - start_ms <= MAX_LEN_MS && from != to;
+        let step = |did| Step { who: *from, did, at_ms: now };
+        if let Some((id, start_ms, end_ms, desc)) = kind.proposal() {
+            let ok = end_ms > start_ms && end_ms - start_ms <= MAX_LEN_MS && from != to && check_desc(desc).is_ok();
             if !ok || self.find(id).is_some() {
                 return Err("This meeting time is not valid.");
             }
             if self.list.iter().filter(|x| x.requester == *from || x.invitee == *from).count() >= MAX_PER_PEER {
                 return Err("There are too many meetings with this person.");
             }
-            self.list.push(Meeting { id: *id, requester: *from, invitee: *to, start_ms: *start_ms, end_ms: *end_ms, status: Status::Proposed, cancelled_by: None, accept: None });
+            self.list.push(Meeting {
+                id: *id,
+                requester: *from,
+                invitee: *to,
+                start_ms,
+                end_ms,
+                status: Status::Proposed,
+                cancelled_by: None,
+                accept: None,
+                desc: desc.to_owned(),
+                log: vec![step(Did::Proposed)],
+            });
             return Ok(());
         }
-        let (Kind::Accept { id } | Kind::Decline { id } | Kind::Cancel { id }) = kind else { unreachable!("propose is handled above") };
+        let (Kind::Accept { id } | Kind::Decline { id } | Kind::Cancel { id }) = kind else { unreachable!("a proposal is handled above") };
         let Some(mt) = self.list.iter_mut().find(|x| x.id == *id) else { return Err("No such meeting.") };
         if mt.other(from) != *to || (mt.requester != *from && mt.invitee != *from) {
             return Err("This is not your meeting.");
         }
         let invitee = mt.invitee == *from;
-        match (kind, mt.status) {
+        let did = match (kind, mt.status) {
             (Kind::Accept { .. }, Status::Proposed) if invitee => {
                 mt.status = Status::Confirmed;
                 mt.accept = Some(postcard::to_allocvec(m).expect("postcard encode"));
+                Did::Accepted
             }
-            (Kind::Decline { .. }, Status::Proposed) if invitee => mt.status = Status::Declined,
-            (Kind::Cancel { .. }, Status::Proposed) if !invitee => (mt.status, mt.cancelled_by) = (Status::Cancelled, Some(*from)),
-            (Kind::Cancel { .. }, Status::Confirmed) => (mt.status, mt.cancelled_by) = (Status::Cancelled, Some(*from)),
+            (Kind::Decline { .. }, Status::Proposed) if invitee => {
+                mt.status = Status::Declined;
+                Did::Declined
+            }
+            // The requester withdraws a proposal; either side cancels a confirmed meeting.
+            (Kind::Cancel { .. }, Status::Proposed | Status::Confirmed) if !invitee || mt.status == Status::Confirmed => {
+                (mt.status, mt.cancelled_by) = (Status::Cancelled, Some(*from));
+                Did::Cancelled
+            }
             _ => return Err("This meeting cannot change that way now."),
-        }
+        };
+        mt.log.push(step(did));
         Ok(())
     }
 
@@ -355,14 +452,15 @@ impl Meetings {
     /// Our own action: apply it, then give the wire messages to send (the sealed one, and a new summary).
     fn send(&mut self, key: &SigningKey, site: &Key, to: Key, kind: Kind, now: u64) -> Result<Vec<Vec<u8>>, String> {
         let (msg, wire) = Self::sealed(key, site, to, kind).ok_or("That person's key is not valid.")?;
-        let mut out = self.change(key, now, |s| s.apply(&msg))?;
+        let mut out = self.change(key, now, |s| s.apply(&msg, now))?;
         out.insert(0, wire);
         Ok(out)
     }
 
     /// Propose a meeting with `to`. It does not matter if the time clashes: the app only warns.
     /// Gives the id and the messages to send.
-    pub fn propose(&mut self, key: &SigningKey, site: &Key, to: Key, range: Range, now: u64) -> Result<(Key, Vec<Vec<u8>>), String> {
+    /// `desc` is the optional description (`check_desc`).
+    pub fn propose(&mut self, key: &SigningKey, site: &Key, to: Key, range: Range, desc: &str, now: u64) -> Result<(Key, Vec<Vec<u8>>), String> {
         if range.1 <= range.0 {
             return Err("The meeting must end after it starts.".into());
         }
@@ -370,10 +468,11 @@ impl Meetings {
             return Err("That start time has already passed.".into());
         }
         check_len_ms(range.1 - range.0)?;
+        let desc = check_desc(desc)?;
         let me = key.verifying_key().to_bytes();
         let stamp = [&me[..], &to, &range.0.to_be_bytes(), &range.1.to_be_bytes(), &now.to_be_bytes()].concat();
         let id = sha256(&[MEET_DOMAIN, &stamp].concat());
-        Ok((id, self.send(key, site, to, Kind::Propose { id, start_ms: range.0, end_ms: range.1 }, now)?))
+        Ok((id, self.send(key, site, to, Kind::propose(id, range.0, range.1, desc), now)?))
     }
 
     /// Accept, decline or cancel the meeting `id`. The invitee cannot accept after the meeting ended.
@@ -400,7 +499,7 @@ impl Meetings {
         if !ok {
             return vec![];
         }
-        self.change(key, now, |s| s.apply(&m)).unwrap_or_default()
+        self.change(key, now, |s| s.apply(&m, now)).unwrap_or_default()
     }
 
     /// A `Wire::Busy` from Delivery. True when it was news.
@@ -442,7 +541,7 @@ impl Meetings {
         let me = key.verifying_key().to_bytes();
         let own = self.list.iter().filter(|m| m.end_ms > now).filter_map(|m| {
             let kind = match (m.status, m.requester == me) {
-                (Status::Proposed, true) => Kind::Propose { id: m.id, start_ms: m.start_ms, end_ms: m.end_ms },
+                (Status::Proposed, true) => Kind::propose(m.id, m.start_ms, m.end_ms, &m.desc),
                 (Status::Confirmed, false) => Kind::Accept { id: m.id },
                 (Status::Declined, false) => Kind::Decline { id: m.id },
                 (Status::Cancelled, _) if m.cancelled_by == Some(me) => Kind::Cancel { id: m.id },
@@ -524,6 +623,13 @@ impl Meetings {
         json!({ "with": id_hex(who), "name": names.get(who) })
     }
 
+    /// One history entry: who (and whether that is us), what, and when this device saw it (0 = unknown).
+    fn step_json(s: &Step, me: &Key, names: &BTreeMap<Key, String>) -> Value {
+        let mut v = Self::who_json(&s.who, names);
+        (v["you"], v["did"], v["at_ms"]) = ((s.who == *me).into(), json!(s.did), s.at_ms.into());
+        v
+    }
+
     fn range_json((start_ms, end_ms): Range) -> Value {
         json!({ "start_ms": start_ms, "end_ms": end_ms })
     }
@@ -552,6 +658,8 @@ impl Meetings {
             (v["start_ms"], v["end_ms"], v["status"]) = (m.start_ms.into(), m.end_ms.into(), m.shown(now).into());
             v["cancelled_by_you"] = (m.cancelled_by == Some(*me)).into();
             v["signed"] = m.accept.is_some().into();
+            v["desc"] = m.desc.as_str().into();
+            v["log"] = m.steps().iter().map(|s| Self::step_json(s, me, names)).collect();
             // A proposal that waits for us (or for them) shows what it runs into in our calendar.
             v["clashes"] = if open { self.clashes_json(me, &self.clashes(me, None, m.range(), Some(&m.id)), names) } else { Value::Null };
             v
@@ -610,10 +718,15 @@ mod tests {
 
         /// Hand every wire message in `out` to `to`, as Delivery would. Returns what `to` sends back.
         fn deliver(&self, out: Vec<Vec<u8>>, to: &mut Person, members: &[Key]) -> Vec<Vec<u8>> {
+            self.deliver_at(out, to, members, NOW)
+        }
+
+        /// `deliver` when `to` gets the messages at `at` (its own clock).
+        fn deliver_at(&self, out: Vec<Vec<u8>>, to: &mut Person, members: &[Key], at: u64) -> Vec<Vec<u8>> {
             let mut back = vec![];
             for w in out {
                 match Wire::decode(&w) {
-                    Some(Wire::Meet(b)) => back.extend(to.m.on_meet(&to.key, &SITE, &b, members, NOW)),
+                    Some(Wire::Meet(b)) => back.extend(to.m.on_meet(&to.key, &SITE, &b, members, at)),
                     Some(Wire::Busy(b)) => {
                         to.m.on_busy(&SITE, &b, members);
                     }
@@ -631,7 +744,7 @@ mod tests {
     }
 
     fn propose(a: &mut Person, b: &Person, start: u64) -> (Key, Vec<Vec<u8>>) {
-        a.m.propose(&a.key, &SITE, b.pk(), (start, start + HOUR), NOW).unwrap()
+        a.m.propose(&a.key, &SITE, b.pk(), (start, start + HOUR), "", NOW).unwrap()
     }
 
     #[test]
@@ -694,10 +807,10 @@ mod tests {
         let (mut a, mut b, members) = pair();
         let min = 60_000;
         let to = b.pk();
-        let try_range = |a: &mut Person, r: Range| a.m.propose(&a.key, &SITE, to, r, NOW).map(|_| ());
+        let try_range = |a: &mut Person, r: Range| a.m.propose(&a.key, &SITE, to, r, "", NOW).map(|_| ());
         // An odd start (not on the half hour) and a custom length of 45 minutes pass.
         let (start, end) = (NOW + 7 * min, NOW + 52 * min);
-        let (id, out) = a.m.propose(&a.key, &SITE, b.pk(), (start, end), NOW).unwrap();
+        let (id, out) = a.m.propose(&a.key, &SITE, b.pk(), (start, end), "", NOW).unwrap();
         a.deliver(out, &mut b, &members);
         // The invitee learns the start and end from the proposal itself.
         assert_eq!(b.m.find(&id).unwrap().range(), (start, end));
@@ -752,7 +865,7 @@ mod tests {
         assert!(b.m.answer(&b.key, &SITE, &id, Act::Accept, late).is_err());
         assert_eq!(b.m.find(&id).unwrap().shown(late), "unaccepted");
         assert_eq!(b.m.find(&id).unwrap().shown(NOW), "proposed");
-        assert!(a.m.propose(&a.key, &SITE, b.pk(), (NOW - 2 * HOUR, NOW - HOUR), NOW).is_err());
+        assert!(a.m.propose(&a.key, &SITE, b.pk(), (NOW - 2 * HOUR, NOW - HOUR), "", NOW).is_err());
     }
 
     #[test]
@@ -771,14 +884,14 @@ mod tests {
         a.deliver(out, &mut b, &members);
         // c cannot accept for b: a message of c about this id is refused by the owner check
         let msg = Signed::new(&c.key, MEET_DOMAIN, &SITE, Body { from: c.pk(), to: a.pk(), kind: Kind::Accept { id } });
-        assert!(a.m.apply(&msg).is_err());
+        assert!(a.m.apply(&msg, NOW).is_err());
         // a message signed with another key than `from` is dropped
         let mut forged = Signed::new(&c.key, MEET_DOMAIN, &SITE, Body { from: b.pk(), to: a.pk(), kind: Kind::Accept { id } });
         assert!(!forged.check(MEET_DOMAIN, &SITE, &b.pk()));
         forged.sig = vec![0; 3];
         assert!(!forged.check(MEET_DOMAIN, &SITE, &b.pk()));
         // a repeat of a proposal is ignored
-        assert!(a.m.apply(&Signed::new(&a.key, MEET_DOMAIN, &SITE, Body { from: a.pk(), to: b.pk(), kind: Kind::Propose { id, start_ms: 1, end_ms: 2 } })).is_err());
+        assert!(a.m.apply(&Signed::new(&a.key, MEET_DOMAIN, &SITE, Body { from: a.pk(), to: b.pk(), kind: Kind::Propose { id, start_ms: 1, end_ms: 2 } }), NOW).is_err());
     }
 
     #[test]
@@ -831,5 +944,79 @@ mod tests {
         assert_eq!(fresh.restore(&a.key, &blob), Ok(0), "a second restore adds nothing");
         assert_eq!(fresh.find(&id).unwrap(), a.m.find(&id).unwrap());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The proposal as `to` receives it, and how the meeting looks in its list JSON.
+    fn row(p: &Person, id: &Key) -> Value {
+        p.m.list_json(&p.pk(), &BTreeMap::new(), NOW)["meetings"].as_array().unwrap().iter().find(|r| r["id"] == id_hex(id)).unwrap().clone()
+    }
+
+    #[test]
+    fn a_description_is_checked_travels_in_the_proposal_and_shows_on_both_sides() {
+        let (mut a, mut b, members) = pair();
+        for bad in ["x".repeat(MAX_DESC_CHARS + 1), "two\nlines".into(), "bell\u{7}".into(), "é".repeat(MAX_DESC_BYTES / 2 + 1)] {
+            assert!(check_desc(&bad).is_err(), "{bad:?}");
+        }
+        assert_eq!(check_desc("  Plan the visit  "), Ok("Plan the visit"));
+        assert!(check_desc(&"x".repeat(MAX_DESC_CHARS)).is_ok() && check_desc("").is_ok());
+        let range = (NOW + 2 * HOUR, NOW + 3 * HOUR);
+        assert!(a.m.propose(&a.key, &SITE, b.pk(), range, "bad\ttab", NOW).is_err());
+        assert!(a.m.list.is_empty(), "a refused description saves nothing");
+        // the longest allowed text still fits one sealed message
+        let (id, out) = a.m.propose(&a.key, &SITE, b.pk(), range, &"x".repeat(MAX_DESC_CHARS), NOW).unwrap();
+        assert!(matches!(Wire::decode(&out[0]), Some(Wire::Meet(_))), "the wire check accepts the longest text");
+        a.deliver(out, &mut b, &members);
+        for p in [&a, &b] {
+            assert_eq!(row(p, &id)["desc"], "x".repeat(MAX_DESC_CHARS));
+        }
+        // a repeat keeps the description; a proposal without one stays the old plain kind
+        assert!(a.m.resend(&a.key, &SITE, NOW).iter().any(|w| matches!(Wire::decode(w), Some(Wire::Meet(_)))));
+        assert_eq!(Kind::propose([1; 32], 1, 2, ""), Kind::Propose { id: [1; 32], start_ms: 1, end_ms: 2 });
+        // a received proposal with a bad description is refused too
+        let bad = Signed::new(&a.key, MEET_DOMAIN, &SITE, Body { from: a.pk(), to: b.pk(), kind: Kind::propose([5; 32], 1, 2, "a\nb") });
+        assert!(b.m.apply(&bad, NOW).is_err());
+    }
+
+    #[test]
+    fn an_old_message_and_an_old_row_still_read_and_show_who_did_what() {
+        // postcard writes the variant number first: the old kinds keep theirs, so an older message reads the same
+        let old = postcard::to_allocvec(&Kind::Propose { id: [3; 32], start_ms: 5, end_ms: 6 }).unwrap();
+        assert_eq!(postcard::from_bytes::<Kind>(&old), Ok(Kind::Propose { id: [3; 32], start_ms: 5, end_ms: 6 }));
+        assert_eq!(old[0], 0);
+        assert_eq!(postcard::to_allocvec(&Kind::Cancel { id: [3; 32] }).unwrap()[0], 3);
+        // a row from before `desc` and `log` existed loads, and its history follows from the status
+        let (mut a, b, _) = pair();
+        let (id, _) = propose(&mut a, &b, NOW + 2 * HOUR);
+        let mut v = serde_json::to_value(&a.m.list[0]).unwrap();
+        v.as_object_mut().unwrap().retain(|k, _| !["desc", "log"].contains(&k.as_str()));
+        let row: Meeting = serde_json::from_value(v).unwrap();
+        assert_eq!((row.desc.as_str(), row.log.len()), ("", 0));
+        assert_eq!(row.steps().iter().map(|s| (s.did, s.who, s.at_ms)).collect::<Vec<_>>(), vec![(Did::Proposed, a.pk(), 0)]);
+        assert_eq!(a.m.find(&id).unwrap().steps().len(), 1);
+    }
+
+    #[test]
+    fn the_history_keeps_who_proposed_accepted_and_cancelled_and_when() {
+        let (mut a, mut b, members) = pair();
+        let (id, out) = propose(&mut a, &b, NOW + 2 * HOUR);
+        a.deliver(out, &mut b, &members);
+        let out = b.m.answer(&b.key, &SITE, &id, Act::Accept, NOW + 5).unwrap();
+        b.deliver_at(out, &mut a, &members, NOW + 5);
+        let out = b.m.answer(&b.key, &SITE, &id, Act::Cancel, NOW + 9).unwrap();
+        b.deliver_at(out, &mut a, &members, NOW + 9);
+        let want = vec![(a.pk(), Did::Proposed, NOW), (b.pk(), Did::Accepted, NOW + 5), (b.pk(), Did::Cancelled, NOW + 9)];
+        for p in [&a, &b] {
+            let got: Vec<_> = p.m.find(&id).unwrap().log.iter().map(|s| (s.who, s.did, s.at_ms)).collect();
+            assert_eq!(got, want);
+            let log = &row(p, &id)["log"];
+            assert_eq!((log[2]["did"].as_str(), log[2]["you"].as_bool()), (Some("cancelled"), Some(p.pk() == b.pk())));
+        }
+        // a decline, and a repeat of the same message, add one entry
+        let (id, out) = propose(&mut a, &b, NOW + 5 * HOUR);
+        a.deliver(out, &mut b, &members);
+        let out = b.m.answer(&b.key, &SITE, &id, Act::Decline, NOW + 3).unwrap();
+        b.deliver(out.clone(), &mut a, &members);
+        b.deliver(out, &mut a, &members);
+        assert_eq!(a.m.find(&id).unwrap().log.iter().map(|s| (s.who, s.did)).collect::<Vec<_>>(), vec![(a.pk(), Did::Proposed), (b.pk(), Did::Declined)]);
     }
 }
