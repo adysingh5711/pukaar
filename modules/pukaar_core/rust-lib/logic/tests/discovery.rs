@@ -563,3 +563,57 @@ fn a_flood_of_requests_gets_few_answers() {
     let sent: usize = blobs.iter().map(|(c, b)| f.answer(c, &sha256(b)).len()).sum::<usize>() + 84;
     assert!(sent <= 400 && sent > 300, "{sent} chunks in a minute");
 }
+
+// ---- peer resend: a node that was offline asks for the announces it missed ----
+
+#[test]
+fn a_node_that_was_offline_gets_the_announces_it_missed_and_only_valid_newer_ones() {
+    let w = World::new(&TRIO, &[seat(1), seat(2), seat(3)], &details());
+    let (mut holder, c, f) = w.node(1);
+    w.sync(&mut holder, &c, &f);
+    let body = profile::Body { display_name: "Asha K".into(), ..Default::default() };
+    let e = profile::build(&sk(3), &SITE, &acct(3), 2, 1, &body, Some(&w.keys[&1]), &[]).unwrap();
+    let (cid, sha) = w.put(&profile::to_bytes(&e));
+    let newest = Announce::sign(&sk(3), SITE, 2, &cid, sha);
+    assert!(holder.on_announce(newest.clone()));
+
+    // The late node holds nothing: its request lists nothing, and the holder (an admin) answers with the one it has.
+    let (late, ..) = w.node(2);
+    let req = over_the_wire(&late.announce_req().expect("it has fetchers"));
+    assert_eq!(req, Wire::AnnounceReq(vec![]));
+    let answer = holder.on_announce_req(&req, 0);
+    assert_eq!(answer, vec![Wire::ProfileAnnounce(newest.clone())]);
+    // The answer is checked like any announce: a bad signature or another site is refused, the real one is kept.
+    assert!(!late.on_announce(Announce { version: 3, ..newest.clone() }) && !late.on_announce(Announce { site: [2; 32], ..newest.clone() }));
+    assert!(late.on_announce(newest.clone()));
+    assert!(!late.on_announce(Announce::sign(&sk(3), SITE, 1, "zOld", [0; 32])), "an older version is not kept");
+
+    // Now it lists what it holds. Nothing newer: no answer, and a repeat inside the interval gets none either.
+    let again = over_the_wire(&late.announce_req().unwrap());
+    assert_eq!(again, Wire::AnnounceReq(vec![(key(3), 2)]));
+    assert!(holder.on_announce_req(&again, 0).is_empty());
+}
+
+#[test]
+fn a_flood_of_announce_requests_gets_few_answers_and_junk_is_refused() {
+    let mut f = Fetched::default();
+    let site = SITE;
+    for n in 0..40u8 {
+        assert!(f.note_announce(Announce::sign(&sk(100 + n), site, 1, "zA", [n; 32])));
+    }
+    let first = f.answer_announces(&[]);
+    assert_eq!(first.len(), pukaar_logic::fetch::MAX_ANNOUNCE_ANSWERS, "capped");
+    assert!((0..100).all(|_| f.answer_announces(&[]).is_empty()), "one answer per interval");
+    // The next request lists what the first answer brought: the rest comes in a later answer.
+    let mut g = Fetched::default();
+    for w in &first {
+        let Wire::ProfileAnnounce(a) = w else { panic!("announces only") };
+        assert!(g.note_announce(a.clone()));
+    }
+    f.announce_every = Duration::ZERO;
+    let rest = f.answer_announces(&g.announce_list());
+    assert_eq!(rest.len(), 40 - first.len());
+    // Too long a list is not a wire message.
+    let too_many: Vec<(Key, u64)> = (0..=pukaar_logic::fetch::MAX_ANNOUNCES as u8).map(|n| ([n; 32], 1)).collect();
+    assert!(Wire::decode(&Wire::AnnounceReq(too_many).encode()).is_none());
+}

@@ -47,7 +47,11 @@ pub const PLACES_SCHEMA: &str = "pukaar.site.places/1";
 /// A blob over this size is refused, whatever the chain says.
 const MAX_BLOB: usize = 1 << 20;
 /// Announces of authors the chain does not list (yet).
-const MAX_ANNOUNCES: usize = 64;
+pub const MAX_ANNOUNCES: usize = 64;
+/// A node answers an announce request with at most this many announces, and not twice within
+/// `ANNOUNCE_EVERY`. A node that is still missing some asks again with a list that shows what it holds now.
+pub const MAX_ANNOUNCE_ANSWERS: usize = 32;
+const ANNOUNCE_EVERY: Duration = Duration::from_secs(5);
 const MAX_NAME: usize = 64;
 const MAX_ABOUT: usize = 500;
 /// Files that one round asks peers for, and how long before the same file is asked for again.
@@ -163,6 +167,9 @@ pub struct Fetched {
     announces: BTreeMap<Key, Announce>,
     /// Where `announces` are saved after each change (`persist_in`).
     announces_file: Option<PathBuf>,
+    /// When we answered an announce request last, and how long before the next answer. Tests make it short.
+    announce_at: Option<Instant>,
+    pub announce_every: Duration,
     /// Blobs by CID. Every use checks the SHA-256 again, so a lying pointer cannot reuse a blob.
     cache: HashMap<String, Vec<u8>>,
     /// The newest files that we uploaded: kept in `cache` before the chain points to them, so that we
@@ -200,6 +207,8 @@ impl Default for Fetched {
             site_keys: BTreeMap::new(),
             announces: BTreeMap::new(),
             announces_file: None,
+            announce_at: None,
+            announce_every: ANNOUNCE_EVERY,
             cache: HashMap::new(),
             recent: vec![],
             failed: BTreeSet::new(),
@@ -238,6 +247,31 @@ impl Fetched {
                 true
             }
         }
+    }
+
+    /// (author, version) of every kept announce: what `Wire::AnnounceReq` tells the peers that we hold.
+    pub fn announce_list(&self) -> Vec<(Key, u64)> {
+        self.announces.values().map(|a| (a.author, a.version)).collect()
+    }
+
+    /// The announces that we hold and `theirs` (a peer's `announce_list`) lacks or holds an older version of:
+    /// at most `MAX_ANNOUNCE_ANSWERS`, and nothing within `announce_every` of the last answer, so a flood of
+    /// requests gets few answers. The receiver checks each announce like any other (`note_announce`).
+    pub fn answer_announces(&mut self, theirs: &[(Key, u64)]) -> Vec<Wire> {
+        if self.announce_at.is_some_and(|t| t.elapsed() < self.announce_every) {
+            return vec![];
+        }
+        let newer: Vec<Wire> = self
+            .announces
+            .values()
+            .filter(|a| !theirs.iter().any(|(k, v)| *k == a.author && *v >= a.version))
+            .take(MAX_ANNOUNCE_ANSWERS)
+            .map(|a| Wire::ProfileAnnounce(a.clone()))
+            .collect();
+        if !newer.is_empty() {
+            self.announce_at = Some(Instant::now());
+        }
+        newer
     }
 
     /// Keep the announces in `dir` (one file per site, like the known accounts of the chain cache) and load

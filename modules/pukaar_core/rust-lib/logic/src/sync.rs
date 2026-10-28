@@ -2,6 +2,7 @@
 //! events re-sends them. This is the catch-up path; Delivery's storeQuery is best-effort only.
 
 use crate::event::{sha256, Key, MAX_EVENT_BYTES};
+use crate::fetch::MAX_ANNOUNCES;
 use crate::meet::{BusyBody, Signed, MAX_MEET_BYTES, MAX_RANGES};
 use crate::profile::{self, MAX_CID, MAX_INLINE_PROFILE};
 use crate::store::Store;
@@ -78,6 +79,9 @@ pub enum Wire {
     Meet(Vec<u8>),
     /// A signed free/busy summary of one member: times only, no titles (`meet`).
     Busy(Signed<BusyBody>),
+    /// "Send me the profile announces that I lack": the (author, version) of each announce that the sender holds.
+    /// A peer answers with `ProfileAnnounce` for each one that is newer or missing (`Fetched::answer_announces`).
+    AnnounceReq(Vec<(Key, u64)>),
 }
 
 impl Wire {
@@ -108,6 +112,7 @@ impl Wire {
             Wire::JoinDecline { sig, .. } => sig.len() == 64,
             Wire::Meet(b) => !b.is_empty() && b.len() <= MAX_MEET_BYTES,
             Wire::Busy(b) => b.sig.len() == 64 && b.body.ranges.len() <= MAX_RANGES,
+            Wire::AnnounceReq(held) => held.len() <= MAX_ANNOUNCES,
             Wire::Heads(_) | Wire::ChainPending { .. } => true,
         };
         ok.then_some(w)

@@ -177,6 +177,8 @@ const PEER_PENDING_FOR: Duration = Duration::from_secs(30 * 60);
 const HEADS_EVERY: Duration = Duration::from_secs(60);
 /// Our open meeting messages go out again this often (Delivery gives no acknowledgement).
 const MEET_EVERY: Duration = Duration::from_secs(300);
+/// A node asks its peers for the profile announces that it lacks when it comes online, then this often.
+const ANNOUNCE_REQ_EVERY: Duration = Duration::from_secs(600);
 const ANSWER_EVERY: Duration = Duration::from_secs(10);
 /// Received events reach the disk at most this often (see `Shared::save_due`).
 const SAVE_EVERY: Duration = Duration::from_secs(2);
@@ -238,6 +240,8 @@ struct Shared {
     meets: Meetings,
     /// When we last repeated our open meeting messages.
     last_meet: Option<Instant>,
+    /// When we last asked the peers for profile announces.
+    last_announce_req: Option<Instant>,
 }
 
 impl Shared {
@@ -633,6 +637,10 @@ fn on_wire(channel: &str, bytes: &[u8]) {
         Some(Wire::ProfileBlob { announce, file }) => {
             node.on_profile_blob(announce, file);
         }
+        // A peer asks for the announces that it lacks: the answer is one `ProfileAnnounce` each.
+        Some(w @ Wire::AnnounceReq(_)) => {
+            outbox.extend(node.on_announce_req(&w, now() / 60).iter().map(Wire::encode));
+        }
         // A site file over Delivery, for a node whose Storage cannot reach the one that holds it.
         Some(w @ (Wire::BlobReq { .. } | Wire::BlobChunk { .. })) => {
             outbox.extend(node.on_blob(&w, now() / 60).iter().map(Wire::encode));
@@ -668,6 +676,7 @@ fn send_queued(site: &str) -> Result<(), String> {
             last_heads,
             meets,
             last_meet,
+            last_announce_req,
             dir,
             ..
         }) = g.as_mut()
@@ -677,6 +686,10 @@ fn send_queued(site: &str) -> Result<(), String> {
         if last_heads.is_none_or(|t| t.elapsed() >= HEADS_EVERY) {
             *last_heads = Some(Instant::now());
             outbox.push(heads_msg(&node.store).encode());
+        }
+        if last_announce_req.is_none_or(|t| t.elapsed() >= ANNOUNCE_REQ_EVERY) {
+            *last_announce_req = Some(Instant::now());
+            outbox.extend(node.announce_req().map(|w| w.encode()));
         }
         if last_meet.is_none_or(|t| t.elapsed() >= MEET_EVERY) {
             *last_meet = Some(Instant::now());
@@ -1339,6 +1352,7 @@ impl PukaarCoreModule for Pukaar {
             peers: vec![],
             meets: Meetings::default(),
             last_meet: None,
+            last_announce_req: None,
         });
     }
 }

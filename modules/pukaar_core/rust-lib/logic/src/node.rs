@@ -162,22 +162,38 @@ impl Node {
         a.site == self.store.site && self.fetched.as_ref().is_some_and(|f| f.lock().unwrap().note_blob(a, file))
     }
 
+    /// The request that a node sends when it comes online and now and then: the announces that it holds.
+    /// `None` before the fetchers are attached.
+    #[must_use]
+    pub fn announce_req(&self) -> Option<crate::sync::Wire> {
+        Some(crate::sync::Wire::AnnounceReq(self.fetched.as_ref()?.lock().unwrap().announce_list()))
+    }
+
+    /// An `AnnounceReq` from Delivery: the announces that the sender lacks, when we are an admin or one of the
+    /// elected few (see `on_blob`) and the limits allow. Each answer is a `Wire::ProfileAnnounce`.
+    pub fn on_announce_req(&self, w: &crate::sync::Wire, minute: u64) -> Vec<crate::sync::Wire> {
+        let (Some(f), crate::sync::Wire::AnnounceReq(theirs)) = (&self.fetched, w) else { return vec![] };
+        if !self.answers(w, minute) {
+            return vec![];
+        }
+        f.lock().unwrap().answer_announces(theirs)
+    }
+
+    /// An admin always answers a request. Everyone else only when elected, so 30 members do not all send it.
+    fn answers(&self, request: &crate::sync::Wire, minute: u64) -> bool {
+        let me = self.me();
+        self.role_now(&me).is_some_and(|r| r >= Rank::Admin) || crate::sync::should_answer(&me, &self.approved_keys(), &request.encode(), minute)
+    }
+
     /// A `BlobReq` or a `BlobChunk` from Delivery (any other message gives nothing). A request gives the
     /// chunks to send, when we hold the file, are an admin or one of the elected few (like a Heads
     /// answer, so 30 members do not all send it) and the rate limits allow. A chunk is kept for the
     /// fetchers when we asked for it. Nothing here is trusted: the file is checked against the chain.
     pub fn on_blob(&self, w: &crate::sync::Wire, minute: u64) -> Vec<crate::sync::Wire> {
-        use crate::sync::{should_answer, Wire};
+        use crate::sync::Wire;
         let Some(f) = &self.fetched else { return vec![] };
         match w {
-            Wire::BlobReq { cid, sha256 } => {
-                let me = self.me();
-                let admin = self.role_now(&me).is_some_and(|r| r >= Rank::Admin);
-                if !admin && !should_answer(&me, &self.approved_keys(), &w.encode(), minute) {
-                    return vec![];
-                }
-                f.lock().unwrap().answer(cid, sha256)
-            }
+            Wire::BlobReq { cid, sha256 } if self.answers(w, minute) => f.lock().unwrap().answer(cid, sha256),
             Wire::BlobChunk { cid, sha256, index, total, bytes } => {
                 f.lock().unwrap().note_chunk(cid, sha256, *index, *total, bytes);
                 vec![]
