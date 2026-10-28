@@ -1,4 +1,11 @@
-//! 1:1 meetings between two members of one site (see 1-1-meet.md).
+//! Meetings between members of one site: one organizer and one to `MAX_INVITEES` invitees (see 1-1-meet.md).
+//!
+//! A meeting with one invitee is the 1:1 meeting of 1-1-meet.md. With more, the organizer sends one
+//! sealed proposal to each invitee, with the whole list. Each invitee answers on their own (accept or
+//! decline, signed) and tells the organizer and the other invitees, so everybody sees each answer.
+//! The rule, in `settle`: the meeting is confirmed once every invitee answered and at least one accepted;
+//! it is declined when all declined; the organizer can cancel at any time. An invitee who accepted can
+//! leave: only their own part ends.
 //!
 //! Each member keeps the meetings in a local file (`meetings-<site>.json`): it is the source of truth.
 //! A proposal, an accept, a decline and a cancel are signed by the sender and travel over Delivery
@@ -26,8 +33,9 @@ const MEET_DOMAIN: &[u8] = b"pukaar/meet/v1\0";
 const BUSY_DOMAIN: &[u8] = b"pukaar/busy/v1\0";
 const BACKUP_INFO: &[u8] = b"pukaar/meet-backup/v1";
 const BACKUP_SCHEMA: &str = "pukaar.meetings/1";
-/// A sealed message is a signed message (about 250 bytes) plus 48 bytes.
-pub const MAX_MEET_BYTES: usize = 1024;
+/// A sealed message is a signed message (about 250 bytes, more with a description or a list of invitees) plus 48 bytes.
+/// A proposal to 8 invitees with the longest description is about 1100 bytes sealed.
+pub const MAX_MEET_BYTES: usize = 1280;
 /// The busy ranges that one summary holds: the next ones in time.
 pub const MAX_RANGES: usize = 64;
 /// The longest meeting that a received proposal may have (the invitee side stays as it was).
@@ -40,6 +48,8 @@ pub const MAX_LEAD_MIN: u64 = 24 * 60;
 /// The longest description of a meeting. The byte cap keeps a sealed proposal under `MAX_MEET_BYTES` for any script.
 pub const MAX_DESC_CHARS: usize = 500;
 const MAX_DESC_BYTES: usize = 640;
+/// The most people one meeting invites (not counting the organizer).
+pub const MAX_INVITEES: usize = 8;
 /// Meetings with one person that we keep, so one member cannot fill the disk.
 const MAX_PER_PEER: usize = 200;
 /// Slots start on this step (UTC).
@@ -97,6 +107,47 @@ pub enum Did {
     Cancelled,
 }
 
+/// Where one invitee stands: what their last step says.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Answer {
+    Pending,
+    Accepted,
+    Declined,
+    /// Accepted first, then left.
+    Left,
+}
+
+impl From<Did> for Answer {
+    fn from(did: Did) -> Self {
+        match did {
+            Did::Proposed => Answer::Pending,
+            Did::Accepted => Answer::Accepted,
+            Did::Declined => Answer::Declined,
+            Did::Cancelled => Answer::Left,
+        }
+    }
+}
+
+/// The rule for a meeting that the organizer has not cancelled, from the answers of its invitees:
+/// somebody pending keeps it proposed; else one accept confirms it; else it is cancelled if somebody left,
+/// declined if all declined.
+#[must_use]
+pub fn settle(answers: impl IntoIterator<Item = Answer>) -> Status {
+    let mut seen = [false; 4];
+    answers.into_iter().for_each(|a| seen[a as usize] = true);
+    let [pending, accepted, _, left] = seen;
+    if pending {
+        Status::Proposed
+    } else if accepted {
+        Status::Confirmed
+    } else if left {
+        Status::Cancelled
+    } else {
+        Status::Declined
+    }
+}
+
 /// One entry of the history of a meeting: who did it, and when this device saw it (UTC ms).
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Step {
@@ -109,7 +160,11 @@ pub struct Step {
 pub struct Meeting {
     pub id: Key,
     pub requester: Key,
+    /// The first invitee: the only one of a 1:1 meeting.
     pub invitee: Key,
+    /// The other invitees of a group meeting, after `invitee`. Empty for rows from before groups.
+    #[serde(default)]
+    pub also: Vec<Key>,
     pub start_ms: u64,
     pub end_ms: u64,
     pub status: Status,
@@ -119,6 +174,9 @@ pub struct Meeting {
     /// The invitee's signed accept message (postcard of `Msg`): proof that the meeting happened.
     #[serde(default)]
     pub accept: Option<Vec<u8>>,
+    /// The signed accepts after the first one, of a group meeting.
+    #[serde(default)]
+    pub later_accepts: Vec<Vec<u8>>,
     /// What the requester wrote about the meeting (plain text, may be empty).
     #[serde(default)]
     pub desc: String,
@@ -132,8 +190,70 @@ impl Meeting {
         (self.start_ms, self.end_ms)
     }
 
+    /// The invitees, in order.
+    pub fn invited(&self) -> impl Iterator<Item = &Key> {
+        std::iter::once(&self.invitee).chain(&self.also)
+    }
+
+    fn has(&self, who: &Key) -> bool {
+        self.requester == *who || self.invited().any(|i| i == who)
+    }
+
+    /// The person across from `me` in a 1:1 meeting: the organizer, or the first invitee.
     fn other(&self, me: &Key) -> Key {
         if self.requester == *me { self.invitee } else { self.requester }
+    }
+
+    /// Everybody in the meeting but `me`: who our messages about it go to.
+    fn peers(&self, me: &Key) -> Vec<Key> {
+        std::iter::once(&self.requester).chain(self.invited()).filter(|k| *k != me).copied().collect()
+    }
+
+    /// Where `who` (an invitee) stands.
+    fn answer(&self, who: &Key) -> Answer {
+        self.steps().iter().rev().find(|s| s.who == *who).map_or(Answer::Pending, |s| s.did.into())
+    }
+
+    /// Not declined, cancelled or over: it still counts.
+    fn live(&self) -> bool {
+        matches!(self.status, Status::Proposed | Status::Confirmed)
+    }
+
+    /// Does the meeting make `me` busy? The organizer while it is live; an invitee who accepted while it is live.
+    fn holds(&self, me: &Key) -> bool {
+        self.live() && (self.requester == *me || self.answer(me) == Answer::Accepted)
+    }
+
+    /// Add a step. A row from before the log gets its history first, so it is not lost.
+    fn log_step(&mut self, step: Step) {
+        if self.log.is_empty() {
+            self.log = self.steps().into_owned();
+        }
+        self.log.push(step);
+    }
+
+    /// The message that `me` repeats for this meeting, and who gets it. The organizer repeats the proposal to
+    /// those who have not answered, or the cancel to everybody; an invitee repeats their last answer to all.
+    fn last_act(&self, me: &Key) -> Option<(Kind, Vec<Key>)> {
+        let id = self.id;
+        if self.requester == *me {
+            let all: Vec<Key> = self.invited().copied().collect();
+            return match self.status {
+                Status::Cancelled if self.cancelled_by == Some(*me) => Some((Kind::Cancel { id }, all)),
+                Status::Proposed | Status::Confirmed => {
+                    let waiting: Vec<Key> = all.iter().filter(|i| self.answer(i) == Answer::Pending).copied().collect();
+                    (!waiting.is_empty()).then(|| (Kind::propose(id, self.start_ms, self.end_ms, &self.desc, &all), waiting))
+                }
+                _ => None,
+            };
+        }
+        let kind = match self.answer(me) {
+            Answer::Accepted if self.live() => Kind::Accept { id },
+            Answer::Declined => Kind::Decline { id },
+            Answer::Left => Kind::Cancel { id },
+            _ => return None,
+        };
+        Some((kind, self.peers(me)))
     }
 
     /// The history of the meeting. A row saved before the log existed gets its actors from the status and
@@ -175,19 +295,50 @@ pub enum Kind {
     Cancel { id: Key },
     /// A proposal with a description. Added after the others, so older messages still read the same.
     ProposeNote { id: Key, start_ms: u64, end_ms: u64, desc: String },
+    /// A proposal to 2 or more invitees, with all of them. Added after the others too.
+    ProposeGroup { id: Key, start_ms: u64, end_ms: u64, desc: String, invitees: Vec<Key> },
+}
+
+/// A proposal of any form. `guests` is empty for the two older forms: the one invitee is the receiver.
+struct Prop<'a> {
+    id: &'a Key,
+    start_ms: u64,
+    end_ms: u64,
+    desc: &'a str,
+    guests: &'a [Key],
+}
+
+impl Prop<'_> {
+    /// A group proposal has 2 to `MAX_INVITEES` different invitees, not the sender, and the receiver is one.
+    fn guests_ok(&self, from: &Key, to: &Key) -> bool {
+        self.guests.is_empty() || ((2..=MAX_INVITEES).contains(&self.guests.len()) && self.guests.contains(to) && distinct(from, self.guests))
+    }
+}
+
+/// `list` has each person once, and not `me`.
+fn distinct(me: &Key, list: &[Key]) -> bool {
+    !list.contains(me) && list.iter().enumerate().all(|(i, k)| !list[..i].contains(k))
 }
 
 impl Kind {
-    /// A proposal: the old plain one when there is no description, so an older app can still read it.
-    fn propose(id: Key, start_ms: u64, end_ms: u64, desc: &str) -> Kind {
-        if desc.is_empty() { Kind::Propose { id, start_ms, end_ms } } else { Kind::ProposeNote { id, start_ms, end_ms, desc: desc.to_owned() } }
+    /// A proposal to `to`: the old plain one for one person without a description, and the note one for one
+    /// person with a description, so an older app can still read them.
+    fn propose(id: Key, start_ms: u64, end_ms: u64, desc: &str, to: &[Key]) -> Kind {
+        let desc = desc.to_owned();
+        match to {
+            [_, _, ..] => Kind::ProposeGroup { id, start_ms, end_ms, desc, invitees: to.to_vec() },
+            _ if desc.is_empty() => Kind::Propose { id, start_ms, end_ms },
+            _ => Kind::ProposeNote { id, start_ms, end_ms, desc },
+        }
     }
 
-    /// The id, start, end and description when this is a proposal of either form.
-    fn proposal(&self) -> Option<(&Key, u64, u64, &str)> {
+    /// The parts of a proposal of any form.
+    fn proposal(&self) -> Option<Prop<'_>> {
+        let prop = |id, start_ms, end_ms, desc, guests| Some(Prop { id, start_ms, end_ms, desc, guests });
         match self {
-            Kind::Propose { id, start_ms, end_ms } => Some((id, *start_ms, *end_ms, "")),
-            Kind::ProposeNote { id, start_ms, end_ms, desc } => Some((id, *start_ms, *end_ms, desc)),
+            Kind::Propose { id, start_ms, end_ms } => prop(id, *start_ms, *end_ms, "", &[]),
+            Kind::ProposeNote { id, start_ms, end_ms, desc } => prop(id, *start_ms, *end_ms, desc, &[]),
+            Kind::ProposeGroup { id, start_ms, end_ms, desc, invitees } => prop(id, *start_ms, *end_ms, desc, invitees),
             _ => None,
         }
     }
@@ -335,10 +486,10 @@ impl Meetings {
         self.list.iter().find(|m| m.id == *id)
     }
 
-    /// The meetings that make `me` busy: confirmed ones, and our own proposals that wait for an answer.
+    /// The meetings that make `me` busy: our own that are live, and those that we accepted (`Meeting::holds`).
     fn busy_meetings(&self, me: &Key) -> impl Iterator<Item = &Meeting> + '_ {
         let me = *me;
-        self.list.iter().filter(move |m| m.status == Status::Confirmed || (m.status == Status::Proposed && m.requester == me))
+        self.list.iter().filter(move |m| m.holds(&me))
     }
 
     /// Our busy ranges that are not over yet, the next `MAX_RANGES`.
@@ -383,52 +534,62 @@ impl Meetings {
     fn apply(&mut self, m: &Msg, now: u64) -> Result<(), &'static str> {
         let Body { from, to, kind } = &m.body;
         let step = |did| Step { who: *from, did, at_ms: now };
-        if let Some((id, start_ms, end_ms, desc)) = kind.proposal() {
-            let ok = end_ms > start_ms && end_ms - start_ms <= MAX_LEN_MS && from != to && check_desc(desc).is_ok();
-            if !ok || self.find(id).is_some() {
+        if let Some(p) = kind.proposal() {
+            let ok = p.end_ms > p.start_ms && p.end_ms - p.start_ms <= MAX_LEN_MS && from != to && check_desc(p.desc).is_ok() && p.guests_ok(from, to);
+            if !ok || self.find(p.id).is_some() {
                 return Err("This meeting time is not valid.");
             }
-            if self.list.iter().filter(|x| x.requester == *from || x.invitee == *from).count() >= MAX_PER_PEER {
+            if self.list.iter().filter(|x| x.has(from)).count() >= MAX_PER_PEER {
                 return Err("There are too many meetings with this person.");
             }
+            let (invitee, also) = match p.guests {
+                [first, rest @ ..] => (*first, rest.to_vec()),
+                [] => (*to, vec![]),
+            };
             self.list.push(Meeting {
-                id: *id,
+                id: *p.id,
                 requester: *from,
-                invitee: *to,
-                start_ms,
-                end_ms,
+                invitee,
+                also,
+                start_ms: p.start_ms,
+                end_ms: p.end_ms,
                 status: Status::Proposed,
                 cancelled_by: None,
                 accept: None,
-                desc: desc.to_owned(),
+                later_accepts: vec![],
+                desc: p.desc.to_owned(),
                 log: vec![step(Did::Proposed)],
             });
             return Ok(());
         }
         let (Kind::Accept { id } | Kind::Decline { id } | Kind::Cancel { id }) = kind else { unreachable!("a proposal is handled above") };
         let Some(mt) = self.list.iter_mut().find(|x| x.id == *id) else { return Err("No such meeting.") };
-        if mt.other(from) != *to || (mt.requester != *from && mt.invitee != *from) {
+        if from == to || !mt.has(from) || !mt.has(to) {
             return Err("This is not your meeting.");
         }
-        let invitee = mt.invitee == *from;
-        let did = match (kind, mt.status) {
-            (Kind::Accept { .. }, Status::Proposed) if invitee => {
-                mt.status = Status::Confirmed;
-                mt.accept = Some(postcard::to_allocvec(m).expect("postcard encode"));
-                Did::Accepted
-            }
-            (Kind::Decline { .. }, Status::Proposed) if invitee => {
-                mt.status = Status::Declined;
-                Did::Declined
-            }
-            // The requester withdraws a proposal; either side cancels a confirmed meeting.
-            (Kind::Cancel { .. }, Status::Proposed | Status::Confirmed) if !invitee || mt.status == Status::Confirmed => {
-                (mt.status, mt.cancelled_by) = (Status::Cancelled, Some(*from));
-                Did::Cancelled
-            }
+        let organizer = mt.requester == *from;
+        let answer = mt.answer(from);
+        let waiting = mt.status == Status::Proposed && answer == Answer::Pending;
+        let did = match (kind, organizer) {
+            (Kind::Accept { .. }, false) if waiting => Did::Accepted,
+            (Kind::Decline { .. }, false) if waiting => Did::Declined,
+            // The organizer withdraws the meeting for everybody; an invitee who accepted leaves, and only their part ends.
+            (Kind::Cancel { .. }, true) if mt.live() => Did::Cancelled,
+            (Kind::Cancel { .. }, false) if mt.live() && answer == Answer::Accepted => Did::Cancelled,
             _ => return Err("This meeting cannot change that way now."),
         };
-        mt.log.push(step(did));
+        mt.log_step(step(did));
+        if did == Did::Accepted {
+            let proof = postcard::to_allocvec(m).expect("postcard encode");
+            match mt.accept {
+                None => mt.accept = Some(proof),
+                Some(_) => mt.later_accepts.push(proof),
+            }
+        }
+        if did == Did::Cancelled {
+            mt.cancelled_by = Some(*from);
+        }
+        mt.status = if organizer { Status::Cancelled } else { settle(mt.invited().map(|i| mt.answer(i))) };
         Ok(())
     }
 
@@ -449,18 +610,19 @@ impl Meetings {
         Some((msg, Wire::Meet(boxed).encode()))
     }
 
-    /// Our own action: apply it, then give the wire messages to send (the sealed one, and a new summary).
-    fn send(&mut self, key: &SigningKey, site: &Key, to: Key, kind: Kind, now: u64) -> Result<Vec<Vec<u8>>, String> {
-        let (msg, wire) = Self::sealed(key, site, to, kind).ok_or("That person's key is not valid.")?;
-        let mut out = self.change(key, now, |s| s.apply(&msg, now))?;
-        out.insert(0, wire);
+    /// Our own action: apply it, then give the wire messages to send (one sealed message for each of `to`, and a new summary).
+    fn send(&mut self, key: &SigningKey, site: &Key, to: &[Key], kind: &Kind, now: u64) -> Result<Vec<Vec<u8>>, String> {
+        let sealed = to.iter().map(|t| Self::sealed(key, site, *t, kind.clone())).collect::<Option<Vec<_>>>().ok_or("That person's key is not valid.")?;
+        let first = &sealed.first().ok_or("Nobody is invited.")?.0;
+        let mut out = self.change(key, now, |s| s.apply(first, now))?;
+        out.splice(0..0, sealed.into_iter().map(|(_, wire)| wire));
         Ok(out)
     }
 
-    /// Propose a meeting with `to`. It does not matter if the time clashes: the app only warns.
+    /// Propose a meeting to `to` (1 to `MAX_INVITEES` people). It does not matter if the time clashes: the app only warns.
     /// Gives the id and the messages to send.
     /// `desc` is the optional description (`check_desc`).
-    pub fn propose(&mut self, key: &SigningKey, site: &Key, to: Key, range: Range, desc: &str, now: u64) -> Result<(Key, Vec<Vec<u8>>), String> {
+    pub fn propose(&mut self, key: &SigningKey, site: &Key, to: &[Key], range: Range, desc: &str, now: u64) -> Result<(Key, Vec<Vec<u8>>), String> {
         if range.1 <= range.0 {
             return Err("The meeting must end after it starts.".into());
         }
@@ -470,32 +632,36 @@ impl Meetings {
         check_len_ms(range.1 - range.0)?;
         let desc = check_desc(desc)?;
         let me = key.verifying_key().to_bytes();
-        let stamp = [&me[..], &to, &range.0.to_be_bytes(), &range.1.to_be_bytes(), &now.to_be_bytes()].concat();
+        if to.is_empty() || to.len() > MAX_INVITEES || !distinct(&me, to) {
+            return Err(format!("Invite 1 to {MAX_INVITEES} other people, each once."));
+        }
+        let stamp = [&me[..], &to.concat(), &range.0.to_be_bytes(), &range.1.to_be_bytes(), &now.to_be_bytes()].concat();
         let id = sha256(&[MEET_DOMAIN, &stamp].concat());
-        Ok((id, self.send(key, site, to, Kind::propose(id, range.0, range.1, desc), now)?))
+        Ok((id, self.send(key, site, to, &Kind::propose(id, range.0, range.1, desc, to), now)?))
     }
 
-    /// Accept, decline or cancel the meeting `id`. The invitee cannot accept after the meeting ended.
+    /// Accept, decline or cancel the meeting `id`: the others in it get the answer. The invitee cannot accept after the
+    /// meeting ended. An invitee who cancels leaves.
     pub fn answer(&mut self, key: &SigningKey, site: &Key, id: &Key, act: Act, now: u64) -> Result<Vec<Vec<u8>>, String> {
-        let me = key.verifying_key().to_bytes();
         let m = self.find(id).ok_or("No such meeting.")?;
         if act == Act::Accept && m.end_ms <= now {
             return Err("This meeting is over, so it cannot be accepted.".into());
         }
-        let to = m.other(&me);
+        let to = m.peers(&key.verifying_key().to_bytes());
         let kind = match act {
             Act::Accept => Kind::Accept { id: *id },
             Act::Decline => Kind::Decline { id: *id },
             Act::Cancel => Kind::Cancel { id: *id },
         };
-        self.send(key, site, to, kind, now)
+        self.send(key, site, &to, &kind, now)
     }
 
     /// A `Wire::Meet` from Delivery. Only a message for us, from a member, with a good signature counts.
     /// Gives the summary to send when our busy ranges changed.
     pub fn on_meet(&mut self, key: &SigningKey, site: &Key, sealed: &[u8], members: &[Key], now: u64) -> Vec<Vec<u8>> {
         let Some(m) = open(key, sealed).and_then(|p| postcard::from_bytes::<Msg>(&p).ok()) else { return vec![] };
-        let ok = m.body.to == key.verifying_key().to_bytes() && members.contains(&m.body.from) && m.check(MEET_DOMAIN, site, &m.body.from);
+        let guests = m.body.kind.proposal().is_none_or(|p| p.guests.iter().all(|g| members.contains(g)));
+        let ok = m.body.to == key.verifying_key().to_bytes() && members.contains(&m.body.from) && guests && m.check(MEET_DOMAIN, site, &m.body.from);
         if !ok {
             return vec![];
         }
@@ -539,15 +705,8 @@ impl Meetings {
     #[must_use]
     pub fn resend(&self, key: &SigningKey, site: &Key, now: u64) -> Vec<Vec<u8>> {
         let me = key.verifying_key().to_bytes();
-        let own = self.list.iter().filter(|m| m.end_ms > now).filter_map(|m| {
-            let kind = match (m.status, m.requester == me) {
-                (Status::Proposed, true) => Kind::propose(m.id, m.start_ms, m.end_ms, &m.desc),
-                (Status::Confirmed, false) => Kind::Accept { id: m.id },
-                (Status::Declined, false) => Kind::Decline { id: m.id },
-                (Status::Cancelled, _) if m.cancelled_by == Some(me) => Kind::Cancel { id: m.id },
-                _ => return None,
-            };
-            Self::sealed(key, site, m.other(&me), kind).map(|(_, wire)| wire)
+        let own = self.list.iter().filter(|m| m.end_ms > now).filter_map(|m| m.last_act(&me)).flat_map(|(kind, to)| {
+            to.into_iter().filter_map(move |t| Self::sealed(key, site, t, kind.clone()).map(|(_, wire)| wire))
         });
         own.chain((self.busy_ts > 0).then(|| self.busy_wire(key, site, now))).collect()
     }
@@ -592,7 +751,7 @@ impl Meetings {
         let me = key.verifying_key().to_bytes();
         let before = self.list.len();
         for m in b.list {
-            let ok = (m.requester == me || m.invitee == me) && m.requester != m.invitee && m.end_ms > m.start_ms && self.find(&m.id).is_none();
+            let ok = m.has(&me) && m.requester != m.invitee && m.end_ms > m.start_ms && self.find(&m.id).is_none();
             if ok {
                 self.list.push(m);
             }
@@ -630,6 +789,13 @@ impl Meetings {
         v
     }
 
+    /// One person of a meeting: key, name, and whether that is us.
+    fn person_json(who: &Key, me: &Key, names: &BTreeMap<Key, String>) -> Value {
+        let mut v = Self::who_json(who, names);
+        v["you"] = (who == me).into();
+        v
+    }
+
     fn range_json((start_ms, end_ms): Range) -> Value {
         json!({ "start_ms": start_ms, "end_ms": end_ms })
     }
@@ -659,6 +825,17 @@ impl Meetings {
             v["cancelled_by_you"] = (m.cancelled_by == Some(*me)).into();
             v["signed"] = m.accept.is_some().into();
             v["desc"] = m.desc.as_str().into();
+            v["organizer"] = Self::person_json(&m.requester, me, names);
+            v["invitees"] = m
+                .invited()
+                .map(|i| {
+                    let mut p = Self::person_json(i, me, names);
+                    p["state"] = json!(m.answer(i));
+                    p
+                })
+                .collect();
+            // Our own answer, for an invitee: it says whether to show Accept and Decline, or Leave.
+            v["my_answer"] = if m.requester == *me { Value::Null } else { json!(m.answer(me)) };
             v["log"] = m.steps().iter().map(|s| Self::step_json(s, me, names)).collect();
             // A proposal that waits for us (or for them) shows what it runs into in our calendar.
             v["clashes"] = if open { self.clashes_json(me, &self.clashes(me, None, m.range(), Some(&m.id)), names) } else { Value::Null };
@@ -744,7 +921,7 @@ mod tests {
     }
 
     fn propose(a: &mut Person, b: &Person, start: u64) -> (Key, Vec<Vec<u8>>) {
-        a.m.propose(&a.key, &SITE, b.pk(), (start, start + HOUR), "", NOW).unwrap()
+        a.m.propose(&a.key, &SITE, &[b.pk()], (start, start + HOUR), "", NOW).unwrap()
     }
 
     #[test]
@@ -806,11 +983,11 @@ mod tests {
     fn a_custom_time_and_length_is_checked_and_carries_its_own_start_and_end() {
         let (mut a, mut b, members) = pair();
         let min = 60_000;
-        let to = b.pk();
-        let try_range = |a: &mut Person, r: Range| a.m.propose(&a.key, &SITE, to, r, "", NOW).map(|_| ());
+        let to = [b.pk()];
+        let try_range = |a: &mut Person, r: Range| a.m.propose(&a.key, &SITE, &to, r, "", NOW).map(|_| ());
         // An odd start (not on the half hour) and a custom length of 45 minutes pass.
         let (start, end) = (NOW + 7 * min, NOW + 52 * min);
-        let (id, out) = a.m.propose(&a.key, &SITE, b.pk(), (start, end), "", NOW).unwrap();
+        let (id, out) = a.m.propose(&a.key, &SITE, &[b.pk()], (start, end), "", NOW).unwrap();
         a.deliver(out, &mut b, &members);
         // The invitee learns the start and end from the proposal itself.
         assert_eq!(b.m.find(&id).unwrap().range(), (start, end));
@@ -865,7 +1042,7 @@ mod tests {
         assert!(b.m.answer(&b.key, &SITE, &id, Act::Accept, late).is_err());
         assert_eq!(b.m.find(&id).unwrap().shown(late), "unaccepted");
         assert_eq!(b.m.find(&id).unwrap().shown(NOW), "proposed");
-        assert!(a.m.propose(&a.key, &SITE, b.pk(), (NOW - 2 * HOUR, NOW - HOUR), "", NOW).is_err());
+        assert!(a.m.propose(&a.key, &SITE, &[b.pk()], (NOW - 2 * HOUR, NOW - HOUR), "", NOW).is_err());
     }
 
     #[test]
@@ -960,10 +1137,10 @@ mod tests {
         assert_eq!(check_desc("  Plan the visit  "), Ok("Plan the visit"));
         assert!(check_desc(&"x".repeat(MAX_DESC_CHARS)).is_ok() && check_desc("").is_ok());
         let range = (NOW + 2 * HOUR, NOW + 3 * HOUR);
-        assert!(a.m.propose(&a.key, &SITE, b.pk(), range, "bad\ttab", NOW).is_err());
+        assert!(a.m.propose(&a.key, &SITE, &[b.pk()], range, "bad\ttab", NOW).is_err());
         assert!(a.m.list.is_empty(), "a refused description saves nothing");
         // the longest allowed text still fits one sealed message
-        let (id, out) = a.m.propose(&a.key, &SITE, b.pk(), range, &"x".repeat(MAX_DESC_CHARS), NOW).unwrap();
+        let (id, out) = a.m.propose(&a.key, &SITE, &[b.pk()], range, &"x".repeat(MAX_DESC_CHARS), NOW).unwrap();
         assert!(matches!(Wire::decode(&out[0]), Some(Wire::Meet(_))), "the wire check accepts the longest text");
         a.deliver(out, &mut b, &members);
         for p in [&a, &b] {
@@ -971,9 +1148,9 @@ mod tests {
         }
         // a repeat keeps the description; a proposal without one stays the old plain kind
         assert!(a.m.resend(&a.key, &SITE, NOW).iter().any(|w| matches!(Wire::decode(w), Some(Wire::Meet(_)))));
-        assert_eq!(Kind::propose([1; 32], 1, 2, ""), Kind::Propose { id: [1; 32], start_ms: 1, end_ms: 2 });
+        assert_eq!(Kind::propose([1; 32], 1, 2, "", &[[8; 32]]), Kind::Propose { id: [1; 32], start_ms: 1, end_ms: 2 });
         // a received proposal with a bad description is refused too
-        let bad = Signed::new(&a.key, MEET_DOMAIN, &SITE, Body { from: a.pk(), to: b.pk(), kind: Kind::propose([5; 32], 1, 2, "a\nb") });
+        let bad = Signed::new(&a.key, MEET_DOMAIN, &SITE, Body { from: a.pk(), to: b.pk(), kind: Kind::propose([5; 32], 1, 2, "a\nb", &[b.pk()]) });
         assert!(b.m.apply(&bad, NOW).is_err());
     }
 
@@ -1018,5 +1195,226 @@ mod tests {
         b.deliver(out.clone(), &mut a, &members);
         b.deliver(out, &mut a, &members);
         assert_eq!(a.m.find(&id).unwrap().log.iter().map(|s| (s.who, s.did)).collect::<Vec<_>>(), vec![(a.pk(), Did::Proposed), (b.pk(), Did::Declined)]);
+    }
+
+    // ---- meetings with several invitees ----
+
+    /// An organizer (index 0) and `n` invitees, all members.
+    fn crowd(n: u8) -> (Vec<Person>, Vec<Key>) {
+        let all: Vec<Person> = (1..=n + 1).map(Person::new).collect();
+        let members = all.iter().map(Person::pk).collect();
+        (all, members)
+    }
+
+    /// Hand the messages that `from` sent to everybody else: a sealed box opens only for its addressee.
+    fn spread(all: &mut [Person], from: usize, out: &[Vec<u8>], members: &[Key]) {
+        for (_, to) in all.iter_mut().enumerate().filter(|(j, _)| *j != from) {
+            for w in out {
+                match Wire::decode(w) {
+                    Some(Wire::Meet(b)) => drop(to.m.on_meet(&to.key, &SITE, &b, members, NOW)),
+                    Some(Wire::Busy(b)) => drop(to.m.on_busy(&SITE, &b, members)),
+                    other => panic!("unexpected {other:?}"),
+                }
+            }
+        }
+    }
+
+    /// Person `i` does `act` on `id`, and the messages reach the others.
+    fn act(all: &mut [Person], i: usize, id: &Key, act: Act, members: &[Key]) {
+        let out = try_act(&mut all[i], id, act).unwrap();
+        spread(all, i, &out, members);
+    }
+
+    fn try_act(p: &mut Person, id: &Key, act: Act) -> Result<Vec<Vec<u8>>, String> {
+        p.m.answer(&p.key, &SITE, id, act, NOW)
+    }
+
+    fn propose_to(p: &mut Person, to: &[Key], range: Range, desc: &str) -> Result<(Key, Vec<Vec<u8>>), String> {
+        p.m.propose(&p.key, &SITE, to, range, desc, NOW)
+    }
+
+    /// The organizer proposes to everybody else.
+    fn propose_all(all: &mut [Person], members: &[Key], desc: &str) -> Key {
+        let to = &members[1..];
+        let (id, out) = propose_to(&mut all[0], to, (NOW + 2 * HOUR, NOW + 3 * HOUR), desc).unwrap();
+        spread(all, 0, &out, members);
+        id
+    }
+
+    fn status_of(all: &[Person], id: &Key) -> Vec<Status> {
+        all.iter().map(|p| p.m.find(id).unwrap().status).collect()
+    }
+
+    #[test]
+    fn the_rule_confirms_once_all_answered_and_one_accepted() {
+        use Answer::{Accepted as Y, Declined as N, Left as L, Pending as P};
+        for (answers, want) in [
+            (vec![P], Status::Proposed),
+            (vec![Y], Status::Confirmed),
+            (vec![N], Status::Declined),
+            (vec![L], Status::Cancelled),
+            (vec![Y, P], Status::Proposed),
+            (vec![Y, Y, N], Status::Confirmed),
+            (vec![N, Y, L], Status::Confirmed),
+            (vec![N, N, N], Status::Declined),
+            (vec![N, L], Status::Cancelled),
+            (vec![N, P, N], Status::Proposed),
+        ] {
+            assert_eq!(settle(answers.iter().copied()), want, "{answers:?}");
+        }
+    }
+
+    #[test]
+    fn a_group_meeting_shows_each_answer_and_confirms_by_the_rule() {
+        let (mut all, members) = crowd(3);
+        let id = propose_all(&mut all, &members, "Plan the visit");
+        // everybody sees the whole list and the description
+        for p in &all {
+            let m = p.m.find(&id).unwrap();
+            assert_eq!(m.requester, members[0]);
+            assert_eq!(m.invited().copied().collect::<Vec<_>>(), members[1..]);
+            assert_eq!((m.status, m.desc.as_str()), (Status::Proposed, "Plan the visit"));
+        }
+        // only the organizer is busy while nobody has answered
+        assert_eq!(all[0].m.my_ranges(&members[0], NOW).len(), 1);
+        assert!(all[1].m.my_ranges(&members[1], NOW).is_empty());
+        act(&mut all, 1, &id, Act::Accept, &members);
+        // one accepted, two still pending: not confirmed; the accepter is busy; the others see the accept
+        assert_eq!(status_of(&all, &id), vec![Status::Proposed; 4]);
+        assert_eq!(all[1].m.my_ranges(&members[1], NOW).len(), 1);
+        assert_eq!(all[2].m.find(&id).unwrap().answer(&members[1]), Answer::Accepted);
+        act(&mut all, 2, &id, Act::Decline, &members);
+        assert_eq!(status_of(&all, &id), vec![Status::Proposed; 4], "one is still pending");
+        act(&mut all, 3, &id, Act::Accept, &members);
+        assert_eq!(status_of(&all, &id), vec![Status::Confirmed; 4]);
+        // the decliner is not busy even though the meeting is confirmed
+        assert!(all[2].m.my_ranges(&members[2], NOW).is_empty());
+        assert_eq!(all[3].m.my_ranges(&members[3], NOW).len(), 1);
+        // each accept is a signed proof of its person
+        let m = all[0].m.find(&id).unwrap();
+        let from: Vec<Key> = m.accept.iter().chain(&m.later_accepts).map(|b| postcard::from_bytes::<Msg>(b).unwrap()).inspect(|p| assert!(p.check(MEET_DOMAIN, &SITE, &p.body.from))).map(|p| p.body.from).collect();
+        assert_eq!(from, vec![members[1], members[3]]);
+        // the JSON gives each person's state
+        let r = row(&all[2], &id);
+        let states: Vec<_> = r["invitees"].as_array().unwrap().iter().map(|i| i["state"].as_str().unwrap()).collect();
+        assert_eq!((states, r["my_answer"].as_str(), r["status"].as_str()), (vec!["accepted", "declined", "accepted"], Some("declined"), Some("confirmed")));
+        // the organizer withdraws the meeting for everybody
+        act(&mut all, 0, &id, Act::Cancel, &members);
+        assert_eq!(status_of(&all, &id), vec![Status::Cancelled; 4]);
+        assert!(all.iter().all(|p| p.m.my_ranges(&p.pk(), NOW).is_empty()));
+        assert_eq!(all[2].m.find(&id).unwrap().cancelled_by, Some(members[0]));
+    }
+
+    #[test]
+    fn when_every_invitee_declines_the_meeting_is_declined() {
+        let (mut all, members) = crowd(2);
+        let id = propose_all(&mut all, &members, "");
+        act(&mut all, 1, &id, Act::Decline, &members);
+        act(&mut all, 2, &id, Act::Decline, &members);
+        assert_eq!(status_of(&all, &id), vec![Status::Declined; 3]);
+        assert!(all[0].m.my_ranges(&members[0], NOW).is_empty());
+        assert!(try_act(&mut all[1], &id, Act::Accept).is_err(), "a declined meeting cannot be accepted");
+    }
+
+    #[test]
+    fn an_invitee_who_accepted_can_leave_and_only_their_part_ends() {
+        let (mut all, members) = crowd(2);
+        let id = propose_all(&mut all, &members, "");
+        // an invitee who did not accept cannot leave (they decline), and an invitee cannot cancel for everybody
+        assert!(try_act(&mut all[1], &id, Act::Cancel).is_err());
+        act(&mut all, 1, &id, Act::Accept, &members);
+        act(&mut all, 2, &id, Act::Accept, &members);
+        act(&mut all, 1, &id, Act::Cancel, &members);
+        for p in &all {
+            let m = p.m.find(&id).unwrap();
+            assert_eq!((m.status, m.answer(&members[1]), m.answer(&members[2])), (Status::Confirmed, Answer::Left, Answer::Accepted));
+        }
+        assert!(all[1].m.my_ranges(&members[1], NOW).is_empty() && !all[2].m.my_ranges(&members[2], NOW).is_empty());
+        assert!(all[0].m.my_ranges(&members[0], NOW).len() == 1, "the organizer stays busy");
+        let log: Vec<_> = all[2].m.find(&id).unwrap().log.iter().map(|s| (s.who, s.did)).collect();
+        assert_eq!(log, vec![(members[0], Did::Proposed), (members[1], Did::Accepted), (members[2], Did::Accepted), (members[1], Did::Cancelled)]);
+        // the last one leaves too: nobody is left, the meeting is cancelled
+        act(&mut all, 2, &id, Act::Cancel, &members);
+        assert_eq!(status_of(&all, &id), vec![Status::Cancelled; 3]);
+        // a repeat of the leave changes nothing
+        let again = all[1].m.resend(&all[1].key, &SITE, NOW);
+        assert_eq!(again.len(), 3, "a leave to the organizer and the other invitee, and the summary");
+        spread(&mut all, 1, &again, &members);
+        assert_eq!(all[0].m.find(&id).unwrap().log.len(), 5);
+    }
+
+    #[test]
+    fn the_organizer_resends_the_proposal_only_to_those_who_have_not_answered() {
+        let (mut all, members) = crowd(2);
+        let id = propose_all(&mut all, &members, "");
+        act(&mut all, 1, &id, Act::Accept, &members);
+        let again = all[0].m.resend(&all[0].key, &SITE, NOW);
+        assert_eq!(again.len(), 2, "one proposal for the one who is pending, and the summary");
+        assert_eq!(all[0].m.find(&id).unwrap().last_act(&members[0]).map(|(_, to)| to), Some(vec![members[2]]));
+    }
+
+    #[test]
+    fn a_bad_group_proposal_is_refused() {
+        let (mut all, members) = crowd(3);
+        let (a, b, c) = (members[0], members[1], members[2]);
+        let group = |from: &Person, to: Key, invitees: Vec<Key>| Signed::new(&from.key, MEET_DOMAIN, &SITE, Body { from: from.pk(), to, kind: Kind::ProposeGroup { id: [5; 32], start_ms: 1, end_ms: 2, desc: String::new(), invitees } });
+        let ok = group(&all[0], b, vec![b, c]);
+        assert!(all[1].m.apply(&ok, NOW).is_ok());
+        for (to, list) in [(b, vec![b]), (b, vec![b, b]), (b, vec![a, b]), (members[3], vec![b, c]), (b, (0..9).map(|i| [i; 32]).chain([b]).collect())] {
+            let (mut fresh, msg) = (Person::new(9), group(&all[0], to, list.clone()));
+            assert!(fresh.m.apply(&msg, NOW).is_err(), "{list:?}");
+        }
+        // somebody who is no member of the site cannot be invited
+        let stranger = [99; 32];
+        let (_, wire) = Meetings::sealed(&all[0].key, &SITE, c, Kind::ProposeGroup { id: [6; 32], start_ms: NOW + HOUR, end_ms: NOW + 2 * HOUR, desc: String::new(), invitees: vec![c, stranger] }).unwrap();
+        spread(&mut all, 0, &[wire], &members);
+        assert!(all[2].m.find(&[6; 32]).is_none());
+        // the organizer's own checks: nobody, yourself, twice, and too many
+        let me = all[0].pk();
+        let r = (NOW + HOUR, NOW + 2 * HOUR);
+        let many: Vec<Key> = (0..=MAX_INVITEES as u8).map(|i| [50 + i; 32]).collect();
+        for bad in [vec![], vec![me, b], vec![b, b], many] {
+            assert!(propose_to(&mut all[0], &bad, r, "").is_err(), "{bad:?}");
+        }
+        // the longest description with the most people still fits one sealed message
+        let eight: Vec<Key> = (50..50 + MAX_INVITEES as u8).map(|i| Person::new(i).pk()).collect();
+        let (_, out) = propose_to(&mut all[0], &eight, r, &"é".repeat(MAX_DESC_BYTES / 2)).unwrap();
+        assert!(out.iter().take(MAX_INVITEES).all(|w| matches!(Wire::decode(w), Some(Wire::Meet(_)))));
+    }
+
+    #[test]
+    fn a_row_from_before_groups_reads_as_a_meeting_with_one_invitee() {
+        let (mut a, b, _) = pair();
+        let (id, _) = propose(&mut a, &b, NOW + 2 * HOUR);
+        let mut v = serde_json::to_value(&a.m.list[0]).unwrap();
+        v.as_object_mut().unwrap().retain(|k, _| !["also", "later_accepts"].contains(&k.as_str()));
+        a.m.list[0] = serde_json::from_value(v).unwrap();
+        let r = row(&a, &id);
+        assert_eq!(r["invitees"].as_array().unwrap().len(), 1);
+        assert_eq!((r["invitees"][0]["with"].as_str(), r["invitees"][0]["state"].as_str()), (Some(id_hex(&b.pk()).as_str()), Some("pending")));
+        assert_eq!(r["with"], id_hex(&b.pk()));
+        // the old wire kinds keep their numbers, and the new kind comes after them
+        let new = Kind::ProposeGroup { id, start_ms: 1, end_ms: 2, desc: String::new(), invitees: vec![b.pk(), [3; 32]] };
+        assert_eq!(postcard::to_allocvec(&new).unwrap()[0], 5);
+        assert_eq!(postcard::from_bytes::<Kind>(&postcard::to_allocvec(&new).unwrap()), Ok(new));
+        assert_eq!(Kind::propose(id, 1, 2, "", &[b.pk()]), Kind::Propose { id, start_ms: 1, end_ms: 2 });
+        // an old confirmed row (no log, a signed accept) still counts b as accepted, busy, and able to leave
+        let (mut c, mut d, members) = pair();
+        let (id, out) = propose(&mut c, &d, NOW + 2 * HOUR);
+        c.deliver(out, &mut d, &members);
+        let out = d.m.answer(&d.key, &SITE, &id, Act::Accept, NOW).unwrap();
+        d.deliver(out, &mut c, &members);
+        for p in [&mut c, &mut d] {
+            let mut v = serde_json::to_value(&p.m.list[0]).unwrap();
+            v.as_object_mut().unwrap().retain(|k, _| !["also", "later_accepts", "log"].contains(&k.as_str()));
+            p.m.list[0] = serde_json::from_value(v).unwrap();
+        }
+        assert_eq!(d.m.find(&id).unwrap().answer(&d.pk()), Answer::Accepted);
+        assert_eq!(d.m.my_ranges(&d.pk(), NOW).len(), 1);
+        let out = d.m.answer(&d.key, &SITE, &id, Act::Cancel, NOW).unwrap();
+        d.deliver(out, &mut c, &members);
+        assert_eq!((c.m.find(&id).unwrap().status, d.m.find(&id).unwrap().status), (Status::Cancelled, Status::Cancelled));
+        let kinds: Vec<_> = c.m.find(&id).unwrap().log.iter().map(|s| s.did).collect();
+        assert_eq!(kinds, vec![Did::Proposed, Did::Accepted, Did::Cancelled], "the old history is kept when a new step is added");
     }
 }

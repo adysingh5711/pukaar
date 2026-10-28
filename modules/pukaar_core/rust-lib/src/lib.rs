@@ -145,21 +145,25 @@ pub trait PukaarCoreModule: Send + 'static {
     /// Admin only: send the held approvals, role changes and revokes, and the profile refreshes of the
     /// members, in batches of 10. `{"ok":true,"queued":[ids]}`.
     fn send_batch(&mut self) -> String;
-    /// 1:1 meetings of this member (each with `desc` and a `log` of who proposed, accepted, declined or cancelled, and when): `{"meetings":[…],"share":bool,"lead_min":n,"backup":{…}}`. Times are UTC ms.
+    /// The meetings of this member, with one invitee (1:1) or up to 8. Each row has `desc`, a `log` of who proposed, accepted, declined,
+    /// cancelled or left and when, `organizer` and `invitees` (`with`, `name`, `you`, `state`: pending, accepted, declined or left)
+    /// and `my_answer` (an invitee's own state, null for the organizer). `with` is the other person of a 1:1 meeting.
+    /// A meeting is confirmed once every invitee answered and at least one accepted: `{"meetings":[…],"share":bool,"lead_min":n,"backup":{…}}`. Times are UTC ms.
     fn meet_list(&mut self) -> String;
     /// The free/busy view for a meeting with `other_hex`: our busy ranges, theirs when they share, and the
     /// next 7 days of slots of `len_min` minutes from `from_ms`: `{"shared","mine","theirs","slots"}`.
     fn meet_slots(&mut self, other_hex: String, from_ms: f64, len_min: f64) -> String;
     /// What a time runs into, in our calendar and in the summary of `other_hex`: `{"mine":[…],"theirs":[…]}`.
     fn meet_check(&mut self, other_hex: String, start_ms: f64, end_ms: f64) -> String;
-    /// Saves a proposal and sends it, sealed, to `other_hex`: `{"ok":true,"id":hex}`. A clash does not stop it.
+    /// Saves a proposal and sends it, sealed, to `other_hex`, one key or up to 8 keys separated by commas, all members of the
+    /// site: `{"ok":true,"id":hex}`. A clash does not stop it.
     /// `desc` is an optional plain-text description (up to 500 characters, no control characters), empty for none.
     fn meet_propose(&mut self, other_hex: String, start_ms: f64, end_ms: f64, desc: String) -> String;
-    /// The invitee accepts a proposal that is not over. `ok` or `error: …`.
+    /// An invitee accepts a proposal that is not over; the organizer and the other invitees are told. `ok` or `error: …`.
     fn meet_accept(&mut self, id_hex: String) -> String;
-    /// The invitee declines a proposal: the slot is free again. `ok` or `error: …`.
+    /// An invitee declines a proposal: the slot is free again. `ok` or `error: …`.
     fn meet_decline(&mut self, id_hex: String) -> String;
-    /// Either side cancels a confirmed meeting, or the requester cancels a proposal. `ok` or `error: …`.
+    /// The organizer cancels a meeting for everybody. An invitee who accepted leaves: only their part ends. `ok` or `error: …`.
     fn meet_cancel(&mut self, id_hex: String) -> String;
     /// Share the free/busy summary with the site (1) or with nobody (0), and the reminder lead time in minutes.
     fn meet_prefs(&mut self, share: i64, lead_min: f64) -> String;
@@ -276,7 +280,7 @@ struct Shared {
     queue: SharedQueue,
     /// `Wire::ChainPending` from peers: (transaction hash, kind, when). Shown, never trusted.
     peers: Vec<(Key, WriteKind, Instant)>,
-    /// The 1:1 meetings of the site of `node` (`Meetings::for_site` loads them).
+    /// The meetings of the site of `node` (`Meetings::for_site` loads them).
     meets: Meetings,
     /// When we last repeated our open meeting messages.
     last_meet: Option<Instant>,
@@ -688,7 +692,7 @@ fn on_wire(channel: &str, bytes: &[u8]) {
         Some(w @ (Wire::BlobReq { .. } | Wire::BlobChunk { .. })) => {
             outbox.extend(node.on_blob(&w, now() / 60).iter().map(Wire::encode));
         }
-        // A 1:1 meeting message for us, or a free/busy summary. A change of our busy ranges gives a new summary.
+        // A meeting message for us, or a free/busy summary. A change of our busy ranges gives a new summary.
         Some(Wire::Meet(sealed)) => {
             let (site, members) = (node.store.site, node.approved_keys());
             outbox.extend(meets.for_site(dir, &site).on_meet(&node.key, &site, &sealed, &members, now_ms()));
@@ -1366,12 +1370,12 @@ impl PukaarCoreModule for Pukaar {
     fn meet_propose(&mut self, other_hex: String, start_ms: f64, end_ms: f64, desc: String) -> String {
         meet_send(
             |node, m| {
-                let to = key_arg(&other_hex)?;
+                let to = keys_arg(&other_hex)?;
                 let (me, members) = (node.me(), node.approved_keys());
-                if !members.contains(&me) || !members.contains(&to) || to == me {
-                    return Err("You can meet another member of this site once you are approved.".into());
+                if !members.contains(&me) || to.is_empty() || to.contains(&me) || !to.iter().all(|t| members.contains(t)) {
+                    return Err("You can meet other members of this site once you are approved.".into());
                 }
-                m.propose(&node.key, &node.store.site, to, (ms_arg(start_ms)?, ms_arg(end_ms)?), &desc, now_ms())
+                m.propose(&node.key, &node.store.site, &to, (ms_arg(start_ms)?, ms_arg(end_ms)?), &desc, now_ms())
             },
             |id| serde_json::json!({ "ok": true, "id": hex::encode(id) }).to_string(),
         )
