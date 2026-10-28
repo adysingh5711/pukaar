@@ -125,6 +125,10 @@ pub trait PukaarCoreModule: Send + 'static {
     fn issue_timeline(&mut self, issue_hex: String) -> String;
     fn site_info(&mut self) -> String;
     fn checkpoint_now(&mut self) -> String;
+    /// Any active member. Queues one `anchor` write for the record as it is now: `{"ok":true,"queued":id}`. It costs
+    /// about 523,304 lepta from the account of the member. It reads the chain first and refuses a record that is
+    /// anchored already, because a failed call costs about 4 M lepta. The result shows in `site_info.last_anchor`.
+    fn anchor_now(&mut self) -> String;
     fn record_anchor(&mut self, heads_json: String, lez_ref: String) -> String;
     /// The state of each queued chain write: `key` (the wallet key import), `writes` (id, kind, state,
     /// short tx hash, reason, items) and `waiting` (writes held for `send_batch`).
@@ -1078,7 +1082,12 @@ impl PukaarCoreModule for Pukaar {
             let mut v: serde_json::Value = serde_json::from_str(&node.site_info_json()).map_err(|e| e.to_string())?;
             let (ready, error) = storage::status();
             storage::merge_status(&mut v["storage"], ready, error);
-            v["pending"] = ops::pending_rows(node, &sh.queue.lock().unwrap(), now_ms()).into();
+            let q = sh.queue.lock().unwrap();
+            v["pending"] = ops::pending_rows(node, &q, now_ms()).into();
+            // The anchor that this device saw land: the record of the chain has no time, this has.
+            if let Some(a) = ops::last_anchor(node, &q, v["last_anchor"]["ts"].as_u64().unwrap_or(0)) {
+                v["last_anchor"] = a;
+            }
             let peers = sh.peers.iter().filter(|(_, _, at)| at.elapsed() < PEER_PENDING_FOR);
             v["chain"]["pending_peers"] = peers.map(|(t, k, _)| serde_json::json!({ "tx": hex::encode(&t[..5]), "kind": format!("{k:?}") })).collect::<Vec<_>>().into();
             Ok::<_, String>(v.to_string())
@@ -1088,6 +1097,18 @@ impl PukaarCoreModule for Pukaar {
 
     fn checkpoint_now(&mut self) -> String {
         read(|n| n.checkpoint_json()).unwrap_or_else(err)
+    }
+
+    fn anchor_now(&mut self) -> String {
+        let Some(program) = program_id() else { return err("PUKAAR_PROGRAM_ID is not a base58 account id") };
+        // The chain read runs between the two locks: a slow node must not block the other calls.
+        let planned = read_with_queue(|n, q| ops::anchor_plan(n, q)).and_then(|p| p);
+        let r = planned.and_then(|plan| {
+            ops::anchor_read(&HttpRpc::new(&env_or("PUKAAR_LEZ_RPC", LEZ_RPC)), &program, &plan)?;
+            queued(|_, q, _| ops::anchor_push(q, plan, now_ms()))
+        });
+        flush();
+        id_reply(r)
     }
 
     fn record_anchor(&mut self, heads_json: String, lez_ref: String) -> String {

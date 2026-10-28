@@ -299,7 +299,7 @@ Item {
                                         confirming: "confirming", included: "on the chain", rejected: "rejected" })
     readonly property var kindText: ({ create_site: "Site", approve: "Approval", set_role: "Role change", revoke: "Revoke",
         set_profile: "Profile update", staff_name: "Staff name", profile: "Profile", set_details: "Site details", set_places: "Places change",
-        super_admin_add: "Super admin change", super_admin_remove: "Super admin change", super_admin_transfer: "Super admin change" })
+        super_admin_add: "Super admin change", super_admin_remove: "Super admin change", super_admin_transfer: "Super admin change", anchor: "Anchor" })
     // The held kinds that Send changes sends: approvals, role changes, revokes and profile refreshes.
     readonly property var batchKinds: ["approve", "set_role", "revoke", "set_profile"]
     readonly property var writes: chain.writes || []
@@ -311,6 +311,8 @@ Item {
         var l = writes.filter(function (w) { return !!account && (w.accounts || []).indexOf(account) >= 0 })
         return l.length ? l[l.length - 1] : null
     }
+    // An anchor write is on its way: one at a time.
+    readonly property bool anchorLive: writes.some(function (w) { return w.kind === "anchor" && liveStates.indexOf(w.state) >= 0 })
     function isLive(w) { return !!w && liveStates.indexOf(w.state) >= 0 }
     function writeWhy(w) { return w.reason ? ": " + w.reason : "" }
     // The key of our account in the wallet: only a failure is news ("ok" and "not imported yet" are not).
@@ -413,7 +415,7 @@ Item {
     function anchorSummary(a) {
         var newer = newerEvents(a)
         return "Last anchor recorded " + age(a.ts) + " (" + when(a.ts, now - a.ts < 6 * 86400 ? "ddd HH:mm" : "") + "). Covers "
-            + plural(a.events_covered, "event") + "."
+            + plural(a.events_covered, "event") + "." + (a.block ? " Seen on the chain at block " + a.block + "." : "")
             + (newer ? " " + plural(newer, "newer event") + (newer === 1 ? " isn't" : " aren't") + " anchored yet." : "")
     }
     // A place that takes no reports, in words: "retired" ("" = active).
@@ -3289,8 +3291,8 @@ Item {
                     }
                 }
 
-                // Integrity (from History's strip and the Board's mismatch banner): the record's status, then the three
-                // anchor steps for any member: compute, run the printed spel command, record the reference
+                // Integrity (from History's strip and the Board's mismatch banner): the record's status, then the
+                // anchor for any member: compute the checkpoint, then one button that writes it to the chain
                 TabPage {
                     enabled: !root.syncing
                     PageHead {
@@ -3312,7 +3314,11 @@ Item {
                     }
                     Help { visible: !root.approved; text: "Members can anchor the record. After approval you can do this too." }
                     Heading { visible: root.approved; text: "Anchor now" }
-                    Help { visible: root.approved; text: "Needs a terminal and a LEZ account." }
+                    Help {
+                        visible: root.approved
+                        text: "An anchor is one write to the chain. It costs about 0.0005 LEZ (523,304 lepta), and your network account pays it. "
+                            + "It can be written once for each state of the record."
+                    }
                     Step {
                         visible: root.approved
                         n: 1; title: "Compute the checkpoint"
@@ -3324,30 +3330,15 @@ Item {
                     }
                     Step {
                         visible: root.approved
-                        n: 2; title: "Copy the command"
-                        Help { text: "Run it in programs/pukaar_registry/ in a terminal. Replace <YOUR_PUBLIC_ACCOUNT> with your LEZ account." }
-                        FramedTextArea {
-                            readOnly: true; mono: true; boxHeight: 112
-                            name: "spel anchor command"
-                            placeholder: "Compute the checkpoint first"
-                            text: root.checkpoint ? root.checkpoint.spel : ""
-                        }
-                    }
-                    Step {
-                        visible: root.approved
-                        n: 3; title: "Record the reference"
-                        Help { text: "Paste the reference the command prints, then record it." }
-                        LabelledField {
-                            id: anchorField
-                            label: "Reference"
-                            placeholder: "e.g. 0x9f2c…e1 or pda:<account id>"
-                            mono: true
-                            buttonText: "Record"
-                            missing: !root.checkpoint ? "Compute the checkpoint first (step 1)." : anchorField.text.trim() === "" ? "Paste the reference first." : ""
-                            onSubmitted: {
-                                root.run("record_anchor", [JSON.stringify(root.checkpoint.heads), anchorField.text],
-                                         function () { anchorField.text = ""; root.checkpoint = null })
-                            }
+                        n: 2; title: "Anchor it on the chain"
+                        Help { visible: root.anchorLive; text: "The anchor is on its way to the chain. This takes a minute or two." }
+                        Help { visible: root.balanceState === "short" && !root.anchorLive; text: root.balanceLine }
+                        ConfirmButton {
+                            text: root.anchorLive ? "Anchoring…" : "Anchor now"; kind: "primary"
+                            allowed: !root.anchorLive
+                            effect: "This sends one write to the chain. It costs about 0.0005 LEZ from your network account. If this record is anchored already, nothing is sent."
+                            confirmText: "Anchor now"
+                            onConfirmed: root.run("anchor_now", [], function () { root.checkpoint = null })
                         }
                     }
                 }

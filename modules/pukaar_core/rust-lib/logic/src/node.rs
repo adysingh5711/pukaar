@@ -403,23 +403,18 @@ impl Node {
         .to_string()
     }
 
-    /// Everything needed to anchor, including the exact `spel` command to run.
+    /// The checkpoint of the record now: the heads, the root over them and the number of events.
     #[must_use]
     pub fn checkpoint_json(&self) -> String {
         let cp = checkpoint_now(&self.store, &self.key);
         let h = |b: &[u8]| hex::encode(b);
         let heads: Vec<Value> = cp.heads.iter().map(|(a, s)| json!([h(a), s])).collect();
-        // SPEL CLI: snake_case args become --kebab-case; [u8; 32] args take 64 hex chars.
-        let spel = format!(
-            "spel anchor --site-id {} --heads-root {} --n-events {} --signer-pk {} --sig-r {} --sig-s {} --payer <YOUR_PUBLIC_ACCOUNT>",
-            h(&self.store.site), h(&cp.heads_root), cp.n_events, h(&cp.signer), h(&cp.sig[..32]), h(&cp.sig[32..])
-        );
         json!({ "heads": heads, "heads_root": h(&cp.heads_root), "n_events": cp.n_events,
-                "signer": h(&cp.signer), "sig": h(&cp.sig), "spel": spel })
+                "signer": h(&cp.signer), "sig": h(&cp.sig) })
         .to_string()
     }
 
-    /// After `spel anchor` succeeds: publish the checkpoint so every client can check it.
+    /// Publish a checkpoint event for a reference to an anchor, so every client can check it.
     pub fn record_anchor(
         &mut self,
         heads_json: &str,

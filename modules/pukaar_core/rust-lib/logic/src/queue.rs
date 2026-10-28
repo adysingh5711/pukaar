@@ -16,17 +16,17 @@
 //!   back before an entry is `Done`.
 //! - A failed send, a rejection or a timeout is never retried by the queue. The user acts again.
 
-use crate::chain::{decode_member, decode_site, member_pda, site_pda, AccountId};
+use crate::chain::{checkpoint_pda, decode_checkpoint, decode_member, decode_site, member_pda, site_pda, AccountId};
 use crate::event::{sha256, Key};
 use crate::fetch::{Details, Places, SharedFetched, Store};
 use crate::joinreq;
 use crate::lezkey::{derive_lez_secret, lez_account_id};
 use crate::profile::{self, Announce, MAX_INLINE_PROFILE};
-use crate::rpc::{balance, claim_ms, get_account, lez, Rpc, SharedChain, FLOOR_LEPTA};
+use crate::rpc::{balance, claim_ms, clock_ms, get_account, last_block, lez, Rpc, SharedChain, FLOOR_LEPTA};
 use crate::sync::{Wire, WriteKind};
 use crate::writes::{self, Ctx, PlaceOp, Pointed, SuperOp, Tx};
 use ed25519_dalek::SigningKey;
-use pukaar_sites_rules::{request_id, ApproveItem, JoinBody, Member, MemberStatus, Pointer, ProfileItem, Rank, Role, Site, JOIN_BODY_LEN, JOIN_REQ_LEN};
+use pukaar_sites_rules::{request_id, ApproveItem, CheckpointRecord, JoinBody, Member, MemberStatus, Pointer, ProfileItem, Rank, Role, Site, JOIN_BODY_LEN, JOIN_REQ_LEN};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -135,6 +135,9 @@ pub enum Intent {
     SuperAdd(AccountId),
     SuperRemove(AccountId),
     SuperTransfer(AccountId),
+    /// `anchor`: the Merkle root over everyone's heads, written once for each (site, root). No file. `signer` is
+    /// our Pukaar key (the member record must hold it). It costs a fee of its own (about 523,304 lepta).
+    Anchor { heads_root: Key, n_events: u64, signer: Key },
     /// O5: an admin signs the name of a staff member. Blob: the profile file. The pointer goes to the chain
     /// at once with `set_profile_batch`, one item.
     StaffName { user: AccountId, key: Key, name: String, version: u64 },
@@ -162,6 +165,7 @@ impl Intent {
             SetProfile { .. } | StaffName { .. } => WriteKind::SetProfile,
             Details { .. } | Places { .. } => WriteKind::SetSite,
             SuperAdd(_) | SuperRemove(_) | SuperTransfer(_) => WriteKind::SuperAdmin,
+            Anchor { .. } => WriteKind::Anchor,
             Publish { .. } => return None,
         })
     }
@@ -180,6 +184,7 @@ impl Intent {
             SuperAdd(_) => "super_admin_add",
             SuperRemove(_) => "super_admin_remove",
             SuperTransfer(_) => "super_admin_transfer",
+            Anchor { .. } => "anchor",
             Publish { .. } => "profile",
         }
     }
@@ -243,6 +248,8 @@ impl Intent {
             SuperAdd(t) => site.is_some_and(|s| s.is_super(t)),
             SuperRemove(t) => site.is_some_and(|s| !s.is_super(t)),
             SuperTransfer(t) => site.is_some_and(|s| s.is_super(t) && !s.is_super(me)),
+            // The record of this root is on the chain (ours, or one of another member or device).
+            Anchor { .. } => r.anchored.is_some(),
             Publish { .. } => false,
         }
     }
@@ -335,6 +342,19 @@ impl Entry {
     }
 }
 
+/// The newest anchor that this device saw on the chain, kept for the Integrity page. The record holds no block
+/// and no time, so these are the block and the chain time of the read that first showed it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnchorNote {
+    pub site: Key,
+    pub heads_root: Key,
+    pub n_events: u64,
+    /// 0 when the block could not be read.
+    pub block: u64,
+    pub at_ms: u64,
+    pub tx: Option<String>,
+}
+
 #[derive(Default, Serialize, Deserialize)]
 pub struct Queue {
     next_id: u64,
@@ -350,6 +370,9 @@ pub struct Queue {
     /// An admin declined our request: the UI says so and offers to send it again.
     #[serde(default)]
     pub declined: bool,
+    /// The newest anchor that we saw on the chain (see `AnchorNote`).
+    #[serde(default)]
+    pub last_anchor: Option<AnchorNote>,
     /// The highest profile version that we gave out.
     pub profile_version: u64,
     #[serde(skip)]
@@ -423,6 +446,9 @@ impl Queue {
         self.mine = None;
         self.rejected.clear();
         self.declined = false;
+        if self.last_anchor.as_ref().is_some_and(|a| a.site == *site) {
+            self.last_anchor = None;
+        }
     }
 
     /// The worker died in the middle of a tick: let the next one start.
@@ -632,6 +658,8 @@ impl Env<'_> {
 struct Reads {
     site: Option<Site>,
     members: HashMap<AccountId, Member>,
+    /// The checkpoint record of an `Anchor` entry, when the chain holds one. Read for that kind only.
+    anchored: Option<CheckpointRecord>,
 }
 
 fn read_site(env: &Env, site: &Key) -> Result<Option<Site>, String> {
@@ -654,7 +682,14 @@ fn reads(env: &Env, e: &Entry) -> Result<Reads, String> {
             members.insert(u, decode_member(&d)?);
         }
     }
-    Ok(Reads { site, members })
+    let mut anchored = None;
+    if let Intent::Anchor { heads_root, .. } = &e.intent {
+        let d = get_account(env.rpc, &env.program, &checkpoint_pda(&env.program, &e.site, heads_root))?;
+        if !d.is_empty() {
+            anchored = Some(decode_checkpoint(&d)?);
+        }
+    }
+    Ok(Reads { site, members, anchored })
 }
 
 fn claimed(r: &Reads, me: &AccountId) -> Rank {
@@ -677,6 +712,7 @@ pub fn tick(q: &Mutex<Queue>, env: &Env) {
         g.replace(e.clone());
         g.save();
     };
+    let mut note = None;
     let entry = match entry {
         // Import the key at start, once (an imported key is not an action on the chain).
         None => {
@@ -686,13 +722,22 @@ pub fn tick(q: &Mutex<Queue>, env: &Env) {
             None
         }
         Some(mut e) => {
+            let was = e.state;
             step(env, &mut e, &mut ks, &commit);
+            // An anchor that the chain shows now: keep where and when we saw it (best effort: a failed read gives block 0).
+            if let (true, Intent::Anchor { heads_root, n_events, .. }) = (was != St::Done && e.state == St::Done, &e.intent) {
+                let at_ms = clock_ms(env.rpc).unwrap_or(env.now_ms);
+                note = Some(AnchorNote { site: e.site, heads_root: *heads_root, n_events: *n_events, block: last_block(env.rpc).unwrap_or(0), at_ms, tx: e.tx.clone() });
+            }
             Some(e)
         }
     };
     let mut g = q.lock().unwrap();
     g.key = ks;
     g.busy = false;
+    if note.is_some() {
+        g.last_anchor = note;
+    }
     if let Some(e) = entry {
         g.replace(e);
         g.prune();
@@ -928,6 +973,7 @@ fn build(ctx: &Ctx, e: &Entry, r: &Reads) -> Result<Tx, String> {
         Intent::SuperAdd(t) => writes::super_admin(ctx, SuperOp::Add, *t),
         Intent::SuperRemove(t) => writes::super_admin(ctx, SuperOp::Remove, *t),
         Intent::SuperTransfer(t) => writes::super_admin(ctx, SuperOp::Transfer, *t),
+        Intent::Anchor { heads_root, n_events, signer } => writes::anchor(ctx, *heads_root, *n_events, *signer),
         Intent::Publish { .. } => return Err("a profile is no chain write".into()),
     })
 }

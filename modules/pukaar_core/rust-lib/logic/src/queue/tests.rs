@@ -1,10 +1,10 @@
 //! The queue against a fake chain, a fake Storage and a fake wallet. Nothing is sent anywhere.
 
 use super::*;
-use crate::chain::{b58, AccountId};
+use crate::chain::{b58, checkpoint_pda, AccountId};
 use crate::fetch::Fetched;
 use crate::rpc::{claim_of, Chain, CLAIM_MARGIN_MS};
-use pukaar_sites_rules::{apply_create, CreateSite, GateConfig, Instruction};
+use pukaar_sites_rules::{apply_create, CheckpointRecord, CreateSite, GateConfig, Instruction};
 use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
@@ -32,7 +32,7 @@ pub(crate) struct FakeRpc {
 }
 
 impl FakeRpc {
-    fn put(&self, id: &AccountId, program: &AccountId, bytes: Vec<u8>) {
+    pub(crate) fn put(&self, id: &AccountId, program: &AccountId, bytes: Vec<u8>) {
         self.accounts.lock().unwrap().insert(b58(id), (*program, bytes));
     }
 }
@@ -967,4 +967,61 @@ fn an_unreadable_balance_keeps_the_write_and_sends_nothing() {
     let e = w.entry(id);
     assert_eq!((e.state, w.sent().len()), (St::Queued, 0));
     assert!(e.reason.as_deref().is_some_and(|r| r.starts_with("could not read the balance")));
+}
+
+// ---- anchor ----
+
+fn record(w: &World, root: u8, n: u64) -> CheckpointRecord {
+    CheckpointRecord { site_id: w.site_id(), heads_root: [root; 32], n_events: n, signer_pk: pk(1), sig_r: [0; 32], sig_s: [0; 32] }
+}
+
+fn anchor_intent(root: u8) -> Intent {
+    Intent::Anchor { heads_root: [root; 32], n_events: 12, signer: pk(1) }
+}
+
+#[test]
+fn an_anchor_is_built_with_our_member_and_the_checkpoint_and_ends_with_a_note() {
+    let w = World::new();
+    let id = w.push(anchor_intent(3), St::Queued, vec![]);
+    w.tick(T0);
+    let e = w.entry(id);
+    assert_eq!((e.state, e.reason), (St::Sent, None));
+    // The instruction is the builder's, signed by us as a super admin, with the claim of the chain clock.
+    let ctx = Ctx { program: PROGRAM, site_id: w.site_id(), signer: acct(1), claimed: Rank::SuperAdmin, now_ms: claim_of(CLOCK_NOW) };
+    let tx = &w.sent()[0];
+    assert_eq!(*tx, writes::anchor(&ctx, [3; 32], 12, pk(1)));
+    // Our member record, then the checkpoint record of (site, root).
+    assert_eq!(tx.accounts[2].id, member_pda(&PROGRAM, &w.site_id(), &acct(1)));
+    assert_eq!(tx.accounts[3].id, checkpoint_pda(&PROGRAM, &w.site_id(), &[3; 32]));
+    assert!(matches!(&w.out.lock().unwrap()[..], [Wire::ChainPending { kind: WriteKind::Anchor, .. }]));
+    assert!(w.q.lock().unwrap().last_anchor.is_none(), "not on the chain yet");
+    // The chain shows the record: the entry is done, and the queue keeps the block and the time of the read.
+    w.rpc.put(&checkpoint_pda(&PROGRAM, &w.site_id(), &[3; 32]), &PROGRAM, record(&w, 3, 12).encode());
+    w.tick(T0 + 5_000);
+    assert_eq!(w.entry(id).state, St::Done);
+    let note = w.q.lock().unwrap().last_anchor.clone().unwrap();
+    assert_eq!((note.heads_root, note.n_events, note.block, note.at_ms), ([3; 32], 12, 100, CLOCK_NOW));
+    assert_eq!(note.tx.as_deref(), Some(&*hex::encode([1u8; 32])));
+    // It survives a restart.
+    assert_eq!(Queue::load(&w.dir).last_anchor, Some(note));
+}
+
+#[test]
+fn an_anchor_that_the_chain_holds_already_is_not_sent() {
+    let w = World::new();
+    w.rpc.put(&checkpoint_pda(&PROGRAM, &w.site_id(), &[3; 32]), &PROGRAM, record(&w, 3, 12).encode());
+    let id = w.push(anchor_intent(3), St::Queued, vec![]);
+    w.tick(T0);
+    assert_eq!((w.entry(id).state, w.sent().len()), (St::Done, 0), "a second call would fail and cost about 4 M lepta");
+    assert_eq!(w.q.lock().unwrap().status_json(&w.site_id(), T0)["writes"][0]["kind"], "anchor");
+}
+
+#[test]
+fn an_anchor_waits_for_funds_like_any_write() {
+    let w = World::new();
+    w.rpc.fund(&acct(1), 1);
+    let id = w.push(anchor_intent(3), St::Queued, vec![]);
+    w.tick(T0);
+    assert_eq!((w.entry(id).state, w.sent().len()), (St::Queued, 0));
+    assert!(w.entry(id).reason.unwrap().starts_with(SHORT_OF_FUNDS));
 }

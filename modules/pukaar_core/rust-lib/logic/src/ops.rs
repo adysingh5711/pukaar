@@ -5,7 +5,8 @@
 //!
 //! Held writes (approvals, role changes, revokes) wait for `send_batch`. The others are queued at once.
 
-use crate::chain::b58;
+use crate::chain::{b58, checkpoint_pda, AccountId};
+use crate::checkpoint::checkpoint_now;
 use crate::event::{Key, Location, MAX_TEXT};
 use crate::fetch::is_staff;
 use crate::joinreq;
@@ -14,7 +15,7 @@ use crate::node::{fingerprint, parse_id, Node};
 use crate::profile;
 use crate::sync::Wire;
 use crate::queue::{ApproveReq, Blob, Intent, Prof, ProfReq, Queue, RevokeReq, St, REQUEST_VALID_MS};
-use crate::rpc::{self, rank_name};
+use crate::rpc::{self, get_account, rank_name, Rpc};
 use crate::writes::{self, Genesis, PlaceOp};
 use ed25519_dalek::SigningKey;
 use pukaar_sites_rules::{can, request_id, seed, Action, Member, MemberStatus, Rank, Role, Site};
@@ -287,6 +288,69 @@ pub fn super_admin(node: &Node, q: &mut Queue, subject_hex: &str, kind: SuperKin
         SuperKind::Transfer => Intent::SuperTransfer(m.user),
     };
     Ok(q.push(node.store.site, intent, St::Queued, vec![], now))
+}
+
+// ---- anchor ----
+
+/// What `anchor` found out before it asks the chain: the record state that it would write.
+pub struct AnchorPlan {
+    pub site: Key,
+    pub heads_root: Key,
+    pub n_events: u64,
+    /// Our Pukaar key: the member record must hold it.
+    pub signer: Key,
+}
+
+/// `anchor_now`, step 1 (no network): any active member may anchor. The root is computed from the events that
+/// this device holds now. A root that waits or runs already is refused.
+pub fn anchor_plan(node: &Node, q: &Queue) -> Result<AnchorPlan, String> {
+    view(node)?.need(Action::Anchor, None)?;
+    let cp = checkpoint_now(&node.store, &node.key);
+    if cp.heads_root == [0; 32] {
+        return Err("There is nothing to anchor yet: the record has no events.".into());
+    }
+    let plan = AnchorPlan { site: node.store.site, heads_root: cp.heads_root, n_events: cp.n_events, signer: node.me() };
+    if q.open(&plan.site).any(|e| matches!(&e.intent, Intent::Anchor { heads_root, .. } if *heads_root == plan.heads_root)) {
+        return Err("This record is being anchored already. Wait for it to land.".into());
+    }
+    Ok(plan)
+}
+
+/// Step 2: read the record of this root. It is write-once, and a failed call costs about 4 M lepta, so a root
+/// that is on the chain already is refused here, before anything is paid. A failed read refuses too.
+pub fn anchor_read(rpc: &dyn Rpc, program: &AccountId, plan: &AnchorPlan) -> Result<(), String> {
+    let at = checkpoint_pda(program, &plan.site, &plan.heads_root);
+    let held = get_account(rpc, program, &at).map_err(|e| format!("Could not read the chain, so nothing was sent: {e}"))?;
+    if held.is_empty() {
+        return Ok(());
+    }
+    Err("This record is already anchored. Nothing was sent and nothing was paid. It can be anchored again after someone adds an event.".into())
+}
+
+/// Step 3: queue the write. The worker reads the record once more and checks the balance before it signs.
+pub fn anchor_push(q: &mut Queue, plan: AnchorPlan, now: u64) -> Result<u64, String> {
+    if q.open(&plan.site).any(|e| matches!(&e.intent, Intent::Anchor { heads_root, .. } if *heads_root == plan.heads_root)) {
+        return Err("This record is being anchored already. Wait for it to land.".into());
+    }
+    Ok(q.push(plan.site, Intent::Anchor { heads_root: plan.heads_root, n_events: plan.n_events, signer: plan.signer }, St::Queued, vec![], now))
+}
+
+/// The three steps in one call (the module runs them apart, so that no lock is held during the chain read).
+pub fn anchor(node: &Node, q: &mut Queue, rpc: &dyn Rpc, program: &AccountId, now: u64) -> Result<u64, String> {
+    let plan = anchor_plan(node, q)?;
+    anchor_read(rpc, program, &plan)?;
+    anchor_push(q, plan, now)
+}
+
+/// `site_info.last_anchor`: the anchor that this device saw land, when it is newer than the one in the record
+/// (`older_ts`, unix seconds). The record of the chain has no block and no time: `block` and `ts` are those of
+/// the read that first showed it.
+pub fn last_anchor(node: &Node, q: &Queue, older_ts: u64) -> Option<Value> {
+    let a = q.last_anchor.as_ref().filter(|a| a.site == node.store.site && a.at_ms / 1000 > older_ts)?;
+    Some(json!({
+        "ts": a.at_ms / 1000, "block": a.block, "tx": a.tx, "by": hex::encode(node.me()), "by_name": node.names.get(&node.me()),
+        "events_covered": a.n_events, "reproducible": true, "root": hex::encode(a.heads_root),
+    }))
 }
 
 // ---- places ----

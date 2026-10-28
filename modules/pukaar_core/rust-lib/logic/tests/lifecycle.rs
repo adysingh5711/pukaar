@@ -299,10 +299,8 @@ fn anchored_checkpoint_shows_in_timeline() {
     let i = report(&mut s.asha);
     s.sync();
     let cp: serde_json::Value = serde_json::from_str(&s.ravi.checkpoint_json()).unwrap();
-    assert!(cp["spel"]
-        .as_str()
-        .unwrap()
-        .starts_with("spel anchor --site-id "));
+    assert!(cp["spel"].is_null(), "no command text any more");
+    assert_eq!(cp["heads_root"].as_str().map(str::len), Some(64));
     assert!(
         s.ravi
             .record_anchor(&cp["heads"].to_string(), " ", 30)

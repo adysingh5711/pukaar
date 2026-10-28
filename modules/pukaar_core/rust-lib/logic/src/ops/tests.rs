@@ -817,3 +817,77 @@ fn a_staff_name_is_uploaded_and_sent_as_one_profile_pointer() {
     assert_eq!(w.entry(id).state, St::Done);
     assert_eq!(w.sent().len(), 1);
 }
+
+// ---- anchor ----
+
+struct Offline;
+impl crate::rpc::Rpc for Offline {
+    fn call(&self, _: &str, _: serde_json::Value) -> Result<String, String> {
+        Err("offline".into())
+    }
+}
+
+/// A node of member `n` that holds one event, so that its record has a root.
+fn node_with_event(w: &World, n: u8) -> Node {
+    let mut nd = node(w, n);
+    nd.publish(Body::Report { category: "water".into(), location: "W-01".into(), landmark: String::new(), text: "leak".into() }, 10).unwrap();
+    nd
+}
+
+#[test]
+fn an_active_member_queues_one_anchor_for_the_record_as_it_is() {
+    let w = World::new();
+    w.put_member(&w.member(2, Role::Resident));
+    let n = node_with_event(&w, 2);
+    let mut q = locked(&w);
+    let id = anchor(&n, &mut q, &*w.rpc, &PROGRAM, NOW).unwrap();
+    let e = q.entries.iter().find(|e| e.id == id).unwrap();
+    let cp = crate::checkpoint::checkpoint_now(&n.store, &n.key);
+    assert_eq!(e.state, St::Queued, "no file to prepare");
+    assert!(matches!(&e.intent, Intent::Anchor { heads_root, n_events: 1, signer } if *heads_root == cp.heads_root && *signer == pk(2)));
+    // The same record twice is one write.
+    assert!(anchor(&n, &mut q, &*w.rpc, &PROGRAM, NOW).unwrap_err().contains("being anchored already"));
+    assert_eq!(q.open(&w.site_id()).count(), 1);
+}
+
+#[test]
+fn a_record_that_is_anchored_already_is_refused_before_anything_is_queued() {
+    let w = World::new();
+    let n = node_with_event(&w, 1);
+    let cp = crate::checkpoint::checkpoint_now(&n.store, &n.key);
+    let rec = pukaar_sites_rules::CheckpointRecord { site_id: w.site_id(), heads_root: cp.heads_root, n_events: 1, signer_pk: pk(1), sig_r: [0; 32], sig_s: [0; 32] };
+    w.rpc.put(&crate::chain::checkpoint_pda(&PROGRAM, &w.site_id(), &cp.heads_root), &PROGRAM, rec.encode());
+    let mut q = locked(&w);
+    let why = anchor(&n, &mut q, &*w.rpc, &PROGRAM, NOW).unwrap_err();
+    assert!(why.contains("already anchored") && why.contains("nothing was paid"), "{why}");
+    assert_eq!(q.entries.len(), 0);
+}
+
+#[test]
+fn an_anchor_is_refused_without_a_role_without_events_and_without_a_chain_read() {
+    let w = World::new();
+    let mut q = locked(&w);
+    // No role: member 9 has no record on the chain.
+    let stranger = node_with_event(&w, 9);
+    assert!(anchor(&stranger, &mut q, &*w.rpc, &PROGRAM, NOW).unwrap_err().contains("not an approved member"));
+    // A member with an empty record.
+    let empty = node(&w, 1);
+    assert!(anchor(&empty, &mut q, &*w.rpc, &PROGRAM, NOW).unwrap_err().contains("nothing to anchor"));
+    // The chain cannot be read: the paid call is not queued.
+    let n = node_with_event(&w, 1);
+    let why = anchor(&n, &mut q, &Offline, &PROGRAM, NOW).unwrap_err();
+    assert!(why.starts_with("Could not read the chain, so nothing was sent"), "{why}");
+    assert_eq!(q.entries.len(), 0);
+}
+
+#[test]
+fn the_anchor_that_this_device_saw_replaces_an_older_one_in_site_info() {
+    let w = World::new();
+    let n = node(&w, 1);
+    let mut q = locked(&w);
+    assert!(last_anchor(&n, &q, 0).is_none());
+    q.last_anchor = Some(crate::queue::AnchorNote { site: w.site_id(), heads_root: [3; 32], n_events: 12, block: 77, at_ms: 9_000_000, tx: None });
+    let a = last_anchor(&n, &q, 0).unwrap();
+    assert_eq!((a["ts"].as_u64(), a["block"].as_u64(), a["events_covered"].as_u64(), a["reproducible"].as_bool()), (Some(9_000), Some(77), Some(12), Some(true)));
+    assert!(last_anchor(&n, &q, 9_000).is_none(), "the one in the record is as new");
+}
