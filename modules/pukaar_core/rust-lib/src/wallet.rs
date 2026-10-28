@@ -20,11 +20,14 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
 use wallet::config::{SequencerConnectionData, WalletConfigOverrides};
-use wallet::{AccountIdentity, WalletCore};
+use wallet::{AccountIdentity, ExecutionFailureKind, WalletCore};
 
 const GAS_LIMIT: u64 = 500_000;
 /// Signing and sending read nonces and fees and then send: a few requests.
 const SEND: Duration = Duration::from_secs(30);
+/// Tries of a send that fails while it reads the chain, and the wait between two tries.
+const SEND_TRIES: u32 = 3;
+const SEND_RETRY_WAIT: Duration = Duration::from_secs(3);
 /// One request.
 const POLL: Duration = Duration::from_secs(15);
 
@@ -99,17 +102,30 @@ impl ChainWriter for WalletWriter {
     fn send(&self, tx: &Tx) -> Result<String, String> {
         let g = self.wallet.lock().unwrap();
         let w = g.as_ref().ok_or("the wallet has no key yet")?;
-        let mentions = tx
-            .accounts
-            .iter()
-            .map(|m| {
-                let id = AccountId::new(m.id);
-                let who = if m.sign { AccountIdentity::Public(id) } else { AccountIdentity::PublicNoSign(id) };
-                who.select_program_shard(AccountId::new(m.shard))
-            })
-            .collect();
-        let send = w.send_pub_tx_paid_by(mentions, tx.ix.clone(), AccountId::new(tx.program), Some(AccountId::new(tx.payer)));
-        self.run(SEND, send).map(|h| h.to_string()).map_err(|e| format!("send failed: {e}"))
+        for try_no in 1..=SEND_TRIES {
+            let mentions = tx
+                .accounts
+                .iter()
+                .map(|m| {
+                    let id = AccountId::new(m.id);
+                    let who = if m.sign { AccountIdentity::Public(id) } else { AccountIdentity::PublicNoSign(id) };
+                    who.select_program_shard(AccountId::new(m.shard))
+                })
+                .collect();
+            let send = w.send_pub_tx_paid_by(mentions, tx.ix.clone(), AccountId::new(tx.program), Some(AccountId::new(tx.payer)));
+            match self.rt.block_on(async { tokio::time::timeout(SEND, send).await }) {
+                Ok(Ok(h)) => return Ok(h.to_string()),
+                // The wallet reads accounts from the sequencer BEFORE it submits, so nothing was sent: a try is safe.
+                // Any other error, and a timeout, may come after the submit and is never tried again.
+                Ok(Err(e @ ExecutionFailureKind::SequencerError(_))) if try_no < SEND_TRIES => {
+                    self.fail(format!("{e:#}"));
+                    std::thread::sleep(SEND_RETRY_WAIT);
+                }
+                Ok(Err(e)) => return Err(format!("send failed: {}", self.fail(format!("{e:#}")))),
+                Err(_) => return Err(format!("send failed: {}", self.fail("timed out".into()))),
+            }
+        }
+        unreachable!("the last try returns")
     }
 
     fn poll(&self, tx_hash: &str) -> Poll {
