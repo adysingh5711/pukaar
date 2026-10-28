@@ -174,18 +174,34 @@ pub trait PukaarCoreModule: Send + 'static {
     fn chat_start(&mut self) -> String;
     /// The chat list of an active member: `{"threads":[{"key","name","preview","last_ms","queued","history_only",
     /// "has_address","unread"}],"unread":bool,"known":[keys whose chat address arrived],"chat":{"ok","status"|"error"},"problem"}`, newest first.
-    /// One thread per person, old conversations and the new one together. It reads the chat module, so the screen polls it.
+    /// One thread per person, old conversations and the new one together. A group of the site is a row too, with
+    /// `"group":true`, `key` its conversation id, `name` its name, `members` (in the group) and `pending` (added, not in yet).
+    /// It reads the chat module, so the screen polls it.
     fn chat_threads(&mut self) -> String;
-    /// Marks the thread with one member as read, up to its newest message: its `unread` flag and the total `unread` go
-    /// out. The mark is kept in the site's chat file. `{"ok":true}`, or `error: …`.
+    /// Marks a thread as read, up to its newest message: its `unread` flag and the total `unread` go out. `key_hex` is a
+    /// member's key, or the `key` of a group row (its conversation id). The mark is kept in the site's chat file.
+    /// `{"ok":true}`, or `error: …`.
     fn chat_mark_read(&mut self, key_hex: String) -> String;
-    /// The thread with one member: `{"messages":[{"from_self","content","ts_ms","old","queued"}]}`, oldest first. `old` is
-    /// a message of a conversation from before a restart (read only), `queued` a message that is not sent yet.
+    /// A thread, by the `key` of its row: `{"messages":[{"from_self","content","ts_ms","old","queued"}]}`, oldest first.
+    /// `old` is a message of a conversation from before a restart (read only), `queued` a message that is not sent yet.
+    /// In a group a message that came in also has `sender_key` (the member's key, or the chat address when no member
+    /// announced it) and `sender_name` (null when the member has no name).
     fn chat_messages(&mut self, key_hex: String) -> String;
-    /// Sends a message to an active member. It is kept first and sent at once if their chat address is known; if not
-    /// (or if chat is down) it waits in a local queue and goes out when the address arrives:
-    /// `{"ok":true,"sent":bool,"why"}`. `error: …` for a message that is refused (empty, too long, not a member).
+    /// Sends a message to an active member, or to a group (the `key` of its row). It is kept first and sent at once if
+    /// their chat address is known (a group: once the members that were added have joined); if not (or if chat is down)
+    /// it waits in a local queue and goes out by itself: `{"ok":true,"sent":bool,"why"}`. `error: …` for a message that
+    /// is refused (empty, too long, not a member).
     fn chat_send(&mut self, key_hex: String, text: String) -> String;
+    /// Makes a group with `name` and the active members in `members_hex` (keys, separated by commas). The group is in the
+    /// chat list at once. A member whose chat address has not arrived is added when it does. `{"ok":true,"convo"}`, or
+    /// `error: …`.
+    fn chat_group_create(&mut self, name: String, members_hex: String) -> String;
+    /// Adds active members (keys, separated by commas) to a group of the site; the ones in it already are skipped.
+    /// `{"ok":true}`, or `error: …`.
+    fn chat_group_add(&mut self, convo: String, members_hex: String) -> String;
+    /// A group for its header: `{"ok":true,"name","history_only","members":[{"key","name","me","pending"}]}`. A member
+    /// that waits for their chat address, or for the group to commit the add, is `pending`.
+    fn chat_group_info(&mut self, convo: String) -> String;
     fn on_context_ready(&mut self, _ctx: &RustModuleContext) {}
 }
 
@@ -951,6 +967,11 @@ fn key_arg(hex: &str) -> Result<Key, String> {
     parse_id(hex).ok_or_else(|| "That is not a 64-character hex key.".to_string())
 }
 
+/// Keys in hex, separated by commas.
+fn keys_arg(csv: &str) -> Result<Vec<Key>, String> {
+    csv.split(',').map(str::trim).filter(|k| !k.is_empty()).map(key_arg).collect()
+}
+
 /// A time in UTC milliseconds. The UI sends it as a JS number: a value past 32 bits reaches the core as
 /// a float (`1781234567890.0`), which an `i64` parameter refuses, so the methods take `f64`.
 fn ms_arg(v: f64) -> Result<u64, String> {
@@ -1389,15 +1410,27 @@ impl PukaarCoreModule for Pukaar {
     }
 
     fn chat_mark_read(&mut self, key_hex: String) -> String {
-        key_arg(&key_hex).and_then(|who| chat::mark_read(&who)).map_or_else(err, |v| v.to_string())
+        chat::mark_read(&key_hex).map_or_else(err, |v| v.to_string())
     }
 
     fn chat_messages(&mut self, key_hex: String) -> String {
-        key_arg(&key_hex).and_then(|who| chat::messages(&who)).map_or_else(err, |v| v.to_string())
+        chat::messages(&key_hex).map_or_else(err, |v| v.to_string())
     }
 
     fn chat_send(&mut self, key_hex: String, text: String) -> String {
-        key_arg(&key_hex).and_then(|who| chat::send(&who, &text)).map_or_else(err, |v| v.to_string())
+        chat::send(&key_hex, &text).map_or_else(err, |v| v.to_string())
+    }
+
+    fn chat_group_create(&mut self, name: String, members_hex: String) -> String {
+        keys_arg(&members_hex).and_then(|who| chat::group_create(&name, &who)).map_or_else(err, |v| v.to_string())
+    }
+
+    fn chat_group_add(&mut self, convo: String, members_hex: String) -> String {
+        keys_arg(&members_hex).and_then(|who| chat::group_add(&convo, &who)).map_or_else(err, |v| v.to_string())
+    }
+
+    fn chat_group_info(&mut self, convo: String) -> String {
+        chat::group_info(&convo).map_or_else(err, |v| v.to_string())
     }
 
     fn meet_restore(&mut self, cid: String) -> String {
