@@ -155,7 +155,7 @@ Item {
         { label: "Places", icon: "pin", page: "places",
           about: "The " + plural(locations.length, "place") + " in this site, in " + plural(groupsOf(locations).length, "group") + "." }
     ].filter(function (e) { return approved || ["report", "meet", "messages"].indexOf(e.page) < 0 })
-    // The sidebar is expanded (216 px) from 1100 px of window, an 80 px icon rail below; the user's
+    // The sidebar is expanded (a 220 px panel) from 1100 px of window, a 56 px icon rail below; the user's
     // toggle ("expanded" / "collapsed", "" = never pressed) wins at every width and is remembered.
     // Below 930 px the rail never grows (four 160 px columns would not fit): Expand opens the
     // full sidebar over the board for now (overlayOpen, not remembered).
@@ -164,7 +164,7 @@ Item {
     property bool overlayOpen: false
     onOverlayChanged: overlayOpen = false
     readonly property bool sidebarOpen: overlay ? overlayOpen : prefs.sidebar !== "" ? prefs.sidebar === "expanded" : width >= 1100
-    readonly property int sidebarWidth: sidebarOpen && !overlay ? 216 : 80     // what the content gives up
+    readonly property int sidebarWidth: 2 * gaps.inset + (sidebarOpen && !overlay ? gaps.sidebar : gaps.rail)     // what the content gives up: the floating panel and its gaps
     function toggleSidebar() { if (overlay) overlayOpen = !overlayOpen; else prefs.sidebar = sidebarOpen ? "collapsed" : "expanded" }
     function openPage(name) { page = name; overlayOpen = false }
     // A place code's link: that place in History. Narrow, the pane covers the page, so it closes.
@@ -220,9 +220,9 @@ Item {
         shadow: "#80000000", scrim: "#66000000"
     })
     readonly property var t: dark ? darkTokens : lightTokens
-    // Corner radii: panel = a floating panel, card = a card or row, ctl = a button or field, chip = a status chip,
-    // tag = a role tag, box = a checkbox.
-    readonly property var radii: ({ panel: 20, card: 14, ctl: 10, chip: 9, tag: 7, box: 6 })
+    // Corner radii: panel = a floating panel, card = a card or row, nav = a sidebar row, ctl = a button or field,
+    // chip = a status chip, tag = a role tag or tooltip, box = a checkbox.
+    readonly property var radii: ({ panel: 20, card: 14, nav: 12, ctl: 10, chip: 9, tag: 7, box: 6 })
     // Spacing: inset = the gap round a floating panel and the window edge, gutter = between panels, pad = a card's padding,
     // nav = between sidebar items, sidebar = its open and rail widths, navItem = one sidebar row's height.
     readonly property var gaps: ({ inset: 12, gutter: 12, pad: 14, row: 8, nav: 2, sidebar: 220, rail: 56, navItem: 40 })
@@ -811,6 +811,26 @@ Item {
     // ---- controls: one frame (border token, blue when focused) shared by every control, so no
     // field, button, combo or box is ever borderless whatever style the host uses ----
     function ink(on) { return on ? t.fg : t.disabled }       // text colour of a control
+    // Hover and press colour changes: 160 ms, ease-out (root.motion). Nothing else animates by default.
+    component Eased: NumberAnimation { duration: root.motion.base; easing.type: root.motion.ease }
+    component EasedColor: ColorAnimation { duration: root.motion.base; easing.type: root.motion.ease }
+    // A floating panel's drop shadow: three soft rounded layers under the item that holds it (no effects module needed).
+    component Elevation: Item {
+        id: elev
+        property real radius: root.radii.panel
+        anchors.fill: parent
+        z: -1
+        Repeater {
+            model: 3
+            delegate: Rectangle {
+                required property int index
+                x: -(index + 1) * 4; y: (index + 1) * 2; width: elev.width + (index + 1) * 8; height: elev.height + (index + 1) * 8
+                radius: elev.radius + (index + 1) * 4
+                color: root.t.shadow
+                opacity: 0.25 / (index + 1)
+            }
+        }
+    }
     component Frame: Rectangle {
         property bool ring: false          // keyboard/typing focus: thicker, blue
         property bool off: false           // a disabled control: flat, quiet border
@@ -818,9 +838,11 @@ Item {
         property color edge: off ? root.t.bd : root.t.ctlBd
         implicitHeight: 36                 // the minimum touch target of every control
         color: fill
-        radius: 6
+        radius: root.radii.ctl
         border.width: ring ? 2 : 1
         border.color: ring ? root.t.focus : edge
+        Behavior on color { EasedColor {} }
+        Behavior on border.color { EasedColor {} }
     }
     component FramedField: TextField {
         id: field
@@ -828,17 +850,26 @@ Item {
         leftPadding: 10; rightPadding: 10; topPadding: 6; bottomPadding: 6
         color: root.ink(enabled)
         placeholderTextColor: root.t.ph
-        background: Frame { ring: field.activeFocus; off: !field.enabled }
+        background: Frame { ring: field.activeFocus; off: !field.enabled; edge: !field.enabled ? root.t.bd : field.hovered ? root.t.muted : root.t.ctlBd }
     }
-    // kind: "default", "primary" (the one main action) or "danger" (red text). Label wraps.
+    // kind: "default", "primary" (the one main action: orange), "danger" (red wash) or "ghost" (no fill). Label wraps.
+    // Harbor's .btn: hover lightens the fill, a press shrinks it to 97 %; a disabled primary is a faint accent wash.
     component FramedButton: Button {
         id: fb
         property string kind: "default"
         property string iconName: ""       // optional leading icon, drawn in the label colour
         readonly property bool solid: kind === "primary" && enabled
-        readonly property color ink: !enabled ? root.t.disabled : solid ? root.t.onPrimary : kind === "danger" ? root.t.danger : root.t.fg
+        readonly property bool hot: hovered || down
+        readonly property color ink: !enabled ? (kind === "primary" ? root.t.accent : root.t.disabled) : solid ? root.t.onPrimary : kind === "danger" ? root.t.danger : root.t.fg
+        readonly property color fill: !enabled ? (kind === "primary" ? root.t.primaryOff : "transparent")
+            : solid ? (hot ? root.t.primaryHover : root.t.primary)
+            : kind === "danger" ? (hot ? root.t.dangerHover : root.t.dangerBg)
+            : kind === "ghost" ? (hot ? root.t.hover : "transparent")
+            : hot ? Qt.tint(root.t.btn, root.fade(root.t.fg, 0.18)) : root.t.btn
         leftPadding: text === "" ? 9 : 14; rightPadding: leftPadding; topPadding: 6; bottomPadding: 6
-        font.weight: Font.Medium
+        font.weight: solid ? Font.DemiBold : Font.Medium
+        scale: down && enabled ? 0.97 : 1
+        Behavior on scale { Eased { duration: 100 } }
         contentItem: Label {     // the label wraps; the icon sits just before the centred text
             text: fb.text; font: fb.font; wrapMode: Text.Wrap
             horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
@@ -851,9 +882,8 @@ Item {
         }
         background: Frame {
             ring: fb.visualFocus
-            fill: !fb.enabled ? root.t.well : fb.solid ? (fb.hovered || fb.down ? root.t.primaryHover : root.t.primary)
-                  : fb.down ? Qt.darker(root.t.btn, 1.12) : fb.hovered ? root.t.hover : root.t.btn
-            edge: !fb.enabled ? root.t.bd : fb.solid ? root.t.primary : root.t.btnBd
+            fill: fb.fill
+            edge: fb.kind === "ghost" || fb.kind === "default" || !fb.enabled && fb.kind !== "primary" ? root.t.btnBd : fb.fill
         }
     }
     component FramedCombo: ComboBox {
@@ -882,7 +912,7 @@ Item {
             ring: check.visualFocus
             fill: !check.checked ? (check.enabled ? root.t.field : root.t.well) : check.enabled ? root.t.primary : root.t.disabled
             edge: check.checked ? fill : check.enabled ? root.t.ctlBd : root.t.bd
-            implicitHeight: 18
+            implicitHeight: 18; radius: root.radii.box
             x: check.leftPadding; y: (check.height - height) / 2; width: 18; height: 18
             Icon { anchors.centerIn: parent; visible: check.checked; name: "tick"; size: 16; color: root.t.onPrimary }
         }
@@ -932,10 +962,11 @@ Item {
         delay: 300
         x: parent.width + 10; y: (parent.height - height) / 2
         contentItem: Label { text: tip.text; color: root.t.tipFg; font.pointSize: root.smallSize; font.weight: Font.Medium; wrapMode: Text.Wrap }
-        background: Rectangle { radius: 6; color: root.t.tipBg; border.color: root.t.tipBd }
+        background: Rectangle { radius: root.radii.tag; color: root.t.tipBg; border.color: root.t.tipBd }
     }
-    // One sidebar entry: a fill, bold text and an accent icon when current (no bar). `count` > 0
-    // adds a pill (people waiting); `compact` is the icon-only rail, where the tooltip carries the label.
+    // One sidebar entry (Harbor's .nav-item): 40 px, an icon and a label; the current page's fill is the sliding highlight
+    // of the sidebar, so this draws only a hover fill. `current` lights the icon (accent) and the label. `count` > 0 adds
+    // a pill (people waiting); `compact` is the icon-only rail, where the tooltip carries the label.
     component NavItem: AbstractButton {
         id: nav
         property string glyph
@@ -944,43 +975,41 @@ Item {
         property int count: 0
         property bool dot: false      // something new, no number (unread messages)
         readonly property string waiting: count > 0 ? ", " + count + " waiting" : dot ? ", unread" : ""
-        readonly property color ink: current ? root.t.fg : root.t.fg
-        readonly property color iconInk: current ? root.t.accent : root.t.muted
+        readonly property bool lit: current || hovered
         Layout.fillWidth: true
-        implicitHeight: Math.max(44, contentItem.implicitHeight + topPadding + bottomPadding)
-        leftPadding: compact ? 6 : 12; rightPadding: leftPadding; topPadding: 6; bottomPadding: 6
+        implicitHeight: root.gaps.navItem
+        leftPadding: compact ? 0 : 12; rightPadding: leftPadding; topPadding: 0; bottomPadding: 0
         hoverEnabled: true
         focusPolicy: Qt.StrongFocus
         Accessible.name: text + waiting
         HoverHandler { cursorShape: Qt.PointingHandCursor }
         SideTip { text: nav.text + nav.waiting; visible: nav.compact && (nav.hovered || nav.visualFocus) }
         background: Rectangle {
-            radius: 8
-            color: nav.current ? root.t.hover : nav.hovered ? root.t.hover : "transparent"
+            radius: root.radii.nav
+            color: nav.hovered && !nav.current ? root.t.hoverSoft : "transparent"
             border.width: nav.visualFocus ? 2 : 0; border.color: root.t.focus
+            Behavior on color { EasedColor {} }
             Rectangle {   // the count pill: right of the label, or the rail icon's top-right corner
                 visible: nav.count > 0
-                width: Math.max(height, pill.implicitWidth + 10); height: nav.compact ? 18 : 20; radius: height / 2
+                width: Math.max(height, pill.implicitWidth + 12); height: 20; radius: 10
                 color: root.t.primary
-                x: parent.width - width - (nav.compact ? 0 : 10)
-                y: nav.compact ? 2 : (parent.height - height) / 2
-                Label { id: pill; anchors.centerIn: parent; text: nav.count; color: root.t.onPrimary; font.pointSize: root.smallSize; font.weight: Font.DemiBold }
+                x: parent.width - width - (nav.compact ? 0 : 12)
+                y: nav.compact ? 0 : (parent.height - height) / 2
+                Label { id: pill; anchors.centerIn: parent; text: nav.count; color: root.t.onPrimary; font.pointSize: root.sizes.cap; font.weight: Font.DemiBold }
             }
             Rectangle {   // the unread dot: right of the label, or the rail icon's top-right corner
                 visible: nav.dot && nav.count === 0
-                width: 10; height: 10; radius: 5; color: root.t.primary
-                x: parent.width - width - (nav.compact ? 6 : 14)
+                width: 8; height: 8; radius: 4; color: root.t.primary
+                x: parent.width - width - (nav.compact ? 6 : 16)
                 y: nav.compact ? 6 : (parent.height - height) / 2
             }
         }
         contentItem: Item {
-            implicitHeight: nav.compact ? 0 : lines.implicitHeight
-            Icon { name: nav.glyph; size: 20; color: nav.iconInk; anchors.verticalCenter: parent.verticalCenter; x: nav.compact ? (parent.width - width) / 2 : 0 }
-            Column {
-                id: lines
+            Icon { name: nav.glyph; size: 18; color: nav.current ? root.t.accent : nav.lit ? root.t.fg : root.t.muted; anchors.verticalCenter: parent.verticalCenter; x: nav.compact ? (parent.width - width) / 2 : 0 }
+            Label {
                 visible: !nav.compact
-                x: 32; width: parent.width - 32 - (nav.count > 0 || nav.dot ? 36 : 0); anchors.verticalCenter: parent.verticalCenter
-                Label { width: parent.width; text: nav.text; color: nav.ink; elide: Text.ElideRight; font.weight: nav.current ? Font.DemiBold : Font.Medium }
+                x: 30; width: parent.width - 30 - (nav.count > 0 || nav.dot ? 36 : 0); anchors.verticalCenter: parent.verticalCenter
+                text: nav.text; color: nav.lit ? root.t.fg : root.t.muted; elide: Text.ElideRight; font.weight: Font.Medium
             }
         }
     }
@@ -1000,9 +1029,8 @@ Item {
         readonly property real inset: icon !== "" ? 8 + 13 + 5 : 8
         width: Math.min(chipText.implicitWidth + inset + 8, maxWidth)
         height: Math.max(22, chipText.height + 2)
-        radius: 12
+        radius: root.radii.chip
         color: chip.stage.bg
-        border.width: 1; border.color: chip.stage.bd
         Icon { x: 8; y: (chip.height - 13) / 2; name: chip.icon; size: 13; color: chip.stage.fg }
         Label {
             id: chipText
@@ -1071,7 +1099,10 @@ Item {
         Keys.onReturnPressed: clicked()
         Keys.onEnterPressed: clicked()
         contentItem: Icon { name: ib.iconName; size: 16; color: ib.hovered || ib.down ? root.t.fg : root.t.muted }
-        background: Rectangle { radius: 4; color: ib.hovered ? root.t.hover : "transparent"; border.width: ib.visualFocus ? 2 : 0; border.color: root.t.focus }
+        background: Rectangle {
+            radius: root.radii.tag; color: ib.hovered ? root.t.hover : "transparent"; border.width: ib.visualFocus ? 2 : 0; border.color: root.t.focus
+            Behavior on color { EasedColor {} }
+        }
     }
     // A Home row that opens a page: an icon, a bold line, a muted line under it and a chevron. The whole row is one button.
     component HomeRow: AbstractButton {
@@ -1561,15 +1592,15 @@ Item {
     // True when the content area (window minus sidebar) is under 880 px: rows of Members go two-line.
     readonly property bool compactRows: width - sidebarWidth < 880
 
-    // A page's title (22 px) and its one-line lede.
+    // A page's title (28 px) and its one-line lede (13 px).
     component PageHead: ColumnLayout {
         property string title
         property string lede
         Layout.fillWidth: true
         Layout.bottomMargin: 8
         spacing: 4
-        Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: parent.title; font.pointSize: root.baseSize * 22 / 14; font.weight: Font.DemiBold }
-        Label { visible: parent.lede !== ""; Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.StyledText; text: parent.lede; color: root.t.muted; font.pointSize: root.baseSize * 15 / 14 }
+        Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: parent.title; font.pointSize: root.sizes.h1; font.weight: Font.DemiBold }
+        Label { visible: parent.lede !== ""; Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.StyledText; text: parent.lede; color: root.t.muted; font.pointSize: root.sizes.small }
     }
 
     // A centred note for an empty list: an icon, a bold line, a muted explanation, then any buttons.
@@ -1633,11 +1664,11 @@ Item {
         onToggled: root.onlyMine = checked
     }
 
-    // A section title inside a page (18 px).
+    // A section title inside a page (16 px).
     component Heading: Label {
         Layout.topMargin: 12
         font.weight: Font.DemiBold
-        font.pointSize: root.baseSize * 18 / 14
+        font.pointSize: root.sizes.h3
     }
 
     // A box the reader opens on demand: a 52 px header (chevron, title, a muted aside such as a count)
@@ -1658,7 +1689,7 @@ Item {
         Layout.rightMargin: inner ? -16 : 0
         Layout.topMargin: inner ? 16 : 0
         implicitHeight: stack.implicitHeight + 2 * stack.x
-        radius: 8; color: inner ? "transparent" : root.t.card
+        radius: root.radii.card; color: inner ? "transparent" : root.t.card
         border.color: inner ? "transparent" : root.t.bd
         ColumnLayout {
             id: stack
@@ -1677,7 +1708,7 @@ Item {
                 Keys.onReturnPressed: clicked()
                 Keys.onEnterPressed: clicked()
                 background: Rectangle {
-                    readonly property real r: section.inner ? 0 : 7
+                    readonly property real r: section.inner ? 0 : root.radii.card - 1
                     color: header.hovered ? root.t.hover : section.inner ? "transparent" : root.t.well
                     topLeftRadius: r; topRightRadius: r
                     bottomLeftRadius: section.open ? 0 : r; bottomRightRadius: section.open ? 0 : r
@@ -2321,191 +2352,183 @@ Item {
     // A slow poll here, because chat_threads asks the chat module.
     Timer { interval: 20000; running: root.inSite && root.approved && root.page !== "messages"; repeat: true; triggeredOnStart: true; onTriggered: root.poll("chat_threads", [], root.applyChat) }
 
-    Rectangle { anchors.fill: parent; color: root.t.page }     // the page never shows the host's window colour
-    // ---------- sidebar: replaces the old header and tab bar ----------
+    Rectangle {   // the window: the page never shows the host's window colour
+        anchors.fill: parent
+        gradient: Gradient { GradientStop { position: 0; color: root.t.page } GradientStop { position: 1; color: root.t.page2 } }
+    }
+
+    // ---------- sidebar: a floating rounded panel (Harbor's .sidebar); the rail below 1100 px ----------
+    function navCurrent(e) { return page === e.page || (e.page === "people" && page === "member") }
     Rectangle {
         id: sidebar
         z: 5
-        width: root.sidebarOpen ? 216 : 80; height: parent.height
-        color: root.t.well
         readonly property bool open: root.sidebarOpen
-        // the toggle sits on the site-name line: card top + border and padding + half the first line
-        readonly property real nameY: siteCard.parent.y + siteCard.y + (open ? 11 : 9) + siteTitle.contentHeight / siteTitle.lineCount / 2
-        readonly property color on: root.t.fg
-        readonly property string fp: root.me.fingerprint || ""
-        Rectangle { anchors.right: parent.right; width: 1; height: parent.height; color: root.t.bd }
-        Rectangle {   // the overlay's shadow
-            visible: root.overlay && root.overlayOpen
-            x: parent.width; width: 14; height: parent.height
-            gradient: Gradient { orientation: Gradient.Horizontal; GradientStop { position: 0; color: "#40000000" } GradientStop { position: 1; color: "transparent" } }
-        }
+        readonly property string siteName: !root.inSite ? "not in a site yet" : root.info.name || "Waiting for site data…"
+        x: root.gaps.inset; y: root.gaps.inset
+        width: open ? root.gaps.sidebar : root.gaps.rail; height: parent.height - 2 * root.gaps.inset
+        radius: root.radii.panel; color: root.t.well; border.color: root.t.bd
+        Elevation {}
         ColumnLayout {
-            anchors { fill: parent; leftMargin: sidebar.open ? 12 : 6; rightMargin: sidebar.open ? 21 : 7; topMargin: sidebar.open ? 16 : 12; bottomMargin: sidebar.open ? 16 : 12 }
-            spacing: sidebar.open ? 16 : 12
-            RowLayout {   // brand
+            anchors { fill: parent; leftMargin: sidebar.open ? 12 : 7; rightMargin: sidebar.open ? 12 : 7; topMargin: sidebar.open ? 20 : 16; bottomMargin: sidebar.open ? 14 : 12 }
+            spacing: 0
+            RowLayout {   // brand: the logo and the wordmark. The site name below is plain text; on the rail the logo's tooltip has it.
                 Layout.alignment: sidebar.open ? Qt.AlignLeft : Qt.AlignHCenter
-                Layout.leftMargin: sidebar.open ? 4 : 0
+                Layout.leftMargin: sidebar.open ? 8 : 0
                 spacing: 10
                 Item {
-                    implicitWidth: 28; implicitHeight: 28
+                    implicitWidth: 30; implicitHeight: 30
                     Accessible.ignored: true
                     // the module icon (colour bell, transparent), shipped next to Main.qml
-                    Image { anchors.fill: parent; source: "src/icons/pukaar.png"; sourceSize: Qt.size(56, 56); fillMode: Image.PreserveAspectFit }
+                    Image { anchors.fill: parent; source: "src/icons/pukaar.png"; sourceSize: Qt.size(60, 60); fillMode: Image.PreserveAspectFit }
+                    HoverHandler { id: brandHover }
+                    SideTip { text: sidebar.siteName; visible: !sidebar.open && brandHover.hovered }
                 }
-                Label { visible: sidebar.open; text: "Pukaar"; color: sidebar.on; font.pointSize: root.baseSize * 18 / 14; font.bold: true }
+                Label { visible: sidebar.open; text: "Pukaar"; color: root.t.fg; font.pointSize: root.sizes.brand; font.weight: Font.DemiBold }
             }
-            Rectangle {   // site card
-                id: siteCard
-                Layout.fillWidth: sidebar.open
-                Layout.preferredWidth: sidebar.open ? -1 : 40
-                Layout.alignment: Qt.AlignHCenter
-                implicitHeight: cardCol.implicitHeight + (sidebar.open ? 22 : 18)
-                radius: 8; color: root.t.card; border.color: root.t.bd
+            Label {   // the site: static identity, not a field: no box, border, caret or hover
+                visible: sidebar.open
+                Layout.fillWidth: true; Layout.topMargin: 12; Layout.leftMargin: 8; Layout.rightMargin: 8
+                text: sidebar.siteName; color: root.t.muted; font.pointSize: root.sizes.small
+                wrapMode: Text.Wrap
+            }
+            Item {   // the sections and the bell; the highlight slides to the current section
+                id: navBox
+                Layout.fillWidth: true; Layout.topMargin: 20
+                implicitHeight: navCol.implicitHeight
+                readonly property int cur: root.inSite ? root.sections.findIndex(root.navCurrent) : -1
+                readonly property Item curItem: cur >= 0 ? navRep.itemAt(cur) : null
+                property real hlY: 0     // keeps its last value on a page that has no section (Profile)
+                Binding on hlY { when: navBox.curItem !== null; value: navBox.curItem ? navBox.curItem.y : 0 }
+                Rectangle {
+                    id: hl
+                    width: parent.width; height: root.gaps.navItem; radius: root.radii.nav; color: root.t.hover
+                    y: navBox.hlY
+                    opacity: navBox.curItem ? 1 : 0
+                    Behavior on opacity { Eased {} }
+                    Behavior on y { enabled: hl.opacity === 1; Eased { duration: root.motion.slow } }
+                }
                 ColumnLayout {
-                    id: cardCol
-                    anchors { fill: parent; leftMargin: sidebar.open ? 12 : 1; rightMargin: sidebar.open ? 12 : 1; topMargin: sidebar.open ? 11 : 9; bottomMargin: sidebar.open ? 11 : 9 }
-                    spacing: 2
-                    Label {
-                        id: siteTitle
-                        Layout.fillWidth: true
-                        readonly property string full: !root.inSite ? "not in a site yet" : root.info.name || "Waiting for site data…"
-                        text: sidebar.open ? full : root.initials(root.inSite ? root.info.name : "") || "…"   // the 40 px card cannot hold a name: initials, the tooltip has the rest
-                        color: sidebar.on; font.weight: Font.DemiBold
-                        wrapMode: Text.WrapAnywhere
-                        horizontalAlignment: sidebar.open ? Text.AlignLeft : Text.AlignHCenter
-                        HoverHandler { id: cardHover }
-                        SideTip { parent: siteCard; text: siteTitle.full; visible: !sidebar.open && cardHover.hovered }
+                    id: navCol
+                    width: parent.width
+                    spacing: root.gaps.nav
+                    Repeater {
+                        id: navRep
+                        model: root.inSite ? root.sections : []
+                        delegate: NavItem {
+                            required property var modelData
+                            text: modelData.label; glyph: modelData.icon
+                            current: root.navCurrent(modelData); compact: !sidebar.open
+                            count: modelData.count || 0; dot: !!modelData.dot
+                            onClicked: root.openPage(modelData.page)
+                        }
                     }
-                }
-            }
-            ColumnLayout {   // sections
-                visible: root.inSite
-                Layout.fillWidth: true
-                spacing: 4
-                Repeater {
-                    model: root.sections
-                    delegate: NavItem {
-                        required property var modelData
-                        text: modelData.label; glyph: modelData.icon
-                        current: root.page === modelData.page || (modelData.page === "people" && root.page === "member"); compact: !sidebar.open
-                        count: modelData.count || 0; dot: !!modelData.dot
-                        onClicked: root.openPage(modelData.page)
+                    NavItem {   // Notifications: the bell opens the panel; the pill counts what came in since it was last open
+                        text: "Notifications"; glyph: "bell"; compact: !sidebar.open
+                        count: root.unread; current: root.inboxOpen
+                        onClicked: root.inboxOpen = !root.inboxOpen && Date.now() - root.inboxClosedAt > 300
                     }
                 }
             }
             Item { Layout.fillHeight: true }
-            Rectangle { Layout.fillWidth: true; height: 1; color: root.t.bd }   // foot
-            ColumnLayout {
-                Layout.fillWidth: true; Layout.topMargin: -4
-                spacing: 12
-                NavItem {   // Notifications: the bell opens the panel; the pill counts what came in since it was last open
-                    text: "Notifications"; glyph: "bell"; compact: !sidebar.open
-                    count: root.unread; current: root.inboxOpen
-                    onClicked: root.inboxOpen = !root.inboxOpen && Date.now() - root.inboxClosedAt > 300
-                }
-                GridLayout {   // delivery, chain and Storage: one dot each, no words. A click opens Profile, which has the details.
-                    Layout.alignment: sidebar.open ? Qt.AlignLeft : Qt.AlignHCenter
-                    Layout.leftMargin: sidebar.open ? 2 : 0
-                    columns: sidebar.open ? 3 : 1; columnSpacing: 0; rowSpacing: 0     // the rail is 67 px wide: three 28 px buttons would not fit in a row
-                    Repeater {
-                        model: root.connRows.filter(function (e) { return !e.site || root.inSite })
-                        delegate: AbstractButton {
-                            id: dot
-                            required property var modelData
-                            implicitWidth: 28; implicitHeight: 28
-                            hoverEnabled: true
-                            focusPolicy: Qt.StrongFocus
-                            objectName: "statusDot-" + modelData.name
-                            Accessible.name: modelData.name + ": " + modelData.state + ". See Profile for details"
-                            HoverHandler { cursorShape: Qt.PointingHandCursor }
-                            SideTip {
-                                objectName: "statusTip-" + dot.modelData.name
-                                x: (dot.width - width) / 2; y: -height - 6; margins: 4     // above the dot: a tip on the right would hide the next dot
-                                text: root.inSite ? "See Profile for details" : dot.modelData.name + ": " + dot.modelData.state.toLowerCase()
-                                visible: dot.hovered || dot.visualFocus
-                            }
-                            onClicked: if (root.inSite) root.openPage("profile")
-                            background: Rectangle {
-                                radius: 6
-                                color: dot.hovered ? root.t.hover : "transparent"
-                                border.width: dot.visualFocus ? 2 : 0; border.color: root.t.focus
-                            }
-                            contentItem: Item {
-                                Rectangle { anchors.centerIn: parent; width: 12; height: 12; radius: 6; color: root.toneColor(dot.modelData.tone) }
-                            }
+            GridLayout {   // delivery, chain and Storage: one dot each, no words. A click opens Profile, which has the details.
+                Layout.alignment: sidebar.open ? Qt.AlignLeft : Qt.AlignHCenter
+                Layout.leftMargin: sidebar.open ? 4 : 0; Layout.bottomMargin: 14
+                columns: sidebar.open ? 3 : 1; columnSpacing: 2; rowSpacing: 2
+                Repeater {
+                    model: root.connRows.filter(function (e) { return !e.site || root.inSite })
+                    delegate: AbstractButton {
+                        id: dot
+                        required property var modelData
+                        implicitWidth: 24; implicitHeight: 24
+                        hoverEnabled: true
+                        focusPolicy: Qt.StrongFocus
+                        objectName: "statusDot-" + modelData.name
+                        Accessible.name: modelData.name + ": " + modelData.state + ". See Profile for details"
+                        HoverHandler { cursorShape: Qt.PointingHandCursor }
+                        SideTip {
+                            objectName: "statusTip-" + dot.modelData.name
+                            x: (dot.width - width) / 2; y: -height - 6; margins: 4     // above the dot: a tip on the right would hide the next dot
+                            text: root.inSite ? "See Profile for details" : dot.modelData.name + ": " + dot.modelData.state.toLowerCase()
+                            visible: dot.hovered || dot.visualFocus
+                        }
+                        onClicked: if (root.inSite) root.openPage("profile")
+                        background: Rectangle {
+                            radius: root.radii.tag
+                            color: dot.hovered ? root.t.hover : "transparent"
+                            border.width: dot.visualFocus ? 2 : 0; border.color: root.t.focus
+                            Behavior on color { EasedColor {} }
+                        }
+                        contentItem: Item {
+                            Rectangle { anchors.centerIn: parent; width: 8; height: 8; radius: 4; color: root.toneColor(dot.modelData.tone) }
                         }
                     }
                 }
-                AbstractButton {   // you: name, fingerprint, role; opens Profile
-                    id: you
-                    visible: root.inSite
-                    Layout.fillWidth: true; Layout.leftMargin: -6; Layout.rightMargin: -6   // the padding holds the hover fill and focus ring
-                    padding: 6
-                    hoverEnabled: true
-                    focusPolicy: Qt.StrongFocus
-                    Accessible.name: "You: " + (root.me.name || "pseudonym") + ", " + root.roleName + ". Open Profile"
-                    HoverHandler { cursorShape: Qt.PointingHandCursor }
-                    SideTip { text: "Profile"; visible: !sidebar.open && (you.hovered || you.visualFocus) }
-                    onClicked: root.openPage("profile")
-                    background: Rectangle {
-                        radius: 8
-                        color: root.page === "profile" ? root.t.hover : you.hovered ? root.t.hover : "transparent"
-                        border.width: you.visualFocus ? 2 : 0; border.color: root.t.focus
-                    }
-                    contentItem: GridLayout {
-                        columns: sidebar.open ? 3 : 1; columnSpacing: 10; rowSpacing: 4
-                        Rectangle {
-                            Layout.alignment: Qt.AlignHCenter | Qt.AlignTop
-                            implicitWidth: 32; implicitHeight: 32; radius: 16; color: root.t.hover
-                            Label {
-                                anchors.centerIn: parent; visible: !!root.me.name
-                                text: root.initials(root.me.name)
-                                color: root.t.fg; font.pointSize: root.smallSize; font.bold: true
-                            }
-                            Icon { anchors.centerIn: parent; visible: !root.me.name; name: "user"; size: 18; color: root.t.fg }
+            }
+            Rectangle { visible: root.inSite; Layout.fillWidth: true; Layout.leftMargin: -4; Layout.rightMargin: -4; height: 1; color: root.t.bd }
+            AbstractButton {   // you: photo or initials, name, role; opens Profile
+                id: you
+                visible: root.inSite
+                Layout.fillWidth: true; Layout.leftMargin: -4; Layout.rightMargin: -4
+                implicitHeight: 56
+                leftPadding: sidebar.open ? 12 : 0; rightPadding: leftPadding; topPadding: 8; bottomPadding: 4
+                hoverEnabled: true
+                focusPolicy: Qt.StrongFocus
+                Accessible.name: "You: " + (root.me.name || "pseudonym") + ", " + root.roleName + ". Open Profile"
+                HoverHandler { cursorShape: Qt.PointingHandCursor }
+                SideTip { text: "Profile"; visible: !sidebar.open && (you.hovered || you.visualFocus) }
+                onClicked: root.openPage("profile")
+                background: Rectangle {
+                    radius: root.radii.card
+                    color: root.page === "profile" ? root.t.hover : you.hovered ? root.t.hoverSoft : "transparent"
+                    border.width: you.visualFocus ? 2 : 0; border.color: root.t.focus
+                    Behavior on color { EasedColor {} }
+                }
+                contentItem: RowLayout {
+                    spacing: 10
+                    Rectangle {
+                        Layout.alignment: Qt.AlignVCenter | (sidebar.open ? Qt.AlignLeft : Qt.AlignHCenter)
+                        Layout.fillWidth: !sidebar.open
+                        implicitWidth: 32; implicitHeight: 32; radius: 16; color: root.t.accentBg
+                        Label {
+                            anchors.centerIn: parent; visible: !!root.me.name
+                            text: root.initials(root.me.name)
+                            color: root.t.accent; font.pointSize: root.sizes.cap; font.weight: Font.DemiBold
                         }
-                        ColumnLayout {
-                            Layout.fillWidth: true; Layout.preferredWidth: 0; Layout.minimumWidth: 0   // the rail sets the width: a long fingerprint or role must wrap, not widen the column
-                            Layout.maximumWidth: Infinity   // not the children's: they cap at this column's width, which would pin it at 0 in the rail
-                            spacing: 2
-                            readonly property int align: sidebar.open ? Qt.AlignLeft : Qt.AlignHCenter
-                            Label { visible: sidebar.open; text: "you:"; color: root.t.muted; font.pointSize: root.smallSize }
+                        Icon { anchors.centerIn: parent; visible: !root.me.name; name: "user"; size: 18; color: root.t.accent }
+                    }
+                    ColumnLayout {
+                        visible: sidebar.open
+                        Layout.fillWidth: true; Layout.preferredWidth: 0; Layout.minimumWidth: 0   // the panel sets the width: a long name must wrap, not widen the column
+                        spacing: 3
+                        Label {
+                            Layout.fillWidth: true
+                            text: root.me.name || "pseudonym"; color: root.t.fg; wrapMode: Text.WrapAnywhere
+                            font.weight: Font.DemiBold
+                        }
+                        Rectangle {   // role chip; a key with no role yet is "pending", or "removed" after a revoke
+                            readonly property bool pending: !root.me.role
+                            implicitWidth: roleText.implicitWidth + 16; implicitHeight: roleText.implicitHeight + 2; radius: root.radii.tag
+                            color: pending ? root.t.dangerBg : root.isSuper ? root.t.accentBg : root.t.hover
                             Label {
-                                visible: sidebar.open; Layout.fillWidth: true
-                                text: root.me.name || "pseudonym"; color: root.t.fg; wrapMode: Text.WrapAnywhere
-                                font.pointSize: root.smallSize; font.weight: Font.DemiBold
-                            }
-                            Label {
-                                Layout.alignment: parent.align; Layout.maximumWidth: parent.width; wrapMode: Text.WrapAnywhere
-                                text: sidebar.fp; color: root.t.fg; font.pointSize: root.smallSize; font.family: "monospace"
-                            }
-                            Rectangle {   // role chip; a key with no role yet is "pending", or "removed" after a revoke
-                                readonly property bool pending: !root.me.role
-                                Layout.alignment: parent.align; Layout.maximumWidth: parent.width
-                                implicitWidth: roleText.implicitWidth + (sidebar.open ? 16 : 12); implicitHeight: roleText.implicitHeight
-                                radius: 12; color: "transparent"; border.color: pending ? root.t.danger : root.t.ctlBd
-                                Label {
-                                    id: roleText
-                                    width: parent.width; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap
-                                    lineHeight: 20; lineHeightMode: Text.FixedHeight
-                                    text: sidebar.open && root.unapproved ? "pending: read your fingerprint at the kiosk" : root.roleName
-                                    color: parent.pending ? root.t.danger : root.t.fg; font.pointSize: root.smallSize
-                                }
+                                id: roleText
+                                anchors.centerIn: parent
+                                text: root.roleName
+                                color: parent.pending ? root.t.danger : root.isSuper ? root.t.accent : root.t.muted; font.pointSize: root.sizes.cap; font.weight: Font.Medium
                             }
                         }
-                        Icon { visible: sidebar.open; Layout.alignment: Qt.AlignVCenter; name: "chev"; size: 14; color: root.t.muted }
                     }
+                    Icon { visible: sidebar.open; Layout.alignment: Qt.AlignVCenter; name: "chev"; size: 14; color: root.t.ph }
                 }
             }
         }
     }
     Rectangle {   // the scrim behind the overlaid sidebar: a click closes it
         visible: root.overlay && root.overlayOpen
-        z: 4; x: 216; width: parent.width - 216; height: parent.height
-        color: "#4d000000"
+        z: 4; x: sidebar.x + sidebar.width; width: parent.width - x; height: parent.height
+        color: root.t.scrim
         MouseArea { anchors.fill: parent; onClicked: root.overlayOpen = false }
     }
-    // ---- the Notifications panel: the notices of this session, newest first ----
+    // ---- the Notifications panel: the notices of this session, newest first. Closed until the bell is pressed. ----
     onInboxOpenChanged: {
         if (inboxOpen) { unread = 0; inboxPanel.open() } else inboxPanel.close()
     }
@@ -2514,52 +2537,78 @@ Item {
         parent: root
         onClosed: { root.inboxOpen = false; root.inboxClosedAt = Date.now() }     // Escape, a press outside, or Close
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        x: root.sidebarWidth + 8
-        width: Math.min(400, root.width - x - 16); height: Math.min(440, root.height - 32); y: root.height - height - 16
-        padding: 12
-        background: Rectangle { radius: 8; color: root.t.card; border.color: root.t.bd }
+        x: root.sidebarWidth - 8
+        width: Math.min(400, root.width - x - root.gaps.inset); height: Math.min(480, root.height - 2 * root.gaps.inset); y: root.height - height - root.gaps.inset
+        padding: 8
+        // Opens with a fade and a slight grow, 220 ms; closes in 160 ms.
+        enter: Transition {
+            Eased { property: "opacity"; from: 0; to: 1; duration: root.motion.slow }
+            Eased { property: "scale"; from: 0.95; to: 1; duration: root.motion.slow }
+        }
+        exit: Transition {
+            Eased { property: "opacity"; from: 1; to: 0 }
+            Eased { property: "scale"; from: 1; to: 0.95 }
+        }
+        background: Rectangle {
+            radius: root.radii.panel; color: root.t.card; border.color: root.t.bd
+            Elevation {}
+        }
         contentItem: ColumnLayout {
             spacing: 8
             RowLayout {
+                Layout.margins: 8; Layout.bottomMargin: 0
                 spacing: 12
-                Label { Layout.fillWidth: true; text: "Notifications"; font.weight: Font.DemiBold; font.pointSize: root.baseSize * 16 / 14; color: root.t.fg }
+                Label { Layout.fillWidth: true; text: "Notifications"; font.weight: Font.DemiBold; font.pointSize: root.sizes.title; color: root.t.fg }
                 LinkButton { visible: root.inbox.length > 0; text: "Clear all"; onClicked: root.inbox = [] }
                 IconLink { iconName: "x"; Accessible.name: "Close the notifications"; onClicked: root.inboxOpen = false }
             }
-            Help { when: root.inbox.length === 0; text: "Nothing here. Notices that go away by themselves are kept here." }
+            Help { Layout.margins: 8; when: root.inbox.length === 0; text: "Nothing here. Notices that go away by themselves are kept here." }
             ListView {
                 Layout.fillWidth: true; Layout.fillHeight: true
-                clip: true; spacing: 8
+                clip: true; spacing: 2
                 model: root.inbox
                 ScrollBar.vertical: ScrollBar {}
-                delegate: RowLayout {
+                delegate: Rectangle {
                     id: item
                     required property var modelData
                     required property int index
+                    readonly property color tone: modelData.tone === "err" ? root.t.danger : modelData.tone === "warn" ? root.t.warn : root.t.accent
                     width: ListView.view.width
-                    spacing: 8
-                    Icon { Layout.alignment: Qt.AlignTop; Layout.topMargin: 2; name: item.modelData.tone === "info" ? "info" : "warn"; size: 16
-                           color: item.modelData.tone === "err" ? root.t.danger : item.modelData.tone === "warn" ? root.t.warn : root.t.accent }
-                    ColumnLayout {
-                        Layout.fillWidth: true; spacing: 2
-                        Label { text: root.when(item.modelData.ms / 1000, "HH:mm"); color: root.t.muted; font.pointSize: root.smallSize }
-                        Note { text: item.modelData.text; color: root.t.fg }
-                    }
-                    IconLink { Layout.alignment: Qt.AlignTop; iconName: "copy"; Accessible.name: "Copy this notice"; onClicked: root.copyText(item.modelData.text) }
-                    IconLink {
-                        Layout.alignment: Qt.AlignTop
-                        iconName: "x"; Accessible.name: "Dismiss this notice"
-                        onClicked: root.inbox = root.inbox.filter(function (n, i) { return i !== item.index })
+                    implicitHeight: row.implicitHeight + 24
+                    radius: root.radii.card
+                    color: rowHover.hovered ? root.t.hover : "transparent"
+                    Behavior on color { EasedColor {} }
+                    HoverHandler { id: rowHover }
+                    RowLayout {
+                        id: row
+                        anchors { fill: parent; margins: 12 }
+                        spacing: 12
+                        Rectangle {   // the tone's icon on its own wash
+                            Layout.alignment: Qt.AlignTop
+                            implicitWidth: 34; implicitHeight: 34; radius: 11; color: root.wash(item.tone, root.t.card)
+                            Icon { anchors.centerIn: parent; name: item.modelData.tone === "info" ? "info" : "warn"; size: 16; color: item.tone }
+                        }
+                        ColumnLayout {
+                            Layout.fillWidth: true; spacing: 2
+                            Label { text: root.when(item.modelData.ms / 1000, "HH:mm"); color: root.t.muted; font.pointSize: root.sizes.cap }
+                            Note { text: item.modelData.text; color: root.t.fg }
+                        }
+                        IconLink { Layout.alignment: Qt.AlignTop; iconName: "copy"; Accessible.name: "Copy this notice"; onClicked: root.copyText(item.modelData.text) }
+                        IconLink {
+                            Layout.alignment: Qt.AlignTop
+                            iconName: "x"; Accessible.name: "Dismiss this notice"
+                            onClicked: root.inbox = root.inbox.filter(function (n, i) { return i !== item.index })
+                        }
                     }
                 }
             }
         }
     }
     Shortcut { sequence: "Escape"; enabled: root.overlayOpen; onActivated: root.overlayOpen = false }
-    Button {   // the collapse toggle: a 28 px knob in a 36 px hit area, on the divider and the site-name line
+    Button {   // the collapse toggle: a 28 px knob in a 36 px hit area, on the sidebar's right edge beside the logo
         id: toggle
         z: 20
-        x: sidebar.width - 20; y: sidebar.nameY - 18
+        x: sidebar.x + sidebar.width - 17; y: sidebar.y + 17
         width: 36; height: 36; padding: 4
         hoverEnabled: true
         Accessible.name: sidebar.open ? "Collapse sidebar" : "Expand sidebar"
@@ -2567,15 +2616,16 @@ Item {
         SideTip { text: toggle.Accessible.name; visible: toggle.hovered || toggle.visualFocus }
         background: Rectangle { radius: 18; color: "transparent"; border.width: toggle.visualFocus ? 2 : 0; border.color: root.t.focus }
         contentItem: Rectangle {
-            radius: 14; color: toggle.hovered ? root.t.hover : root.t.page; border.color: root.t.ctlBd
-            Icon { anchors.centerIn: parent; name: sidebar.open ? "chevl" : "chev"; size: 16; color: root.t.fg }
+            radius: 14; color: toggle.hovered ? root.t.hover : root.t.card; border.color: root.t.bd
+            Behavior on color { EasedColor {} }
+            Icon { anchors.centerIn: parent; name: sidebar.open ? "chevl" : "chev"; size: 14; color: root.t.fg }
         }
     }
 
-    ColumnLayout {
+    ColumnLayout {   // the pages, in the space right of the sidebar panel
         anchors.fill: parent
-        anchors.margins: 16
-        anchors.leftMargin: root.sidebarWidth + 16
+        anchors.margins: root.gaps.inset
+        anchors.leftMargin: root.sidebarWidth
         spacing: 8
 
         Flash {   // the last refused action; stays until dismissed or the next action replaces it
@@ -2950,12 +3000,16 @@ Item {
             visible: root.inSite
             Layout.fillWidth: true
             Layout.fillHeight: true
-            spacing: 8
+            spacing: root.gaps.gutter
             StackLayout {
+                id: pageStack
                 visible: !(root.narrow && root.paneOpen)   // narrow: the pane takes the page's place
                 currentIndex: root.pages.indexOf(root.page)
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                // A short fade-in whenever the page changes (160 ms, ease-out)
+                onCurrentIndexChanged: pageFade.restart()
+                Eased { id: pageFade; target: pageStack; property: "opacity"; from: 0; to: 1 }
 
                 // Home (opens first): what Pukaar is for, said once, then this site in its own numbers: what is open, what
                 // waits for you, how a report moves here, and every page with one line on what it is for.
