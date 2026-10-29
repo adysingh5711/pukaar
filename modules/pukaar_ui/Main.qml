@@ -125,9 +125,8 @@ Item {
             .concat((c.theirs || []).map(function (r) { return (name ? name + " is" : "They are") + " busy, " + meetTime(r) + "." }))
     }
     // The people of a meeting but you, as one line: for one invitee that is the other person.
-    function meetTitle(m) {
-        return [m.organizer].concat(m.invitees).filter(function (p) { return !p.you }).map(function (p) { return who(p.with, p.name) }).join(", ")
-    }
+    function meetOthers(m) { return [m.organizer].concat(m.invitees).filter(function (p) { return !p.you }) }
+    function meetTitle(m) { return meetOthers(m).map(function (p) { return who(p.with, p.name) }).join(", ") }
     // A meeting that you are part of and that still counts: you organize it, or you accepted it.
     function meetMine(m) { return (m.status === "confirmed" || m.status === "proposed") && (m.you === "requester" || m.my_answer === "accepted") }
     // A local timer: the first confirmed meeting that starts within the lead time, once. It runs only while the app is open.
@@ -935,7 +934,7 @@ Item {
             x: check.leftPadding; y: (check.height - height) / 2; width: 18; height: 18
             Icon { anchors.centerIn: parent; visible: check.checked; name: "tick"; size: 16; color: root.t.onPrimary }
         }
-        contentItem: Label { text: check.text; color: root.ink(check.enabled); leftPadding: check.indicator.width + 8; verticalAlignment: Text.AlignVCenter }
+        contentItem: Label { text: check.text; color: root.ink(check.enabled); leftPadding: check.indicator.width + 8; verticalAlignment: Text.AlignVCenter; wrapMode: Text.Wrap }
     }
     // A search box over a list of people to tick (New group, Add members). `picked` is {key: true}; `clear()` resets both.
     component MemberPicker: ColumnLayout {
@@ -1531,6 +1530,7 @@ Item {
         property bool open: false
         readonly property var verb: ({ proposed: "Proposed by", accepted: "Accepted by", declined: "Declined by", cancelled: "Cancelled by" })
         readonly property bool many: modelData.invitees.length > 1
+        readonly property var others: root.meetOthers(modelData)
         readonly property string names: root.meetTitle(modelData)
         // What each person has answered, for the details and the waiting count.
         readonly property int answered: modelData.invitees.filter(function (p) { return p.state !== "pending" }).length
@@ -1545,25 +1545,29 @@ Item {
             : ({ proposed: waiting, confirmed: "Confirmed", declined: "Declined", cancelled: modelData.cancelled_by_you ? "Cancelled by you" : "Cancelled", unaccepted: "Not accepted" })[modelData.status]
         Layout.fillWidth: true
         spacing: 0
-        Rectangle { visible: mr.index > 0; Layout.fillWidth: true; implicitHeight: 1; color: root.t.bd }
-        GridLayout {
-            Layout.fillWidth: true; Layout.margins: 12; Layout.leftMargin: 16; Layout.rightMargin: 16
-            columns: root.compactRows ? 1 : 2; columnSpacing: 12; rowSpacing: 8
+        Rule { visible: mr.index > 0; Layout.topMargin: 14 }
+        RowLayout {   // Harbor's .mi: the avatar, then the name, the time, the note, the status and the actions
+            Layout.fillWidth: true; Layout.topMargin: mr.index > 0 ? 14 : 0
+            spacing: 14
+            Avatar {
+                Layout.alignment: Qt.AlignTop
+                size: 40; group: mr.many; name: mr.others[0].name || ""; ident: mr.others[0].with
+            }
             ColumnLayout {
                 Layout.fillWidth: true; Layout.alignment: Qt.AlignTop
-                spacing: 4
+                spacing: 2
                 TapHandler { onTapped: mr.open = !mr.open }
-                Flow {
-                    Layout.fillWidth: true; spacing: 6
-                    Label { text: mr.names; textFormat: Text.PlainText; font.weight: Font.DemiBold }
-                    StatusChip { label: mr.phrase; stage: mr.out ? root.t.closed : mr.modelData.status === "confirmed" ? root.t.resolved : mr.modelData.status === "proposed" ? root.t.progress : root.t.closed }
-                    LinkButton { text: mr.open ? "Hide details" : "Details"; Accessible.name: text + " of the meeting with " + mr.names; onClicked: mr.open = !mr.open }
-                }
-                Label { text: root.meetTime(mr.modelData); color: root.t.muted; font.pointSize: root.smallSize }
+                Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: mr.names; textFormat: Text.PlainText; font.weight: Font.DemiBold }
+                Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: root.meetTime(mr.modelData); color: root.t.muted; font.pointSize: root.smallSize }
                 Label {
                     visible: !!mr.modelData.desc && !mr.open
-                    Layout.fillWidth: true; elide: Text.ElideRight; textFormat: Text.PlainText; font.pointSize: root.smallSize
+                    Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText; font.pointSize: root.smallSize
                     text: mr.modelData.desc || ""
+                }
+                Flow {
+                    Layout.fillWidth: true; Layout.topMargin: 6; spacing: 8
+                    StatusChip { label: mr.phrase; maxWidth: parent.width; stage: mr.out ? root.t.closed : mr.modelData.status === "confirmed" ? root.t.resolved : mr.modelData.status === "proposed" ? root.t.progress : root.t.closed }
+                    LinkButton { text: mr.open ? "Hide details" : "Details"; Accessible.name: text + " of the meeting with " + mr.names; onClicked: mr.open = !mr.open }
                 }
                 Label {
                     visible: mr.lines.length > 0
@@ -1598,8 +1602,8 @@ Item {
                     }
                     Help { text: "Times are when this device saw each step." }
                 }
+                Flow { id: act; visible: children.length > 0; Layout.fillWidth: true; Layout.topMargin: 10; spacing: 8 }
             }
-            RowLayout { id: act; Layout.alignment: Qt.AlignTop | Qt.AlignRight; spacing: 8 }
         }
     }
 
@@ -1677,6 +1681,41 @@ Item {
         Icon { visible: av.group; anchors.centerIn: parent; name: "members"; size: av.size * 0.5; color: root.t.accent }
     }
 
+    // Harbor's .whol button: a pill with the person's avatar and name. Chosen: an accent wash and ring.
+    component WhoChip: AbstractButton {
+        id: wc
+        property bool chosen: false
+        property string ident: ""
+        hoverEnabled: true
+        focusPolicy: Qt.StrongFocus
+        implicitHeight: 36; leftPadding: 5; rightPadding: 14
+        Keys.onReturnPressed: clicked()
+        Keys.onEnterPressed: clicked()
+        contentItem: RowLayout {
+            spacing: 8
+            Avatar { size: 26; name: wc.text; ident: wc.ident }
+            Label { Layout.fillWidth: true; text: wc.text; textFormat: Text.PlainText; elide: Text.ElideRight; font.weight: Font.Medium; font.pointSize: root.sizes.small }
+        }
+        background: Rectangle {
+            radius: height / 2
+            color: wc.chosen ? root.fade(root.t.accent, 0.14) : wc.hovered ? root.t.hover : "transparent"
+            border.width: wc.visualFocus ? 2 : 1
+            border.color: wc.visualFocus ? root.t.focus : wc.chosen ? root.fade(root.t.accent, 0.5) : root.t.bd
+            Behavior on color { EasedColor {} }
+        }
+    }
+
+    // One panel of the Meetings page: a title, then a MeetRow per item of `model`. `delegate` is the row (its actions in it);
+    // more content (an empty note) follows. It shows when `visible` says so.
+    component MeetPanel: Panel {
+        id: mp
+        property string title
+        property alias model: meetRows.model
+        property alias delegate: meetRows.delegate
+        Heading { Layout.topMargin: 0; text: mp.title }
+        ColumnLayout { Layout.fillWidth: true; spacing: 0; Repeater { id: meetRows } }
+    }
+
     // Harbor's .role: a role tag, accent for a super admin.
     component RoleChip: Rectangle {
         id: rc
@@ -1721,12 +1760,17 @@ Item {
         property int current: 0
         property string name
         signal picked(int index)
-        implicitWidth: segRow.implicitWidth + 6; implicitHeight: 36
+        implicitWidth: natural.implicitWidth + 6; implicitHeight: Math.max(36, segRow.implicitHeight + 8)
         radius: root.radii.nav; color: root.t.field; border.color: root.t.bd
         Accessible.role: Accessible.Grouping; Accessible.name: name
-        Row {
+        Row {   // measures the one-line width (a Flow only reports its wrapped one)
+            id: natural; visible: false; spacing: 2
+            Repeater { model: seg.options; Label { required property string modelData; text: modelData; leftPadding: 24; font.pointSize: root.sizes.small; font.weight: Font.Medium } }
+        }
+        Flow {   // one line at its natural width, the choices wrap onto more lines when the box is narrower
             id: segRow
-            x: 3; y: 3; spacing: 2
+            anchors { left: parent.left; right: parent.right; top: parent.top; margins: 3 }
+            spacing: 2
             Repeater {
                 model: seg.options
                 delegate: AbstractButton {
@@ -4656,7 +4700,7 @@ Item {
                 TabPage {
                     id: meetPage
                     enabled: !root.syncing
-                    maxWidth: 1000
+                    maxWidth: 1200
                     gap: root.gaps.gutter
                     readonly property var guests: root.meetGuests
                     readonly property int maxGuests: 8   // the core's MAX_INVITEES
@@ -4782,166 +4826,26 @@ Item {
                         title: "Meetings"
                         lede: "Plan a meeting with one or more members, up to 8. Times show in your local time."
                     }
-                    GridLayout {
+                    GridLayout {   // Harbor's .meet: two columns (55 / 45) side by side, one column when narrow
                         id: meetGrid
+                        readonly property bool wide: width >= 760
                         Layout.fillWidth: true
-                        columns: root.compactRows ? 1 : 2
+                        columns: wide ? 2 : 1
                         columnSpacing: root.gaps.gutter; rowSpacing: root.gaps.gutter
-                        Heading { visible: meetPage.requests.length > 0; text: "Requests"; Layout.row: root.compactRows ? -1 : 0; Layout.column: 0 }
-                    Frame {
-                        visible: meetPage.requests.length > 0
-                        Layout.row: root.compactRows ? -1 : 1; Layout.column: 0
-                        Layout.fillWidth: true; implicitHeight: reqs.implicitHeight; fill: root.t.well; edge: root.t.bd; radius: root.radii.card; clip: true
                         ColumnLayout {
-                            id: reqs
-                            width: parent.width; spacing: 0
-                            Repeater {
-                                model: meetPage.requests
+                            Layout.fillWidth: true; Layout.alignment: Qt.AlignTop; Layout.horizontalStretchFactor: 55
+                            spacing: root.gaps.gutter
+                            MeetPanel {
+                                visible: meetPage.requests.length > 0
+                                title: "Requests"; model: meetPage.requests
                                 delegate: MeetRow {
                                     id: req
                                     ActionButton { text: "Accept"; kind: "primary"; Accessible.name: "Accept the meeting with " + root.meetTitle(req.modelData); onClicked: root.run("meet_accept", [req.modelData.id]) }
                                     ActionButton { text: "Decline"; Accessible.name: "Decline the meeting with " + root.meetTitle(req.modelData); onClicked: root.run("meet_decline", [req.modelData.id]) }
                                 }
                             }
-                        }
-                    }
-                    Heading { text: "Who"; Layout.row: root.compactRows ? -1 : 0; Layout.column: root.compactRows ? 0 : 1 }
-                    Label {
-                        visible: meetPage.others.length === 0
-                        Layout.row: root.compactRows ? -1 : 1; Layout.column: root.compactRows ? 0 : 1
-                        Layout.fillWidth: true; wrapMode: Text.Wrap; color: root.t.muted
-                        text: root.approved ? "No other members yet." : "You can plan a meeting once you have a role."
-                    }
-                    Flow {
-                        Layout.row: root.compactRows ? -1 : 1; Layout.column: root.compactRows ? 0 : 1
-                        Layout.fillWidth: true; spacing: 8
-                        Repeater {
-                            model: meetPage.others
-                            delegate: ActionButton {
-                                id: whoBtn
-                                required property var modelData
-                                text: root.who(modelData.key, modelData.name)
-                                readonly property bool chosen: meetPage.guests.some(function (g) { return g.key === modelData.key })
-                                kind: chosen ? "primary" : "default"
-                                Accessible.name: (chosen ? "Remove " : "Add ") + text + (chosen ? " from" : " to") + " the new meeting"
-                                onClicked: meetPage.toggle(modelData)
-                            }
-                        }
-                    }
-                    Help {
-                        Layout.row: root.compactRows ? -1 : 2; Layout.column: root.compactRows ? 0 : 1
-                        visible: meetPage.others.length > 0
-                        text: meetPage.guests.length >= meetPage.maxGuests ? "Up to " + meetPage.maxGuests + " people. Choose a name again to remove it."
-                            : "Choose one or more people (up to " + meetPage.maxGuests + "). Choose a name again to remove it."
-                    }
-                    Heading { visible: meetPage.guests.length > 0; text: "New meeting with " + meetPage.guestNames; Layout.row: root.compactRows ? -1 : 3; Layout.column: root.compactRows ? 0 : 1 }
-                    ColumnLayout {
-                        visible: meetPage.guests.length > 0
-                        Layout.row: root.compactRows ? -1 : 4; Layout.column: root.compactRows ? 0 : 1
-                        Layout.fillWidth: true; spacing: 8
-                        RowLayout {
-                            spacing: 12
-                            Label { text: "Length" }
-                            Segmented {
-                                name: "Length of the meeting"; options: ["15 min", "30 min", "60 min", "Other"]
-                                current: meetPage.customLengthMode ? 3 : [15, 30, 60].indexOf(meetPage.lenMin)
-                                onPicked: function (i) { if (i === 3) { meetPage.customLengthMode = true; lenField.forceActiveFocus() } else meetPage.setPresetLen([15, 30, 60][i]) }
-                            }
-                            IconLink { iconName: "x"; Accessible.name: "Close the guest list"; onClicked: root.meetGuests = [] }
-                        }
-                        RowLayout {
-                            spacing: 8
-                            Label { visible: meetPage.customLengthMode; text: "Other length" }
-                            FramedField {
-                                id: lenField
-                                visible: meetPage.customLengthMode
-                                Layout.preferredWidth: 72; maximumLength: 3; placeholderText: "45"
-                                inputMethodHints: Qt.ImhDigitsOnly
-                                validator: RegularExpressionValidator { regularExpression: /[0-9]*/ }
-                                Accessible.name: "Meeting length in minutes"
-                                onTextEdited: { meetPage.customLengthMode = true; lenTimer.restart() }
-                            }
-                            Label { visible: meetPage.customLengthMode; text: "minutes, 5 to 480"; color: root.t.muted; font.pointSize: root.smallSize }
-                        }
-                        Flow {
-                            Layout.fillWidth: true; spacing: 8
-                            Label { height: dateField.height; verticalAlignment: Text.AlignVCenter; text: "Date" }
-                            FramedField {
-                                id: dateField
-                                Layout.preferredWidth: 132; placeholderText: "YYYY-MM-DD"
-                                inputMethodHints: Qt.ImhDigitsOnly
-                                validator: RegularExpressionValidator { regularExpression: /\d{0,4}(-\d{0,2}(-\d{0,2})?)?/ }
-                                Accessible.name: "Meeting date, YYYY-MM-DD, in your local time"
-                                onTextEdited: meetPage.applyTime()
-                            }
-                            Label { height: dateField.height; verticalAlignment: Text.AlignVCenter; text: "Time" }
-                            FramedField {
-                                id: timeField
-                                Layout.preferredWidth: 76; placeholderText: "HH:mm"
-                                inputMethodHints: Qt.ImhDigitsOnly
-                                validator: RegularExpressionValidator { regularExpression: /\d{0,2}(:\d{0,2})?/ }
-                                Accessible.name: "Meeting time, HH:mm, in your local time"
-                                onTextEdited: meetPage.applyTime()
-                            }
-                        }
-                        Flash { visible: meetPage.customError !== ""; err: true; text: meetPage.customError }
-                        Flash { visible: meetPage.slotsError !== ""; err: true; text: "The free times could not load: " + meetPage.slotsError }
-                        Help { visible: !!meetPage.pick; text: meetPage.pick ? "Chosen, in your local time: " + root.meetTime(meetPage.pick) : "" }
-                        ColumnLayout {
-                            visible: !!meetPage.pick
-                            spacing: 2
-                            Label { text: meetPage.youLine; color: meetPage.youBusy ? root.t.warn : meetPage.ours ? root.t.resolved.fg : root.t.muted; font.weight: Font.DemiBold }
-                            Repeater {
-                                model: meetPage.guests
-                                delegate: ColumnLayout {
-                                    required property var modelData
-                                    Layout.fillWidth: true; spacing: 2
-                                    Label {
-                                        Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
-                                        text: meetPage.theirLine(modelData); font.weight: Font.DemiBold
-                                        color: meetPage.theirBusy(modelData) ? root.t.warn : meetPage.views[modelData.key] && meetPage.views[modelData.key].shared && meetPage.clashes[modelData.key] ? root.t.resolved.fg : root.t.muted
-                                    }
-                                    Help {
-                                        visible: !!meetPage.busyDay(modelData)
-                                        text: root.who(modelData.key, modelData.name) + " is busy on " + (meetPage.pick ? root.when(meetPage.pick.start_ms / 1000, "ddd d MMM") : "") + ": "
-                                              + ((meetPage.busyDay(modelData) || []).length > 0 ? meetPage.busyDay(modelData).map(meetPage.hm).join(", ") : "nothing")
-                                    }
-                                }
-                            }
-                        }
-                        RowLayout {
-                            spacing: 8
-                            Label { text: "Description" }
-                            FramedField {
-                                id: descField
-                                Layout.fillWidth: true; maximumLength: 500; placeholderText: "Optional: what is this meeting about?"
-                                Accessible.name: "Meeting description, optional, up to 500 characters"
-                            }
-                        }
-                        Help { visible: descField.length > 0; text: descField.length + " of 500 characters" }
-                        Flash {
-                            visible: meetPage.lines.length > 0
-                            tone: "warn"; icon: "warn"; lead: "This time clashes."
-                            text: "You can still send the proposal."
-                        }
-                        ActionButton {
-                            visible: !!meetPage.pick
-                            text: meetPage.lines.length > 0 ? "Send anyway" : "Send proposal"; kind: "primary"
-                            onClicked: root.run("meet_propose", [meetPage.guests.map(function (g) { return g.key }).join(","), meetPage.pick.start_ms, meetPage.pick.end_ms, descField.text],
-                                                function () { meetPage.pick = null; meetPage.clashes = ({}); root.meetGuests = [] })
-                        }
-                    }
-                    Heading { text: "Upcoming"; Layout.row: root.compactRows ? -1 : 2; Layout.column: 0 }
-                    Blank { visible: meetPage.upcoming.length === 0; icon: "bell"; title: "No meetings planned"; text: "Choose who above, or use 1:1 meeting in People."; Layout.row: root.compactRows ? -1 : 3; Layout.column: 0 }
-                    Frame {
-                        visible: meetPage.upcoming.length > 0
-                        Layout.row: root.compactRows ? -1 : 4; Layout.column: 0
-                        Layout.fillWidth: true; implicitHeight: ups.implicitHeight; fill: root.t.well; edge: root.t.bd; radius: root.radii.card; clip: true
-                        ColumnLayout {
-                            id: ups
-                            width: parent.width; spacing: 0
-                            Repeater {
-                                model: meetPage.upcoming
+                            MeetPanel {
+                                title: "Upcoming"; model: meetPage.upcoming
                                 delegate: MeetRow {
                                     id: up
                                     ConfirmButton {
@@ -4952,58 +4856,184 @@ Item {
                                         onConfirmed: root.run("meet_cancel", [up.modelData.id])
                                     }
                                 }
+                                Blank { visible: meetPage.upcoming.length === 0; icon: "bell"; title: "No meetings planned"; text: "Choose who to meet, or use 1:1 meeting in People." }
                             }
+                            MeetPanel { visible: meetPage.history.length > 0; title: "History"; model: meetPage.history; delegate: MeetRow {} }
                         }
-                    }
-                    Heading { visible: meetPage.history.length > 0; text: "History"; Layout.row: root.compactRows ? -1 : 5; Layout.column: 0 }
-                    Frame {
-                        visible: meetPage.history.length > 0
-                        Layout.row: root.compactRows ? -1 : 6; Layout.column: 0
-                        Layout.fillWidth: true; implicitHeight: hists.implicitHeight; fill: root.t.well; edge: root.t.bd; radius: root.radii.card; clip: true
                         ColumnLayout {
-                            id: hists
-                            width: parent.width; spacing: 0
-                            Repeater { model: meetPage.history; delegate: MeetRow {} }
-                        }
-                    }
-                    Heading { text: "Settings"; Layout.row: root.compactRows ? -1 : 5; Layout.column: root.compactRows ? 0 : 1 }
-                    FramedCheck {
-                        Layout.row: root.compactRows ? -1 : 6; Layout.column: root.compactRows ? 0 : 1
-                        text: "Share my free and busy times with the site (times only, never titles)"
-                        Binding on checked { value: root.meets.share !== false }
-                        onToggled: root.run("meet_prefs", [checked ? 1 : 0, root.meets.lead_min])
-                    }
-                    RowLayout {
-                        Layout.row: root.compactRows ? -1 : 7; Layout.column: root.compactRows ? 0 : 1
-                        spacing: 12
-                        Label { text: "Remind me" }
-                        Segmented {
-                            name: "Reminder before a meeting"; options: ["Off", "5 min", "10 min", "15 min", "30 min", "60 min"]
-                            current: [0, 5, 10, 15, 30, 60].indexOf(root.meets.lead_min)
-                            onPicked: function (i) { meetPage.setLead([0, 5, 10, 15, 30, 60][i]) }
-                        }
-                        Label { text: root.meets.lead_min === 0 ? "No reminder shows." : "before. The reminder shows only while this app is open."; color: root.t.muted; font.pointSize: root.smallSize }
-                    }
-                    RowLayout {
-                        Layout.row: root.compactRows ? -1 : 8; Layout.column: root.compactRows ? 0 : 1
-                        spacing: 8
-                        Label { text: "Other reminder" }
-                        FramedField {
-                            id: leadField
-                            Layout.preferredWidth: 72; maximumLength: 4; placeholderText: "20"
-                            inputMethodHints: Qt.ImhDigitsOnly
-                            validator: RegularExpressionValidator { regularExpression: /[0-9]*/ }
-                            Accessible.name: "Reminder in minutes before the meeting, 0 for none"
-                            onAccepted: useLead.submit()
-                        }
-                        Label { text: "minutes before, 0 to 1440 (0 = none)"; color: root.t.muted; font.pointSize: root.smallSize }
-                        ActionButton { id: useLead; text: "Set"; onClicked: meetPage.setLead(meetPage.whole(leadField.text, 0, 1440)) }
-                    }
-                    Flash { visible: meetPage.leadError !== ""; err: true; text: meetPage.leadError; Layout.row: root.compactRows ? -1 : 9; Layout.column: root.compactRows ? 0 : 1 }
-                    CollapsibleSection {   // closed until the member opens it
-                        Layout.row: root.compactRows ? -1 : 10; Layout.column: root.compactRows ? 0 : 1
-                        title: "Backup settings"
-                        panel: true; pad: 20
+                            Layout.fillWidth: true; Layout.alignment: Qt.AlignTop; Layout.horizontalStretchFactor: 45
+                            spacing: root.gaps.gutter
+                            Panel {
+                                spacing: 12
+                                Heading { Layout.topMargin: 0; text: "Who" }
+                                Label {
+                                    visible: meetPage.others.length === 0
+                                    Layout.fillWidth: true; wrapMode: Text.Wrap; color: root.t.muted
+                                    text: root.approved ? "No other members yet." : "You can plan a meeting once you have a role."
+                                }
+                                Flow {
+                                    Layout.fillWidth: true; spacing: 8
+                                    Repeater {
+                                        model: meetPage.others
+                                        delegate: WhoChip {
+                                            id: whoBtn
+                                            required property var modelData
+                                            text: root.who(modelData.key, modelData.name)
+                                            ident: modelData.key
+                                            chosen: meetPage.guests.some(function (g) { return g.key === modelData.key })
+                                            width: Math.min(implicitWidth, parent.width)
+                                            Accessible.name: (chosen ? "Remove " : "Add ") + text + (chosen ? " from" : " to") + " the new meeting"
+                                            onClicked: meetPage.toggle(modelData)
+                                        }
+                                    }
+                                }
+                                Help {
+                                    visible: meetPage.others.length > 0
+                                    text: meetPage.guests.length >= meetPage.maxGuests ? "Up to " + meetPage.maxGuests + " people. Choose a name again to remove it."
+                                        : "Choose one or more people (up to " + meetPage.maxGuests + "). Choose a name again to remove it."
+                                }
+                                ColumnLayout {   // Harbor's .nm-form
+                                    visible: meetPage.guests.length > 0
+                                    Layout.fillWidth: true; Layout.topMargin: 6; spacing: 14
+                                    Rule {}
+                                    RowLayout {
+                                        Layout.fillWidth: true; spacing: 8
+                                        Heading { Layout.topMargin: 0; Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText; text: "New meeting with " + meetPage.guestNames }
+                                        IconLink { Layout.alignment: Qt.AlignTop; iconName: "x"; Accessible.name: "Close the guest list"; onClicked: root.meetGuests = [] }
+                                    }
+                                    FormRow {
+                                        label: "Length"
+                                        Segmented {
+                                            Layout.fillWidth: true; Layout.maximumWidth: implicitWidth   // natural width, wraps when narrower
+                                            name: "Length of the meeting"; options: ["15 min", "30 min", "60 min", "Other"]
+                                            current: meetPage.customLengthMode ? 3 : [15, 30, 60].indexOf(meetPage.lenMin)
+                                            onPicked: function (i) { if (i === 3) { meetPage.customLengthMode = true; lenField.forceActiveFocus() } else meetPage.setPresetLen([15, 30, 60][i]) }
+                                        }
+                                    }
+                                    FormRow {
+                                        visible: meetPage.customLengthMode
+                                        label: "Other length"; sub: "minutes, 5 to 480"
+                                        FramedField {
+                                            id: lenField
+                                            Layout.preferredWidth: 96; maximumLength: 3; placeholderText: "45"
+                                            inputMethodHints: Qt.ImhDigitsOnly
+                                            validator: RegularExpressionValidator { regularExpression: /[0-9]*/ }
+                                            Accessible.name: "Meeting length in minutes"
+                                            onTextEdited: { meetPage.customLengthMode = true; lenTimer.restart() }
+                                        }
+                                    }
+                                    GridLayout {   // Harbor's .r2: Date and Time side by side
+                                        Layout.fillWidth: true; columns: 2; columnSpacing: 12; rowSpacing: 4
+                                        FormRow {
+                                            label: "Date"
+                                            FramedField {
+                                                id: dateField
+                                                Layout.fillWidth: true; placeholderText: "YYYY-MM-DD"
+                                                inputMethodHints: Qt.ImhDigitsOnly
+                                                validator: RegularExpressionValidator { regularExpression: /\d{0,4}(-\d{0,2}(-\d{0,2})?)?/ }
+                                                Accessible.name: "Meeting date, YYYY-MM-DD, in your local time"
+                                                onTextEdited: meetPage.applyTime()
+                                            }
+                                        }
+                                        FormRow {
+                                            label: "Time"
+                                            FramedField {
+                                                id: timeField
+                                                Layout.fillWidth: true; placeholderText: "HH:mm"
+                                                inputMethodHints: Qt.ImhDigitsOnly
+                                                validator: RegularExpressionValidator { regularExpression: /\d{0,2}(:\d{0,2})?/ }
+                                                Accessible.name: "Meeting time, HH:mm, in your local time"
+                                                onTextEdited: meetPage.applyTime()
+                                            }
+                                        }
+                                    }
+                                    Flash { visible: meetPage.customError !== ""; err: true; text: meetPage.customError }
+                                    Flash { visible: meetPage.slotsError !== ""; err: true; text: "The free times could not load: " + meetPage.slotsError }
+                                    Help { visible: !!meetPage.pick; text: meetPage.pick ? "Chosen, in your local time: " + root.meetTime(meetPage.pick) : "" }
+                                    ColumnLayout {
+                                        visible: !!meetPage.pick
+                                        Layout.fillWidth: true; spacing: 2
+                                        Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: meetPage.youLine; color: meetPage.youBusy ? root.t.warn : meetPage.ours ? root.t.resolved.fg : root.t.muted; font.weight: Font.DemiBold }
+                                        Repeater {
+                                            model: meetPage.guests
+                                            delegate: ColumnLayout {
+                                                id: guest
+                                                required property var modelData
+                                                Layout.fillWidth: true; spacing: 2
+                                                Label {
+                                                    Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
+                                                    text: meetPage.theirLine(guest.modelData); font.weight: Font.DemiBold
+                                                    color: meetPage.theirBusy(guest.modelData) ? root.t.warn : meetPage.views[guest.modelData.key] && meetPage.views[guest.modelData.key].shared && meetPage.clashes[guest.modelData.key] ? root.t.resolved.fg : root.t.muted
+                                                }
+                                                Help {
+                                                    visible: !!meetPage.busyDay(guest.modelData)
+                                                    text: root.who(guest.modelData.key, guest.modelData.name) + " is busy on " + (meetPage.pick ? root.when(meetPage.pick.start_ms / 1000, "ddd d MMM") : "") + ": "
+                                                          + ((meetPage.busyDay(guest.modelData) || []).length > 0 ? meetPage.busyDay(guest.modelData).map(meetPage.hm).join(", ") : "nothing")
+                                                }
+                                            }
+                                        }
+                                    }
+                                    FormRow {
+                                        label: "Description"
+                                        FramedField {
+                                            id: descField
+                                            Layout.fillWidth: true; maximumLength: 500; placeholderText: "Optional: what is this meeting about?"
+                                            Accessible.name: "Meeting description, optional, up to 500 characters"
+                                        }
+                                    }
+                                    Help { visible: descField.length > 0; text: descField.length + " of 500 characters" }
+                                    Flash {
+                                        visible: meetPage.lines.length > 0
+                                        tone: "warn"; icon: "warn"; lead: "This time clashes."
+                                        text: "You can still send the proposal."
+                                    }
+                                    ActionButton {
+                                        visible: !!meetPage.pick
+                                        text: meetPage.lines.length > 0 ? "Send anyway" : "Send proposal"; kind: "primary"
+                                        onClicked: root.run("meet_propose", [meetPage.guests.map(function (g) { return g.key }).join(","), meetPage.pick.start_ms, meetPage.pick.end_ms, descField.text],
+                                                            function () { meetPage.pick = null; meetPage.clashes = ({}); root.meetGuests = [] })
+                                    }
+                                }
+                            }
+                            Panel {
+                                spacing: 14
+                                Heading { Layout.topMargin: 0; text: "Settings" }
+                                FramedCheck {
+                                    Layout.fillWidth: true
+                                    text: "Share my free and busy times with the site (times only, never titles)"
+                                    Binding on checked { value: root.meets.share !== false }
+                                    onToggled: root.run("meet_prefs", [checked ? 1 : 0, root.meets.lead_min])
+                                }
+                                FormRow {
+                                    label: "Remind me"
+                                    Segmented {
+                                        Layout.fillWidth: true; Layout.maximumWidth: implicitWidth   // natural width, wraps when narrower
+                                        name: "Reminder before a meeting"; options: ["Off", "5 min", "10 min", "15 min", "30 min", "60 min"]
+                                        current: [0, 5, 10, 15, 30, 60].indexOf(root.meets.lead_min)
+                                        onPicked: function (i) { meetPage.setLead([0, 5, 10, 15, 30, 60][i]) }
+                                    }
+                                    Help { text: root.meets.lead_min === 0 ? "No reminder shows." : "before. The reminder shows only while this app is open." }
+                                }
+                                FormRow {
+                                    label: "Other reminder"; sub: "minutes before, 0 to 1440 (0 = none)"
+                                    RowLayout {
+                                        spacing: 8
+                                        FramedField {
+                                            id: leadField
+                                            Layout.preferredWidth: 96; maximumLength: 4; placeholderText: "20"
+                                            inputMethodHints: Qt.ImhDigitsOnly
+                                            validator: RegularExpressionValidator { regularExpression: /[0-9]*/ }
+                                            Accessible.name: "Reminder in minutes before the meeting, 0 for none"
+                                            onAccepted: useLead.submit()
+                                        }
+                                        ActionButton { id: useLead; text: "Set"; onClicked: meetPage.setLead(meetPage.whole(leadField.text, 0, 1440)) }
+                                    }
+                                }
+                                Flash { visible: meetPage.leadError !== ""; err: true; text: meetPage.leadError }
+                            }
+                            CollapsibleSection {   // closed until the member opens it
+                                title: "Backup settings"
+                                panel: true; pad: 20
                         aside: meetPage.backup.job ? "working…" : meetPage.backup.error ? "needs attention" : ""
                         Help { text: "A backup puts your meeting history in Storage. The file is encrypted with a key from your account. Then its CID goes into one record of yours on the chain, so a new device can find it. The chain write costs a small fee. Meeting details never go on the chain. If Storage is not reachable, the backup is skipped and your local history stays." }
                         Flash { visible: !!meetPage.backup.error; err: true; text: meetPage.backup.error || "" }
@@ -5030,6 +5060,7 @@ Item {
                             buttonText: "Restore"
                             missing: meetPage.backup.job ? "A backup or a restore is running." : ""
                             onSubmitted: root.run("meet_restore", [restoreCid.text])
+                        }
                         }
                     }
                     }

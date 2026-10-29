@@ -179,8 +179,26 @@ Window {
                 last_anchor: anchor === "never" ? null : { ts: h(anchor === "stale" ? 50 : 3), tx: "pda:Public/9f2c", by: keys.steward,
                     by_name: names.steward, events_covered: 33, reproducible: anchor !== "mismatch" } }
         }
+        // meet_list: a request for us, an upcoming confirmed meeting, and two in the history.
+        function meet(id, status, who, mine, ageH, len, desc, extra) {
+            var s = (now + ageH * 3600) * 1000, you = { with: keys.admin, name: names.admin, you: true }
+            var other = { with: keys[who], name: names[who], you: false }
+            return Object.assign({ id: id, status: status, you: mine ? "requester" : "invitee", my_answer: mine ? "accepted" : "pending",
+                organizer: mine ? you : other, invitees: [mine ? Object.assign({ state: "accepted" }, other) : Object.assign({ state: "pending" }, you)],
+                start_ms: s, end_ms: s + len * 60000, desc: desc, clashes: { mine: [], theirs: [] }, log: [] }, extra || {})
+        }
+        function meetList() {
+            return { share: true, lead_min: 10, backup: {}, meetings: [
+                meet("m1", "proposed", "admin2", false, 24, 30, "Ward walk: Lane 4 drain"),
+                meet("m2", "confirmed", "steward", true, 48, 30, "Pump check at W1"),
+                meet("m3", "confirmed", "resident", true, -30, 15, "", { my_answer: "accepted" }),
+                meet("m4", "cancelled", "steward", true, -60, 30, "Cancelled: tank visit", { cancelled_by_you: true })] }
+        }
         function reply(method, a) {
             switch (method) {
+            case "meet_list": return meetList()
+            case "meet_slots": return { shared: true, slots: [], theirs: [] }
+            case "meet_check": return { mine: [], theirs: [] }
             case "my_identity": return me()
             case "site_info": return siteInfo()
             case "list_issues": return issues.map(marked)
@@ -220,6 +238,11 @@ Window {
             [800, 1400].forEach(function (w) { out.push({ state: r[0], width: w, page: r[1], log: true, search: r[2] || "" }) })
         })
         ;[800, 1400].forEach(function (w) { out.push({ state: "admin", width: w, page: "places", rows: true, panels: confirmJobs }) })
+        // Meetings: empty, then with two people chosen, from the narrowest to a wide window.
+        ;[800, 900, 1100, 1400, 1800].forEach(function (w) {
+            out.push({ state: "admin", width: w, page: "meet", tag: "meetings" })
+            out.push({ state: "admin", width: w, page: "meet", tag: "meetings-new", guests: ["steward", "resident"] })
+        })
         return out
     }
     property int job: -1
@@ -247,6 +270,7 @@ Window {
         if (pane >= 0) { v.openPage("board"); v.openIssue(logos.issues[pane ? 0 : j.former ? 1 : 3].id) }
         else if (j.who) v.showMember(logos.keys[j.who])
         else if (j.page !== "first-run") v.openPage(j.page)
+        v.meetGuests = (j.guests || []).map(function (w) { return logos.member(w) })
         if (j.page === "proof") v.checkpoint = logos.reply("checkpoint_now")
         var log = find(v, "changeLog")
         if (log) log.open = !!j.log
