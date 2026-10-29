@@ -5,8 +5,8 @@
 set -uo pipefail
 
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-LOGS=/Users/aditya/Dev/Hackathons/logos-works/pukaar-build-logs
-DEST=/Users/aditya/Dev/Hackathons/logos-works/pukaar-lgx-2.6
+LOGS=$REPO/dist/pukaar-build-logs
+DEST=$REPO/dist
 WHAT=${1:-}
 DRY=0
 [ "${2:-}" = "--dry-run" ] && DRY=1
@@ -77,7 +77,7 @@ run_module() {
     out "[1/4] cd $dir && $cmd"
     if [ "$MOD" = core ]; then out "[2/4] scripts/check-core-lgx.sh $dir/$link/$lgx_name"
     else out "[2/4] extract the lgx and diff -q its Main.qml against $dir/Main.qml"; fi
-    out "[3/4] copy to $DEST/$lgx_name (old file kept as $lgx_name.prev-<timestamp>)"
+    out "[3/4] copy to $DEST/$lgx_name (old file kept in $LOGS as $lgx_name.prev-<timestamp>)"
     out "[4/4] print sha256 and size"
     status dry-run
     rm -f "$LOG" "$LASTF" "$STEPF"
@@ -127,8 +127,8 @@ run_module() {
   say "== [3/4] copy to $DEST =="
   mkdir -p "$DEST"
   if [ -f "$DEST/$lgx_name" ]; then
-    cp -p "$DEST/$lgx_name" "$DEST/$lgx_name.prev-$ts" || fail 3 copy 1
-    say "kept old file as $lgx_name.prev-$ts"
+    cp -p "$DEST/$lgx_name" "$LOGS/$lgx_name.prev-$ts" || fail 3 copy 1
+    say "kept old file as $LOGS/$lgx_name.prev-$ts"
   fi
   cp "$src" "$DEST/$lgx_name" || fail 3 copy 1
 
