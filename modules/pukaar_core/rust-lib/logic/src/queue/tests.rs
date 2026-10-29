@@ -620,6 +620,44 @@ fn what_we_upload_goes_in_the_cache_so_that_we_can_answer_for_it() {
     assert!(w.fetched.lock().unwrap().answer(&cid, &sha).len() == 1, "and it answers a BlobReq");
 }
 
+/// A restart: a new `Fetched` over the same data dir, with Storage that refuses every download.
+#[test]
+fn files_kept_on_disk_are_read_after_a_restart_without_storage() {
+    let w = World::new();
+    let site = w.site_id();
+    let run = |fx: &SharedFetched| crate::fetch::sync_once(&*w.rpc, &*w.store, &w.chain, fx, &w.key);
+    let first = Fetched::shared();
+    first.lock().unwrap().persist_in(&w.dir, &site);
+    run(&first);
+    assert_eq!(first.lock().unwrap().pending, 0, "the first run downloaded the three files");
+    w.store.no_download.store(true, Ordering::Relaxed);
+    let again = Fetched::shared();
+    again.lock().unwrap().persist_in(&w.dir, &site);
+    run(&again);
+    let f = again.lock().unwrap();
+    assert_eq!((f.pending, f.config.is_some(), f.places.is_some()), (0, true, true));
+    assert_eq!(w.store.refused.load(Ordering::Relaxed), 0, "Storage was not asked");
+}
+
+#[test]
+fn a_bad_disk_copy_is_removed_and_a_peer_cid_cannot_leave_the_folder() {
+    let w = World::new();
+    let (bytes, sha) = (b"profile".to_vec(), sha256(b"profile"));
+    let mut f = Fetched::default();
+    f.persist_in(&w.dir, &w.site_id());
+    f.put("zDvAbc", &bytes);
+    f.put("../escape", &bytes);
+    assert!(!w.dir.join("escape").exists() && !w.dir.parent().unwrap().join("escape").exists());
+    let on_disk = w.dir.join("blobs").join("zDvAbc");
+    let mut again = Fetched::default();
+    again.persist_in(&w.dir, &w.site_id());
+    assert_eq!(again.cached("zDvAbc", &sha), Some(bytes), "read back from disk");
+    assert!(again.answer("zDvAbc", &sha).len() == 1, "and served");
+    std::fs::write(&on_disk, b"junk").unwrap();
+    assert!(again.cached("zDvAbc", &sha).is_none(), "a copy that fails the SHA-256 is refused");
+    assert!(!on_disk.exists(), "the bad copy is gone");
+}
+
 #[test]
 fn a_dead_storage_gives_up_after_five_tries() {
     let w = World::new();

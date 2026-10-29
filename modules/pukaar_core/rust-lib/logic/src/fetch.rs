@@ -46,6 +46,29 @@ pub const DETAILS_SCHEMA: &str = "pukaar.site.details/1";
 pub const PLACES_SCHEMA: &str = "pukaar.site.places/1";
 /// A blob over this size is refused, whatever the chain says.
 const MAX_BLOB: usize = 1 << 20;
+
+/// Where the file with this CID is kept under the module data dir. None for a CID that could name a
+/// path outside `blobs`: a CID comes from a peer.
+fn blob_path(dir: &Path, cid: &str) -> Option<PathBuf> {
+    (!cid.is_empty() && cid.len() <= 128 && cid.bytes().all(|b| b.is_ascii_alphanumeric())).then(|| dir.join("blobs").join(cid))
+}
+
+/// Keep a file on disk for good (0600, whole or not at all). One file per CID, and a file that is there
+/// stays. ponytail: nothing prunes `blobs`; each file is at most `MAX_BLOB`. Prune what no pointer names if it grows.
+pub fn save_blob(dir: &Path, cid: &str, bytes: &[u8]) -> std::io::Result<()> {
+    let path = blob_path(dir, cid).ok_or_else(|| std::io::Error::other("bad CID"))?;
+    if path.exists() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(dir.join("blobs"))?;
+    persist::write_atomic(&path, bytes)
+}
+
+/// The file kept for this CID, if any. The caller checks it against a SHA-256.
+#[must_use]
+pub fn load_blob(dir: &Path, cid: &str) -> Option<Vec<u8>> {
+    std::fs::read(blob_path(dir, cid)?).ok().filter(|b| b.len() <= MAX_BLOB)
+}
 /// Announces of authors the chain does not list (yet).
 pub const MAX_ANNOUNCES: usize = 64;
 /// A node answers an announce request with at most this many announces, and not twice within
@@ -172,6 +195,9 @@ pub struct Fetched {
     pub announce_every: Duration,
     /// Blobs by CID. Every use checks the SHA-256 again, so a lying pointer cannot reuse a blob.
     cache: HashMap<String, Vec<u8>>,
+    /// The module data dir: `cache` is also kept in its `blobs` folder, so a restart (or a Storage node
+    /// that lost the file) does not lose a file that we held. None in a test that runs in memory.
+    blobs: Option<PathBuf>,
     /// The newest files that we uploaded: kept in `cache` before the chain points to them, so that we
     /// can answer a `BlobReq` for them.
     recent: Vec<String>,
@@ -210,6 +236,7 @@ impl Default for Fetched {
             announce_at: None,
             announce_every: ANNOUNCE_EVERY,
             cache: HashMap::new(),
+            blobs: None,
             recent: vec![],
             failed: BTreeSet::new(),
             busy: false,
@@ -275,9 +302,10 @@ impl Fetched {
     }
 
     /// Keep the announces in `dir` (one file per site, like the known accounts of the chain cache) and load
-    /// what an earlier run kept. A restart then does not lose an edit that no admin batch sent yet. The file
+    /// what an earlier run kept. The files that we hold are kept in `dir` too (`insert`). A restart then does not lose an edit that no admin batch sent yet. The file
     /// is only a cache: each announce is checked again as it loads, and a damaged file is ignored.
     pub fn persist_in(&mut self, dir: &Path, site: &Key) {
+        self.blobs = Some(dir.to_path_buf());
         let file = dir.join(format!("announces-{}", hex::encode(site)));
         let kept: Vec<Announce> = std::fs::read(&file).ok().and_then(|b| postcard::from_bytes(&b).ok()).unwrap_or_default();
         for a in kept.into_iter().filter(|a| a.site == *site) {
@@ -307,14 +335,40 @@ impl Fetched {
         if !known && !self.note_announce(a.clone()) {
             return false;
         }
-        self.cache.insert(a.cid, file);
+        self.insert(a.cid, file);
         true
     }
 
-    /// A blob that we hold already, when its SHA-256 is `sha`. It never touches the network: the
-    /// write thread reads here before it asks Storage.
+    /// Put a file in the cache and on disk. The caller checked the bytes (our own upload, or the chain SHA-256).
+    fn insert(&mut self, cid: String, bytes: Vec<u8>) {
+        if let Some(dir) = &self.blobs {
+            if let Err(e) = save_blob(dir, &cid, &bytes) {
+                eprintln!("pukaar: could not keep {cid} on disk: {e}");
+            }
+        }
+        self.cache.insert(cid, bytes);
+    }
+
+    /// The file of the disk copy, when its SHA-256 is `sha`. A copy that does not match is removed.
+    fn on_disk(&self, cid: &str, sha: &[u8; 32]) -> Option<Vec<u8>> {
+        let dir = self.blobs.as_deref()?;
+        let b = load_blob(dir, cid)?;
+        if sha256(&b) == *sha {
+            return Some(b);
+        }
+        let _ = blob_path(dir, cid).map(std::fs::remove_file);
+        None
+    }
+
+    /// True when the file is in the cache, after reading it back from disk if that is where it was.
+    fn warm(&mut self, cid: &str, sha: &[u8; 32]) -> bool {
+        self.cache.contains_key(cid) || self.on_disk(cid, sha).map(|b| self.cache.insert(cid.to_string(), b)).is_some()
+    }
+
+    /// A blob that we hold already (in memory, else on disk), when its SHA-256 is `sha`. It never
+    /// touches the network: the write thread reads here before it asks Storage, and `answer` serves from here.
     pub fn cached(&self, cid: &str, sha: &[u8; 32]) -> Option<Vec<u8>> {
-        self.cache.get(cid).filter(|b| b.len() <= MAX_BLOB && sha256(b) == *sha).cloned()
+        self.cache.get(cid).filter(|b| b.len() <= MAX_BLOB && sha256(b) == *sha).cloned().or_else(|| self.on_disk(cid, sha))
     }
 
     /// Keep a file that we just uploaded or downloaded, so that we can serve it (`answer`). The last
@@ -323,7 +377,7 @@ impl Fetched {
         if bytes.len() > MAX_BLOB {
             return;
         }
-        self.cache.insert(cid.to_string(), bytes.to_vec());
+        self.insert(cid.to_string(), bytes.to_vec());
         self.recent.retain(|c| c != cid);
         self.recent.push(cid.to_string());
         if self.recent.len() > MAX_ASKED {
@@ -396,7 +450,7 @@ impl Fetched {
         if sha256(&file) != *sha {
             return false;
         }
-        self.cache.insert(cid.to_string(), file);
+        self.insert(cid.to_string(), file);
         self.asked.remove(cid);
         true
     }
@@ -525,15 +579,19 @@ fn cycle(store: &dyn Store, chain: &SharedChain, fx: &SharedFetched, me: &Signin
     // Download what is missing. A failed download ends the round, so a dead Storage costs one wait.
     // The files that are still missing are then asked for over Delivery (once per `req_every` each).
     let mut storage_failed = false;
-    for (cid, _) in &want {
-        if fx.lock().unwrap().cache.contains_key(cid) {
+    for (cid, sha) in &want {
+        if fx.lock().unwrap().warm(cid, sha) {
             continue;
         }
         match store.download(cid) {
             Ok(b) => {
                 let mut f = fx.lock().unwrap();
                 f.failed.remove(cid);
-                f.cache.insert(cid.clone(), b);
+                if sha256(&b) == *sha {
+                    f.insert(cid.clone(), b);
+                } else {
+                    f.cache.insert(cid.clone(), b); // `get` below reports it
+                }
             }
             Err(e) => {
                 fx.lock().unwrap().failed.insert(cid.clone());

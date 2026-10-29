@@ -10,6 +10,11 @@
 //! - `uploadUrl` and `downloadToUrl` take file paths and answer through the events
 //!   `storageUploadDone` and `storageDownloadDone`. Each call writes or reads one temp file.
 //! - The caller checks the SHA-256 of every download against the chain. This file does not.
+//! - The shared module may come up on another data dir than last time (`storage_ui` calls `init` at
+//!   launch with the default config and wins when its dir is free), and then the files that an earlier
+//!   run uploaded are not in the node. So `upload` keeps the bytes (`<dir>/blobs`, see `fetch::save_blob`)
+//!   and the CID (`storage-ours`), and each bring-up puts back what the node lacks (`reseed`). A file is
+//!   named by the SHA-256 of its bytes, so the same bytes give the same CID.
 //!
 //! Fallback, not built: if the core path loses replies under Basecamp (storage#88: after `start()`
 //! the module host can drop the reply of a cross-module call), the UI can make the Storage calls
@@ -29,7 +34,9 @@
 //! profile, so `keep_file` puts the old content back after `init`.
 
 use logos_rust_sdk::{EventData, LogosError, LogosModuleSDK, PluginProxy};
-use pukaar_logic::fetch::Store;
+use pukaar_logic::event::sha256;
+use pukaar_logic::fetch::{load_blob, save_blob, Store};
+use pukaar_logic::persist::write_atomic;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -45,7 +52,12 @@ const START: Duration = Duration::from_secs(120);
 const TRANSFER: Duration = Duration::from_secs(30);
 /// The same for a download of the write thread (`try_download`): it holds the node lock meanwhile.
 const QUICK: Duration = Duration::from_secs(10);
+/// After a cancel: how long to wait for the `...Done` event that the cancelled session still sends.
+const GRACE: Duration = Duration::from_secs(1);
 const CHUNK: u64 = 65536;
+/// The CIDs of the files that this profile uploaded (one per line, newest last), and how many are kept.
+const OURS: &str = "storage-ours";
+const MAX_OURS: usize = 64;
 /// Events waiting for a transfer. A shared module may emit the events of other callers too.
 const MAX_EVENTS: usize = 64;
 
@@ -88,6 +100,35 @@ impl Events {
             q = self.arrived.wait_timeout(q, left).unwrap().0;
         }
     }
+}
+
+/// `Events::wait`, and when it times out: cancel the session (a download goes on inside Storage
+/// otherwise, and the next round starts another one for the same file), then wait a moment for the
+/// `...Done` event that the cancel brings, so that it cannot answer the next transfer. `cancel_id` is
+/// empty when the session is unknown. Errors of the cancel are ignored.
+fn wait_or_cancel(
+    p: &PluginProxy,
+    ev: &Events,
+    kind: &str,
+    sid: &str,
+    cancel_id: &str,
+    limit: Duration,
+) -> Result<Value, String> {
+    ev.wait(kind, sid, limit).inspect_err(|_| {
+        if !cancel_id.is_empty() {
+            let _ = call(
+                p,
+                if kind == "upload" {
+                    "uploadCancel"
+                } else {
+                    "downloadCancel"
+                },
+                json!([cancel_id]),
+                CALL,
+            );
+            let _ = ev.wait(kind, cancel_id, GRACE);
+        }
+    })
 }
 
 /// The payload of a Storage event: one JSON string (LIDL: `payload: tstr`), or already an object.
@@ -255,6 +296,24 @@ impl Client {
         })
     }
 
+    /// The note for an `init` that answered "already": where the running node keeps its data, when that
+    /// is not `want`. Empty when it is the same, or unknown. Not an error: `reseed` makes it harmless.
+    fn other_data_dir(&self, want: &str) -> String {
+        let got = call(&self.proxy, "dataDir", json!([]), CALL).ok();
+        match got
+            .as_ref()
+            .and_then(Value::as_str)
+            .filter(|d| !d.is_empty() && Path::new(d) != Path::new(want))
+        {
+            Some(d) => {
+                let note = format!("Storage was set up by another module (data dir {d})");
+                eprintln!("pukaar: {note}");
+                note
+            }
+            None => String::new(),
+        }
+    }
+
     /// Load the config, `init`, `start`, and wait until the node runs. `init` refuses a second
     /// call, and the module is shared with other modules, so "already" is not a failure.
     fn bring_up(&mut self, data_dir: &Path) -> Result<(), String> {
@@ -283,7 +342,9 @@ impl Client {
         let mut note = String::new();
         match init {
             Ok(v) if !matches!(v, Value::Bool(false)) => {}
-            Err(e) if e.contains("already") => {}
+            Err(e) if e.contains("already") => {
+                note = self.other_data_dir(cfg["data-dir"].as_str().unwrap_or_default())
+            }
             Ok(_) => {
                 note = format!(
                     "init was refused (see the storage_module log; data dir {})",
@@ -372,34 +433,41 @@ impl LogosStore {
                 return Err(e);
             }
             node.wait = None;
+            self.reseed(&node.proxy, &node.events);
         }
         f(&node.proxy, &node.events)
     }
 
-    fn temp(&self, tag: &str) -> Result<PathBuf, String> {
+    fn temp_dir(&self) -> Result<PathBuf, String> {
         let dir = self.dir.join("storage-tmp");
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        Ok(dir.join(format!(
+        Ok(dir)
+    }
+
+    fn temp(&self, tag: &str) -> Result<PathBuf, String> {
+        Ok(self.temp_dir()?.join(format!(
             "{tag}-{}-{}",
             std::process::id(),
             self.seq.fetch_add(1, Ordering::Relaxed)
         )))
     }
-}
 
-impl Store for LogosStore {
-    fn upload(&self, bytes: &[u8]) -> Result<String, String> {
-        let path = self.temp("up")?;
+    /// Upload the bytes as a file named by their SHA-256. The name is part of the manifest and so of
+    /// the CID: the same bytes then always give the same CID, here and after a restart. Called under the
+    /// node lock, so two threads never write the same name.
+    fn upload_file(&self, p: &PluginProxy, ev: &Events, bytes: &[u8]) -> Result<String, String> {
+        let path = self.temp_dir()?.join(hex::encode(sha256(bytes)));
         std::fs::write(&path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
-        let r = self.with_node(true, |p, ev| {
-            ev.clear("upload");
-            let sid = call(
-                p,
-                "uploadUrl",
-                json!([path.to_string_lossy(), CHUNK, true]),
-                CALL,
-            )?;
-            let done = ev.wait("upload", sid.as_str().unwrap_or(""), TRANSFER)?;
+        ev.clear("upload");
+        let r = call(
+            p,
+            "uploadUrl",
+            json!([path.to_string_lossy(), CHUNK, true]),
+            CALL,
+        )
+        .and_then(|sid| {
+            let sid = sid.as_str().unwrap_or("");
+            let done = wait_or_cancel(p, ev, "upload", sid, sid, TRANSFER)?;
             match (done["success"].as_bool(), done["cid"].as_str()) {
                 (Some(true), Some(cid)) | (None, Some(cid)) => Ok(cid.to_string()),
                 _ => Err(format!(
@@ -410,6 +478,82 @@ impl Store for LogosStore {
         });
         let _ = std::fs::remove_file(&path);
         r
+    }
+
+    /// The CIDs that this profile uploaded and still holds the bytes of, oldest first.
+    fn ours(&self) -> Vec<String> {
+        std::fs::read_to_string(self.dir.join(OURS))
+            .unwrap_or_default()
+            .lines()
+            .map(String::from)
+            .collect()
+    }
+
+    fn set_ours(&self, cids: &[String]) {
+        if let Err(e) = write_atomic(&self.dir.join(OURS), cids.join("\n").as_bytes()) {
+            eprintln!("pukaar: could not save the list of our uploads: {e}");
+        }
+    }
+
+    /// Keep an upload: its bytes (for `reseed` and for answering peers after a restart) and its CID.
+    fn remember(&self, cid: &str, bytes: &[u8]) {
+        if let Err(e) = save_blob(&self.dir, cid, bytes) {
+            return eprintln!("pukaar: could not keep {cid} on disk: {e}");
+        }
+        let mut ours = self.ours();
+        if !ours.iter().any(|c| c == cid) {
+            ours.push(cid.to_string());
+            ours.drain(..ours.len().saturating_sub(MAX_OURS));
+            self.set_ours(&ours);
+        }
+    }
+
+    /// Put our files back into a node that lacks them. A file that comes back under another CID (an
+    /// older upload, named at random) can never match its pointer, so it leaves the list. A failed call
+    /// stops the round and keeps the rest for the next bring-up. Runs on the sync thread, under the node lock.
+    fn reseed(&self, p: &PluginProxy, ev: &Events) {
+        let ours = self.ours();
+        let mut keep = Vec::with_capacity(ours.len());
+        let mut stopped = false;
+        for cid in &ours {
+            let kept = stopped
+                || self.reseed_one(p, ev, cid).unwrap_or_else(|e| {
+                    eprintln!("pukaar: reseed stopped at {cid}: {e}");
+                    stopped = true;
+                    true
+                });
+            if kept {
+                keep.push(cid.clone());
+            }
+        }
+        if keep.len() != ours.len() {
+            self.set_ours(&keep);
+        }
+    }
+
+    /// Ok(true) when the node holds the file now, Ok(false) when it cannot be put back.
+    fn reseed_one(&self, p: &PluginProxy, ev: &Events, cid: &str) -> Result<bool, String> {
+        if truthy(&call(p, "exists", json!([cid]), CALL)?) {
+            return Ok(true);
+        }
+        let Some(bytes) = load_blob(&self.dir, cid) else {
+            return Ok(false);
+        };
+        let again = self.upload_file(p, ev, &bytes)?;
+        if again != cid {
+            eprintln!("pukaar: reseeding {cid} gave {again}: dropped from the list");
+        }
+        Ok(again == cid)
+    }
+}
+
+impl Store for LogosStore {
+    fn upload(&self, bytes: &[u8]) -> Result<String, String> {
+        self.with_node(true, |p, ev| {
+            let cid = self.upload_file(p, ev, bytes)?;
+            self.remember(&cid, bytes);
+            Ok(cid)
+        })
     }
 
     fn download(&self, cid: &str) -> Result<Vec<u8>, String> {
@@ -432,9 +576,13 @@ impl LogosStore {
                 json!([cid, path.to_string_lossy(), false, CHUNK, false, true]),
                 CALL,
             )?;
-            let done = ev.wait(
+            let sid = sid.as_str().unwrap_or("");
+            let done = wait_or_cancel(
+                p,
+                ev,
                 "download",
-                sid.as_str().unwrap_or(""),
+                sid,
+                if sid.is_empty() { cid } else { sid },
                 if patient { TRANSFER } else { QUICK },
             )?;
             if done["success"].as_bool() == Some(false) {
@@ -526,6 +674,26 @@ mod tests {
                 .map(|d| d.as_secs())
                 .collect();
         assert_eq!(w, [5, 10, 20, 40, 60, 60]);
+    }
+
+    #[test]
+    fn an_upload_is_kept_once_with_its_bytes_and_the_list_has_a_cap() {
+        let dir = std::env::temp_dir().join(format!("pukaar-ours-{}", std::process::id()));
+        let s = LogosStore::new(dir.clone());
+        s.remember("zDvA", b"one");
+        s.remember("zDvA", b"one");
+        assert_eq!(s.ours(), ["zDvA"]);
+        assert_eq!(load_blob(&dir, "zDvA").as_deref(), Some(&b"one"[..]));
+        for i in 0..MAX_OURS + 3 {
+            s.remember(&format!("zDv{i}"), b"x");
+        }
+        let ours = s.ours();
+        assert_eq!(
+            (ours.len(), ours.last().map(String::as_str)),
+            (MAX_OURS, Some("zDv66"))
+        );
+        assert!(!ours.contains(&"zDvA".to_string()), "the oldest left");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
