@@ -1,0 +1,38 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "overused-font",
+        "value": "fraunces",
+        "createdAt": "2026-10-29T02:08:21.071Z",
+        "reason": "orchestrator: font chosen in design/BRIEF.md direction 2; app uses system fallback"
+      },
+      {
+        "rule": "overused-font",
+        "value": "inter",
+        "createdAt": "2026-10-29T02:09:40.305Z",
+        "reason": "orchestrator: font chosen in design/BRIEF.md; real app uses system font fallback"
+      },
+      {
+        "rule": "overused-font",
+        "value": "geist",
+        "createdAt": "2026-10-29T02:09:57.069Z",
+        "reason": "orchestrator: font chosen in design/BRIEF.md; real app uses system font fallback"
+      },
+      {
+        "rule": "overused-font",
+        "value": "geist mono",
+        "createdAt": "2026-10-29T02:09:57.094Z",
+        "reason": "orchestrator: font chosen in design/BRIEF.md; real app uses system font fallback"
+      },
+      {
+        "rule": "overused-font",
+        "value": "instrument sans",
+        "createdAt": "2026-10-29T02:11:47.732Z",
+        "reason": "orchestrator: font chosen in design/BRIEF.md direction 2; real app uses system font fallback"
+      }
+    ]
+  }
+}
