@@ -1029,17 +1029,6 @@ Item {
             Rectangle { anchors { fill: parent; margins: -3 } radius: 4; color: "transparent"; border.width: link.visualFocus ? 2 : 0; border.color: root.t.focus }
         }
     }
-    // A place code that opens that place in History. A button of its own, so a click on it never
-    // reaches the card it sits in.
-    component PlaceLink: LinkButton {
-        property string code
-        text: code; mono: true
-        Accessible.name: "History of " + code
-        onClicked: root.showPlace(code)
-    }
-
-    // One issue card on the board.
-    component IssueCard: ItemDelegate {
     // An icon with no label (copy, close). `Accessible.name` is what a screen reader says, so always set it.
     component IconLink: AbstractButton {
         id: ib
@@ -1053,6 +1042,17 @@ Item {
         contentItem: Icon { name: ib.iconName; size: 16; color: ib.hovered || ib.down ? root.t.fg : root.t.muted }
         background: Rectangle { radius: 4; color: ib.hovered ? root.t.hover : "transparent"; border.width: ib.visualFocus ? 2 : 0; border.color: root.t.focus }
     }
+    // A place code that opens that place in History. A button of its own, so a click on it never
+    // reaches the card it sits in.
+    component PlaceLink: LinkButton {
+        property string code
+        text: code; mono: true
+        Accessible.name: "History of " + code
+        onClicked: root.showPlace(code)
+    }
+
+    // One issue card on the board.
+    component IssueCard: ItemDelegate {
         id: card
         required property var issue
         property string placeText: root.place(issue)
@@ -1702,6 +1702,7 @@ Item {
         property int delay: 0
         property int expire: 0
         property bool log: false
+        property bool inline: !log         // false: the banner lives in the Notifications panel only
         readonly property string said: (lead ? lead + " " : "") + text
         function keep() { if (log && gate.shown) root.addNotice(said, tone) }
         visible: gate.shown && inline
@@ -1713,7 +1714,6 @@ Item {
         property string lead               // a bold red first sentence
         property bool err: false
         property string tone: err ? "err" : "info"
-        property bool inline: !log         // false: the banner lives in the Notifications panel only
         readonly property var ink: ({ info: [root.t.accentBg, root.t.accentBd, root.t.accent], err: [root.t.dangerBg, root.t.dangerBd, root.t.danger],
                                       warn: [root.t.warnBg, root.t.warnBd, root.t.warn], plain: [root.t.well, root.t.bd, root.t.muted] })[tone]
         property bool bold: false          // the whole text bold (red in an error)
@@ -2609,6 +2609,7 @@ Item {
                 delay: rejected || included ? 0 : 3000      // a write on its way shows only if it takes a while
                 expire: included ? 6000 : 0                 // "on the chain" is good news: it goes by itself
                 log: rejected || included
+                inline: site && rejected                    // "Start again" has no button in the panel
                 err: rejected
                 Accessible.role: rejected ? Accessible.AlertMessage : Accessible.StaticText
                 icon: !rejected && modelData.state === "included" ? "res" : rejected ? "warn" : "update"
@@ -2620,7 +2621,6 @@ Item {
                                : "Status: " + root.stateText[modelData.state] + "."
                 buttonText: site && rejected ? "Start again" : ""
                 buttonIcon: site && rejected ? "" : "x"; buttonName: site && rejected ? "Start again" : "Close this message"
-                inline: site && rejected                    // "Start again" has no button in the panel
                 onActivated: site && rejected ? root.leave() : root.dismiss(modelData.id)
             }
         }
