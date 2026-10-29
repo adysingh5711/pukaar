@@ -96,23 +96,46 @@ Contribution guidelines and code of conduct: to be added in later version.
 <details>
 <summary>Release steps</summary>
 
-The release packages are the portable `.lgx` builds. The plain `.#lgx` output is a `-dev` build, and release Basecamp rejects it. The signing key is outside the repo, in `~/.config/pukaar-keys`.
+A release has two files, `pukaar-core.lgx` and `pukaar-ui.lgx`, and a `SHA256SUMS` file. Each `.lgx` holds three builds: `darwin-arm64` (Apple silicon Mac), `linux-amd64` and `linux-arm64`. The Mac makes the macOS build. The CI `lgx` job makes the two Linux builds when you push a `v*` tag. `scripts/release.sh` merges the three builds into one file per module (`lgx merge`), signs it, and checks it.
+
+You need: the `lgx` tool in `./lgx` (`nix build 'github:logos-co/logos-package#lgx' --out-link ./lgx`), the signing key `publisher.jwk` in `~/.config/pukaar-keys` (it never goes in the repo), and `gh` logged in to GitHub.
 
 1. Set the same `version` in `modules/pukaar_core/metadata.json` and `modules/pukaar_ui/metadata.json`, then commit.
-2. Build the portable package in each module, then copy both packages to `dist/`.
-3. Sign each package with `lgx`.
-4. Make sure that each signature is valid with `lgx verify`. This step needs the `trusted-keys` keyring from [Security](security.md).
-5. Tag the commit as `v<version>`, then push the tag. If the tag and the two versions differ, the CI `version` job fails.
-6. On GitHub, make a release from the tag. Attach both `.lgx` files and a `SHA256SUMS` file.
+2. Tag the commit as `v<version>` and push the tag. CI starts. The `version` job fails if the tag and the two versions differ. The `lgx` job builds the Linux packages (this takes a long time).
+3. On the Mac, with the tag checked out, build the macOS packages into `dist/` with `scripts/build-lgx.sh all`.
+4. When CI is green, run `scripts/release.sh v<version>`. It downloads the Linux builds from the CI run of the tag. If you downloaded them yourself, give their directory as the second argument (it holds `lgx-linux-amd64/` and `lgx-linux-arm64/`).
+5. On GitHub, make a release from the tag. Attach the three files in `dist/release/`, and nothing else.
+6. Commit `public/install/index.json` and push. Do this after step 5, because the index points at the release files.
 
 ```bash
-(cd modules/pukaar_core && nix build --accept-flake-config .#lgx-portable --out-link result-lgx-portable)
-(cd modules/pukaar_ui && nix build --accept-flake-config .#lgx-portable --out-link result-lgx-portable)
-mkdir -p dist && cp modules/*/result-lgx-portable/*.lgx dist/ && chmod u+w dist/*.lgx
-nix build 'github:logos-co/logos-package#lgx' --out-link ./lgx
-for f in dist/*.lgx; do ./lgx/bin/lgx sign "$f" --key publisher --keys-dir ~/.config/pukaar-keys; done
-for f in dist/*.lgx; do ./lgx/bin/lgx verify "$f" --keyring-dir ./trusted-keys; done
 git tag v<version> && git push origin v<version>
+scripts/build-lgx.sh all
+scripts/release.sh v<version>              # or: scripts/release.sh v<version> <dir with the CI artifacts>
+gh release create v<version> dist/release/*
+git add public/install/index.json && git commit -m "release: publish v<version> package index" && git push
 ```
 
+`scripts/release.sh` stops with an error, and writes nothing, if:
+
+- a build is missing, or holds the wrong platform;
+- a package version, a `metadata.json` version and the tag do not all agree;
+- the macOS UI build in `dist/` is not the tagged `Main.qml` (an old build);
+- `lgx verify` does not accept the signature, or the signer is not in `trustedSigners` in `public/install/logos-repo.json`.
+
+It works in a temporary folder and replaces `dist/release/` only at the end, so `dist/release/` holds only the signed, merged packages. The single-platform builds stay in `dist/` under their build names (`logos-pukaar_*.lgx`). Do not attach them. `make-index.py` also refuses an unsigned package. Then check the index with `index.py validate --full` from [logos-modules-release-tool](https://github.com/logos-co/logos-modules-release-tool).
+
 </details>
+
+### Which file do I download?
+
+Each Pukaar module is one file that works on every supported computer. Download `pukaar-core.lgx` and `pukaar-ui.lgx` once. Basecamp picks the right build for your computer when it installs them.
+
+| Your computer | Supported |
+|---|---|
+| Mac with Apple silicon (M1 or newer) | Yes |
+| Linux on Intel or AMD (64-bit) | Yes |
+| Linux on ARM (64-bit) | Yes |
+| Mac with an Intel chip | No |
+| Windows | No |
+
+On a computer that is not supported, Basecamp downloads the file but does not install it. It shows an error such as `Package does not contain variant for platform: darwin-x86_64`.

@@ -4,7 +4,7 @@ How to install Pukaar in Basecamp, run several profiles, upgrade from v0.2.4, wh
 
 ## Run Pukaar in Basecamp
 
-1. Download `logos-pukaar_core-module-lib.lgx` and `logos-pukaar_ui-module.lgx` from the [latest release](https://github.com/adysingh5711/pukaar/releases/latest), and check them (see [Security](security.md)).
+1. Download `pukaar-core.lgx` and `pukaar-ui.lgx` from the [latest release](https://github.com/adysingh5711/pukaar/releases/latest), and check them (see [Security](security.md)).
 2. In Basecamp 0.3.1: **Package Manager → Install Local Package**. Install the core package first, then the UI package.
 3. Open Pukaar. Everyone except the admin pastes the site id under **Join a site**, then reads their fingerprint aloud at the kiosk so the admin can approve them. The admin opens **Create a site** instead, fills in the form, and clicks **Create site**. **Restore your identity** brings back an exported identity on a new install.
 

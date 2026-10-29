@@ -294,8 +294,8 @@
               <li><span><a href="https://github.com/logos-co/logos-modules-release/releases/download/delivery_module-v0.4.0/delivery_module-0.4.0.lgx"><code>delivery_module-0.4.0.lgx</code></a> (sends your messages)</span></li>
               <li><span><a href="https://github.com/logos-co/logos-modules-release/releases/download/storage_module-v3.0.2/storage_module-3.0.2.lgx"><code>storage_module-3.0.2.lgx</code></a> (keeps files)</span></li>
               <li><span><a href="https://github.com/logos-co/logos-modules-release/releases/download/chat_module-v0.3.0/chat_module-0.3.0.lgx"><code>chat_module-0.3.0.lgx</code></a> (private chats)</span></li>
-              <li><span><a id="dl-core" href="https://github.com/adysingh5711/pukaar/releases/latest/download/logos-pukaar_core-module-lib.lgx"><code>logos-pukaar_core-module-lib.lgx</code></a> (Pukaar core)</span></li>
-              <li><span><a id="dl-ui" href="https://github.com/adysingh5711/pukaar/releases/latest/download/logos-pukaar_ui-module.lgx"><code>logos-pukaar_ui-module.lgx</code></a> (the Pukaar screens)</span></li>
+              <li><span><a id="dl-core" href="https://github.com/adysingh5711/pukaar/releases/latest/download/pukaar-core.lgx"><code>pukaar-core.lgx</code></a> (Pukaar core)</span></li>
+              <li><span><a id="dl-ui" href="https://github.com/adysingh5711/pukaar/releases/latest/download/pukaar-ui.lgx"><code>pukaar-ui.lgx</code></a> (the Pukaar screens)</span></li>
             </ol>
             <p>The first three come from the official Logos module catalog. The last two come from the <a id="releases" href="https://github.com/adysingh5711/pukaar/releases/latest">Pukaar releases page</a>, with a <code>SHA256SUMS</code> file you can use to check them.</p>
           </div>
@@ -367,8 +367,8 @@
   const calm = matchMedia("(prefers-reduced-motion: reduce)");
   $("repo-url").textContent = REPO_JSON_URL;
   $("releases").href = RELEASES_URL + "/latest";
-  $("dl-core").href = RELEASES_URL + "/latest/download/logos-pukaar_core-module-lib.lgx";
-  $("dl-ui").href = RELEASES_URL + "/latest/download/logos-pukaar_ui-module.lgx";
+  $("dl-core").href = RELEASES_URL + "/latest/download/pukaar-core.lgx";
+  $("dl-ui").href = RELEASES_URL + "/latest/download/pukaar-ui.lgx";
 
   // Copy button with a text-selection fallback.
   let copyTimer;
