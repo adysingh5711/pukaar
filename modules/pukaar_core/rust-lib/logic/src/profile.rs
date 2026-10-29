@@ -55,7 +55,7 @@ pub struct About {
     pub private: bool,
 }
 
-pub const SOCIAL_LABELS: [&str; 5] = ["website", "github", "x", "linkedin", "other"];
+pub const SOCIAL_LABELS: [&str; 7] = ["website", "github", "x", "linkedin", "telegram", "working", "other"];
 pub const MAX_SOCIALS: usize = 4;
 /// Shorter than a full address on purpose: with 4 links, 500 + 500 characters of text and 3 admin
 /// wraps the file stays under `MAX_INLINE_PROFILE` (the test `a_full_profile_fits_the_inline_cap`).
@@ -597,6 +597,8 @@ mod tests {
         let ok = |l: &str, u: &str| social(l, u).unwrap();
         assert_eq!(ok(" GitHub ", "https://github.com/asha"), ("github".into(), "github.com/asha".into()));
         assert_eq!(ok("x", "HTTP://x.com/a"), ("x".into(), "x.com/a".into()));
+        assert_eq!(ok("Telegram", "t.me/asha").0, "telegram");
+        assert_eq!(ok("working", "github.com/asha/pukaar").0, "working");
         for (l, u) in [("mastodon", "a.b"), ("website", ""), ("website", "https://"), ("website", "a b.c"), ("website", "ftp://a.b"), ("website", "é.com"), ("website", &"u".repeat(MAX_SOCIAL_URL + 1))] {
             assert!(social(l, u).is_err(), "{l} {u}");
         }

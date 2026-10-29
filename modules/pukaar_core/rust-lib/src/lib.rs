@@ -62,7 +62,7 @@ pub trait PukaarCoreModule: Send + 'static {
     /// Seals and uploads the profile and announces it to the site: members see it at once. The chain
     /// pointer follows at the next admin `send_batch`. `{"ok":true,"queued":id}`. `bio`, `experience` and
     /// `socials` are optional: a call with the name only keeps working, and clears all three. `socials` is
-    /// JSON, at most 4 pairs: `[["github","github.com/asha"]]`. Labels: website, github, x, linkedin, other.
+    /// JSON, at most 4 pairs: `[["github","github.com/asha"]]`. Labels: website, github, x, linkedin, telegram, working (currently working on), other.
     /// `private` is "1" to show other members the name and the role only (the app hides the rest), or empty.
     fn set_profile(&mut self, display_name: String, bio: Option<String>, experience: Option<String>, socials: Option<String>, private: Option<String>) -> String;
     /// Admin only. Signs the display name of a steward or an admin and queues the chain pointer at once
