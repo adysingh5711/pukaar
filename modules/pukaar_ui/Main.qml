@@ -1579,6 +1579,38 @@ Item {
     // True when the content area (window minus sidebar) is under 880 px: rows of Members go two-line.
     readonly property bool compactRows: width - sidebarWidth < 880
 
+    // A hairline across a layout (Harbor's border-top / border-bottom between the parts of a panel).
+    component Rule: Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: root.t.bd }
+
+    // Harbor's .av: a round initials avatar on the control fill (the people's photos are not wired yet). `group` is the
+    // accent wash with the members icon. A member with no name shows the first two characters of their key.
+    component Avatar: Rectangle {
+        id: av
+        property int size: 32
+        property bool group: false
+        property string ident: ""
+        property string name: ""
+        implicitWidth: size; implicitHeight: size; radius: size / 2
+        color: group ? root.t.accentBg : root.t.hover
+        Label {
+            visible: !av.group
+            anchors.centerIn: parent; textFormat: Text.PlainText
+            text: root.initials(av.name) || String(av.ident).substr(0, 2).toUpperCase()
+            color: root.t.fg; font.pointSize: root.px(av.size * 0.375); font.weight: Font.DemiBold
+        }
+        Icon { visible: av.group; anchors.centerIn: parent; name: "members"; size: av.size * 0.5; color: root.t.accent }
+    }
+
+    // Harbor's .role: a role tag, accent for a super admin.
+    component RoleChip: Rectangle {
+        id: rc
+        property string role
+        property bool owner: false
+        implicitWidth: roleLabel.implicitWidth + 16; implicitHeight: roleLabel.implicitHeight + 2; radius: root.radii.tag
+        color: owner ? root.t.accentBg : root.t.hover
+        Label { id: roleLabel; anchors.centerIn: parent; text: rc.owner ? "Super admin" : rc.role; color: rc.owner ? root.t.accent : root.t.muted; font.pointSize: root.sizes.cap; font.weight: Font.Medium }
+    }
+
     // A page's title (28 px) and its one-line lede (13 px).
     component PageHead: ColumnLayout {
         property string title
@@ -1600,7 +1632,7 @@ Item {
         Layout.fillWidth: true; Layout.topMargin: 28; Layout.bottomMargin: 28
         spacing: 4
         Icon { Layout.alignment: Qt.AlignHCenter; name: blank.icon; size: 24; color: root.t.muted }
-        Label { Layout.alignment: Qt.AlignHCenter; text: blank.title; font.weight: Font.DemiBold; font.pointSize: root.baseSize * 16 / 14 }
+        Label { Layout.alignment: Qt.AlignHCenter; text: blank.title; font.weight: Font.DemiBold; font.pointSize: root.sizes.h3 }
         Label { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap; color: root.t.muted; text: blank.text }
         Row { id: blankActs; Layout.alignment: Qt.AlignHCenter; Layout.topMargin: children.length > 0 ? 8 : 0; spacing: 8 }
     }
@@ -1809,24 +1841,23 @@ Item {
         property string buttonEffect               // set: the button asks first (ConfirmButton)
         signal activated()
         Layout.fillWidth: true
-        implicitHeight: row.implicitHeight + 22
-        radius: 6
+        implicitHeight: row.implicitHeight + 28
+        radius: root.radii.card   // Harbor's .flash: a tinted card, no outline
         color: ink[0]
-        border.color: ink[1]
         RowLayout {
             id: row
-            anchors { fill: parent; leftMargin: 13; rightMargin: 13; topMargin: 11; bottomMargin: 11 }
-            spacing: 10
-            Icon { Layout.alignment: Qt.AlignTop; Layout.topMargin: 2; name: flash.icon; size: 16; color: flash.ink[2] }
+            anchors { fill: parent; leftMargin: 18; rightMargin: 18; topMargin: 14; bottomMargin: 14 }
+            spacing: 14
+            Icon { Layout.alignment: Qt.AlignVCenter; name: flash.icon; size: 16; color: flash.ink[2] }
             Label {
-                Layout.fillWidth: true; Layout.alignment: Qt.AlignTop; wrapMode: Text.Wrap; textFormat: Text.RichText
+                Layout.fillWidth: true; Layout.alignment: Qt.AlignVCenter; wrapMode: Text.Wrap; textFormat: Text.RichText
                 font.bold: flash.bold; color: flash.err && flash.bold ? root.t.danger : root.t.fg
                 text: (flash.lead ? "<b><font color='" + flash.ink[2] + "'>" + root.esc(flash.lead) + "</font></b> " : "") + root.esc(flash.text)
             }
-            IconLink { Layout.alignment: Qt.AlignTop; iconName: "copy"; Accessible.name: "Copy this message"; onClicked: root.copyText(flash.said) }
+            IconLink { Layout.alignment: Qt.AlignVCenter; iconName: "copy"; Accessible.name: "Copy this message"; onClicked: root.copyText(flash.said) }
             ConfirmButton {
                 visible: flash.buttonText !== "" || flash.buttonIcon !== ""
-                Layout.alignment: Qt.AlignTop
+                Layout.alignment: Qt.AlignVCenter; Layout.fillHeight: false
                 text: flash.buttonText; iconName: flash.buttonIcon
                 name: flash.buttonName; effect: flash.buttonEffect
                 onConfirmed: flash.activated()
@@ -4963,9 +4994,20 @@ Item {
                             root.call("chat_group_info", [convo], root.applyGroupInfo(convo))
                         })
                     }
-                    PageHead {
-                        title: "Messages"
-                        lede: "Write privately to another active member, or to a group of them. Only the people in a chat can read the messages."
+                    // The role of the person in a private chat, from the site's members (a group has none).
+                    readonly property var peer: others.filter(function (m) { return m.key === root.chatWith })[0] || ({})
+                    readonly property string peerName: peer.name || root.chatThread.name || ""
+                    // Messages in a run (Harbor's .m.cont): the same sender, on the same side of a restart and day, within 5 minutes
+                    // of the one before. A run shows the sender once (a group) and its time once, under the last bubble.
+                    function newDay(i) {
+                        var ms = root.chatMessages[i].ts_ms
+                        return !!ms && (i === 0 || new Date(ms).toDateString() !== new Date(root.chatMessages[i - 1].ts_ms || ms).toDateString())
+                    }
+                    function cont(i) {
+                        if (i <= 0 || i >= root.chatMessages.length) return false
+                        var a = root.chatMessages[i - 1], b = root.chatMessages[i]
+                        return a.from_self === b.from_self && (a.sender_key || "") === (b.sender_key || "") && !!a.old === !!b.old && !newDay(i)
+                            && (!a.ts_ms || !b.ts_ms || Math.abs(b.ts_ms - a.ts_ms) <= 300000)
                     }
                     Flash { when: !!chatPage.link.error; delay: 3000; err: true; lead: "Chat is not running."; text: chatPage.link.error || "" }
                     Flash { when: !!chatPage.problem; delay: 3000; err: true; lead: "The chat module did not answer."; text: chatPage.problem }
@@ -4981,113 +5023,150 @@ Item {
                         function onChatWithChanged() { chatPage.picking = false; chatPage.grouping = false; chatPage.showMembers = false; picker.clear(); addPick.clear() }
                     }
                     RowLayout {
-                        visible: chatPage.twoPane || root.chatWith === ""
-                        spacing: 8
-                        ActionButton {
-                            text: chatPage.picking ? "Cancel" : "New chat"
-                            iconName: chatPage.picking ? "" : "cmt"
-                            Accessible.name: chatPage.picking ? "Cancel the new chat" : "Start a new chat"
-                            onClicked: { chatPage.picking = !chatPage.picking; chatPage.grouping = false; picker.clear() }
-                        }
-                        ActionButton {
-                            text: chatPage.grouping ? "Cancel" : "New group"
-                            iconName: chatPage.grouping ? "" : "members"
-                            Accessible.name: chatPage.grouping ? "Cancel the new group" : "Start a new group"
-                            onClicked: { chatPage.grouping = !chatPage.grouping; chatPage.picking = false; groupName.clear(); groupPick.clear() }
-                        }
-                    }
-                    RowLayout {
-                        Layout.fillWidth: true; Layout.fillHeight: true; Layout.bottomMargin: 16
-                        spacing: 8
-                        Frame {   // the chats
+                        Layout.fillWidth: true; Layout.fillHeight: true
+                        spacing: root.gaps.gutter
+                        Rectangle {   // the chats (Harbor's .chat > .panel): title, the two start buttons, then the list
                             visible: chatPage.twoPane || root.chatWith === ""
-                            Layout.preferredWidth: chatPage.twoPane ? 280 : -1
+                            Layout.preferredWidth: chatPage.twoPane ? 300 : -1
                             Layout.fillWidth: !chatPage.twoPane; Layout.fillHeight: true
-                            fill: root.t.card; edge: root.t.bd
-                            ListView {
-                                id: chatList
+                            radius: root.radii.panel; color: root.t.well; border.color: root.t.bd
+                            ColumnLayout {
                                 anchors { fill: parent; margins: 1 }
-                                clip: true
-                                visible: !chatPage.picking && !chatPage.grouping
-                                model: chatPage.threads
-                                delegate: ItemDelegate {
-                                    id: chatRow
-                                    required property var modelData
-                                    width: ListView.view.width
-                                    highlighted: modelData.key === root.chatWith
-                                    readonly property string title: modelData.group ? modelData.name : root.who(modelData.key, modelData.name)
-                                    readonly property bool isUnread: modelData.unread === true && !highlighted
-                                    Accessible.name: (modelData.group ? "Group " : "Chat with ") + title + (isUnread ? ", unread" : "") + ". " + modelData.preview
-                                    onClicked: root.openChat(modelData.key)
-                                    background: Rectangle { color: chatRow.highlighted ? root.t.hover : chatRow.hovered ? root.t.hover : "transparent" }
-                                    contentItem: ColumnLayout {
-                                        spacing: 2
-                                        RowLayout {
-                                            Layout.fillWidth: true
-                                            Icon { visible: chatRow.modelData.group === true; name: "members"; size: 14; color: root.t.muted }
-                                            Label { Layout.fillWidth: true; elide: Text.ElideRight; textFormat: Text.PlainText; font.weight: chatRow.isUnread ? Font.Bold : Font.DemiBold; color: root.t.fg; text: chatRow.title }
-                                            Rectangle { visible: chatRow.isUnread; width: 10; height: 10; radius: 5; color: root.t.primary }
-                                            Label { text: root.chatTime(chatRow.modelData.last_ms); font.pointSize: root.smallSize; color: root.t.muted }
-                                        }
-                                        Label {
-                                            visible: chatRow.modelData.group === true
-                                            Layout.fillWidth: true; elide: Text.ElideRight; font.pointSize: root.smallSize; color: root.t.muted
-                                            text: (chatRow.modelData.members || 1) + ((chatRow.modelData.members || 1) === 1 ? " member" : " members") + (chatRow.modelData.pending > 0 ? ", " + chatRow.modelData.pending + " joining" : "")
-                                        }
-                                        Label { Layout.fillWidth: true; elide: Text.ElideRight; textFormat: Text.PlainText; font.pointSize: root.smallSize; color: root.t.muted; text: chatRow.modelData.preview || "No messages yet" }
-                                    }
-                                }
-                            }
-                            Blank {
-                                visible: !chatPage.picking && !chatPage.grouping && chatPage.threads.length === 0
-                                anchors.centerIn: parent; width: parent.width - 32
-                                icon: "cmt"; title: "No chats yet"; text: "Press New chat to write to a member, or New group to write to several."
-                            }
-                            ColumnLayout {   // the New chat picker: the other active members
-                                visible: chatPage.picking
-                                anchors { fill: parent; margins: 8 }
-                                spacing: 8
-                                FramedField { id: picker; Layout.fillWidth: true; placeholderText: "Search by name"; Accessible.name: "Search members" }
-                                ListView {
-                                    Layout.fillWidth: true; Layout.fillHeight: true
-                                    clip: true
-                                    model: chatPage.picks
-                                    delegate: ItemDelegate {
-                                        id: pick
-                                        required property var modelData
-                                        width: ListView.view.width
-                                        Accessible.name: "Start a chat with " + root.who(modelData.key, modelData.name)
-                                        onClicked: root.openChat(modelData.key)
-                                        background: Rectangle { color: pick.hovered ? root.t.hover : "transparent" }
-                                        contentItem: Label { elide: Text.ElideRight; textFormat: Text.PlainText; color: root.t.fg; text: root.who(pick.modelData.key, pick.modelData.name) }
-                                    }
-                                    Label {
-                                        visible: parent.count === 0
-                                        anchors.centerIn: parent; color: root.t.muted
-                                        text: picker.text ? "Nobody matches." : "There is nobody else to message yet."
-                                    }
-                                }
-                            }
-                            ColumnLayout {   // the New group form: a name, then the members to add
-                                visible: chatPage.grouping
-                                anchors { fill: parent; margins: 8 }
-                                spacing: 8
-                                FramedField { id: groupName; Layout.fillWidth: true; placeholderText: "Group name"; maximumLength: 60; Accessible.name: "Group name" }
-                                MemberPicker { id: groupPick; Layout.fillWidth: true; Layout.fillHeight: true; people: chatPage.others }
-                                ActionButton {
+                                spacing: 0
+                                ColumnLayout {
                                     Layout.fillWidth: true
-                                    text: "Create group" + (groupPick.count > 0 ? " with " + groupPick.count : "")
-                                    kind: "primary"
-                                    allowed: groupName.text.trim() !== "" && groupPick.count > 0
-                                    Accessible.name: "Create the group"
-                                    onClicked: chatPage.createGroup()
+                                    Layout.margins: 16; Layout.topMargin: 20; Layout.bottomMargin: 12
+                                    spacing: 12
+                                    ColumnLayout {
+                                        Layout.fillWidth: true; spacing: 4
+                                        Label { Layout.fillWidth: true; text: "Messages"; font.pointSize: root.px(24); font.weight: Font.DemiBold }
+                                        Label {
+                                            Layout.fillWidth: true; wrapMode: Text.Wrap; color: root.t.muted; font.pointSize: root.sizes.cap
+                                            text: "Write privately to another active member, or to a group of them. Only the people in a chat can read the messages."
+                                        }
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true; spacing: root.gaps.row
+                                        ActionButton {
+                                            Layout.fillWidth: true; Layout.preferredWidth: 1
+                                            text: chatPage.picking ? "Cancel" : "New chat"
+                                            iconName: chatPage.picking ? "" : "cmt"
+                                            Accessible.name: chatPage.picking ? "Cancel the new chat" : "Start a new chat"
+                                            onClicked: { chatPage.picking = !chatPage.picking; chatPage.grouping = false; picker.clear() }
+                                        }
+                                        ActionButton {
+                                            Layout.fillWidth: true; Layout.preferredWidth: 1
+                                            text: chatPage.grouping ? "Cancel" : "New group"
+                                            iconName: chatPage.grouping ? "" : "members"
+                                            Accessible.name: chatPage.grouping ? "Cancel the new group" : "Start a new group"
+                                            onClicked: { chatPage.grouping = !chatPage.grouping; chatPage.picking = false; groupName.clear(); groupPick.clear() }
+                                        }
+                                    }
+                                }
+                                Item {
+                                    Layout.fillWidth: true; Layout.fillHeight: true
+                                    ListView {
+                                        id: chatList
+                                        anchors { fill: parent; leftMargin: 8; rightMargin: 8; bottomMargin: 8 }
+                                        clip: true; spacing: 2
+                                        visible: !chatPage.picking && !chatPage.grouping
+                                        model: chatPage.threads
+                                        delegate: ItemDelegate {
+                                            id: chatRow
+                                            required property var modelData
+                                            width: ListView.view.width
+                                            padding: 10
+                                            highlighted: modelData.key === root.chatWith
+                                            readonly property string title: modelData.group ? modelData.name : root.who(modelData.key, modelData.name)
+                                            readonly property bool isUnread: modelData.unread === true && !highlighted
+                                            Accessible.name: (modelData.group ? "Group " : "Chat with ") + title + (isUnread ? ", unread" : "") + ". " + modelData.preview
+                                            onClicked: root.openChat(modelData.key)
+                                            background: Rectangle {
+                                                radius: root.radii.card
+                                                color: chatRow.highlighted ? root.t.hover : chatRow.hovered ? root.t.hoverSoft : "transparent"
+                                                Behavior on color { EasedColor {} }
+                                            }
+                                            contentItem: RowLayout {
+                                                spacing: 12
+                                                Avatar { Layout.alignment: Qt.AlignVCenter; size: 40; group: chatRow.modelData.group === true; ident: chatRow.modelData.key; name: chatRow.modelData.name || "" }
+                                                ColumnLayout {
+                                                    Layout.fillWidth: true; spacing: 2
+                                                    RowLayout {
+                                                        Layout.fillWidth: true; spacing: 8
+                                                        Label { Layout.fillWidth: true; elide: Text.ElideRight; textFormat: Text.PlainText; font.weight: chatRow.isUnread ? Font.Bold : Font.DemiBold; color: root.t.fg; text: chatRow.title }
+                                                        Label { text: root.chatTime(chatRow.modelData.last_ms); font.pointSize: root.sizes.cap; color: root.t.muted }
+                                                    }
+                                                    Label {
+                                                        visible: chatRow.modelData.group === true
+                                                        Layout.fillWidth: true; elide: Text.ElideRight; font.pointSize: root.sizes.cap; color: root.t.muted
+                                                        text: (chatRow.modelData.members || 1) + ((chatRow.modelData.members || 1) === 1 ? " member" : " members") + (chatRow.modelData.pending > 0 ? ", " + chatRow.modelData.pending + " joining" : "")
+                                                    }
+                                                    Label {
+                                                        Layout.fillWidth: true; wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight; textFormat: Text.PlainText
+                                                        font.pointSize: root.sizes.cap; color: root.t.muted; text: chatRow.modelData.preview || "No messages yet"
+                                                    }
+                                                }
+                                                Rectangle { visible: chatRow.isUnread; Layout.alignment: Qt.AlignVCenter; implicitWidth: 9; implicitHeight: 9; radius: 5; color: root.t.accent }
+                                            }
+                                        }
+                                    }
+                                    Blank {
+                                        visible: !chatPage.picking && !chatPage.grouping && chatPage.threads.length === 0
+                                        anchors.centerIn: parent; width: parent.width - 32
+                                        icon: "cmt"; title: "No chats yet"; text: "Press New chat to write to a member, or New group to write to several."
+                                    }
+                                    ColumnLayout {   // the New chat picker: the other active members
+                                        visible: chatPage.picking
+                                        anchors { fill: parent; leftMargin: 16; rightMargin: 16; bottomMargin: 12 }
+                                        spacing: 8
+                                        FramedField { id: picker; Layout.fillWidth: true; placeholderText: "Search by name"; Accessible.name: "Search members" }
+                                        ListView {
+                                            Layout.fillWidth: true; Layout.fillHeight: true
+                                            clip: true; spacing: 2
+                                            model: chatPage.picks
+                                            delegate: ItemDelegate {
+                                                id: pick
+                                                required property var modelData
+                                                width: ListView.view.width
+                                                implicitHeight: 40; topPadding: 0; bottomPadding: 0; leftPadding: 8; rightPadding: 8
+                                                Accessible.name: "Start a chat with " + root.who(modelData.key, modelData.name)
+                                                onClicked: root.openChat(modelData.key)
+                                                background: Rectangle { radius: root.radii.ctl; color: pick.hovered ? root.t.hover : "transparent"; Behavior on color { EasedColor {} } }
+                                                contentItem: RowLayout {
+                                                    spacing: 10
+                                                    Avatar { size: 28; ident: pick.modelData.key; name: pick.modelData.name || "" }
+                                                    Label { Layout.fillWidth: true; elide: Text.ElideRight; textFormat: Text.PlainText; font.weight: Font.Medium; color: root.t.fg; text: root.who(pick.modelData.key, pick.modelData.name) }
+                                                }
+                                            }
+                                            Label {
+                                                visible: parent.count === 0
+                                                anchors.centerIn: parent; color: root.t.muted
+                                                text: picker.text ? "Nobody matches." : "There is nobody else to message yet."
+                                            }
+                                        }
+                                    }
+                                    ColumnLayout {   // the New group form: a name, then the members to add
+                                        visible: chatPage.grouping
+                                        anchors { fill: parent; leftMargin: 16; rightMargin: 16; bottomMargin: 12 }
+                                        spacing: 8
+                                        FramedField { id: groupName; Layout.fillWidth: true; placeholderText: "Group name"; maximumLength: 60; Accessible.name: "Group name" }
+                                        MemberPicker { id: groupPick; Layout.fillWidth: true; Layout.fillHeight: true; people: chatPage.others }
+                                        ActionButton {
+                                            Layout.fillWidth: true
+                                            text: "Create group" + (groupPick.count > 0 ? " with " + groupPick.count : "")
+                                            kind: "primary"
+                                            allowed: groupName.text.trim() !== "" && groupPick.count > 0
+                                            Accessible.name: "Create the group"
+                                            onClicked: chatPage.createGroup()
+                                        }
+                                    }
                                 }
                             }
                         }
-                        Frame {   // the open thread and the send box
+                        Rectangle {   // the open thread and the send box
                             visible: chatPage.twoPane || root.chatWith !== ""
                             Layout.fillWidth: true; Layout.fillHeight: true
-                            fill: root.t.card; edge: root.t.bd
+                            radius: root.radii.panel; color: root.t.well; border.color: root.t.bd
                             Blank {
                                 visible: root.chatWith === ""
                                 anchors.centerIn: parent; width: parent.width - 32
@@ -5095,29 +5174,38 @@ Item {
                             }
                             ColumnLayout {
                                 visible: root.chatWith !== ""
-                                anchors { fill: parent; margins: 12 }
-                                spacing: 8
-                                RowLayout {
-                                    Layout.fillWidth: true; spacing: 12
+                                anchors { fill: parent; margins: 1 }
+                                spacing: 0
+                                RowLayout {   // who the chat is with
+                                    Layout.fillWidth: true
+                                    Layout.margins: 20; Layout.topMargin: 14; Layout.bottomMargin: 14
+                                    spacing: 12
                                     LinkButton { visible: !chatPage.twoPane; text: "‹  Back"; Accessible.name: "Back to the chats"; onClicked: root.chatWith = "" }
-                                    Icon { visible: root.chatGroup; name: "members"; size: 18; color: root.t.muted }
+                                    Avatar { size: 32; group: root.chatGroup; ident: root.chatWith; name: chatPage.peerName }
                                     ColumnLayout {
                                         Layout.fillWidth: true; spacing: 0
-                                        Label {   // in a chat with a person, the name opens their profile
-                                            id: chatTitle
-                                            Layout.fillWidth: true; elide: Text.ElideRight; textFormat: Text.PlainText; font.weight: Font.DemiBold; font.pointSize: root.baseSize * 16 / 14; text: chatPage.currentName
-                                            color: !root.chatGroup && titleHover.hovered ? root.t.accent : root.t.fg
-                                            font.underline: !root.chatGroup && titleHover.hovered
-                                            Accessible.name: root.chatGroup ? text : "Open the profile of " + text
-                                            HoverHandler { id: titleHover; enabled: !root.chatGroup; cursorShape: Qt.PointingHandCursor }
-                                            TapHandler { enabled: !root.chatGroup; onTapped: root.showMember(root.chatWith) }
+                                        RowLayout {
+                                            Layout.fillWidth: true; spacing: 10
+                                            Label {   // in a chat with a person, the name opens their profile
+                                                id: chatTitle
+                                                Layout.fillWidth: true; Layout.maximumWidth: implicitWidth
+                                                elide: Text.ElideRight; textFormat: Text.PlainText; font.weight: Font.DemiBold; font.pointSize: root.sizes.title; text: chatPage.currentName
+                                                color: !root.chatGroup && titleHover.hovered ? root.t.accent : root.t.fg
+                                                font.underline: !root.chatGroup && titleHover.hovered
+                                                Accessible.name: root.chatGroup ? text : "Open the profile of " + text
+                                                HoverHandler { id: titleHover; enabled: !root.chatGroup; cursorShape: Qt.PointingHandCursor }
+                                                TapHandler { enabled: !root.chatGroup; onTapped: root.showMember(root.chatWith) }
+                                            }
+                                            RoleChip { visible: !root.chatGroup && !!chatPage.peer.role; role: chatPage.peer.role || ""; owner: chatPage.peer.super_admin === true }
+                                            Item { Layout.fillWidth: true }
                                         }
                                         Label {
                                             visible: root.chatGroup
-                                            Layout.fillWidth: true; elide: Text.ElideRight; font.pointSize: root.smallSize; color: root.t.muted
+                                            Layout.fillWidth: true; elide: Text.ElideRight; font.pointSize: root.sizes.small; color: root.t.muted
                                             text: (root.chatThread.members || 1) + ((root.chatThread.members || 1) === 1 ? " member" : " members") + (chatPage.joining > 0 ? ", " + chatPage.joining + " joining" : "")
                                         }
                                     }
+                                    LinkButton { visible: !root.chatGroup; text: "View profile ›"; Accessible.name: "Open the profile of " + chatPage.currentName; onClicked: root.showMember(root.chatWith) }
                                     ActionButton {
                                         visible: root.chatGroup
                                         text: chatPage.showMembers ? "Messages" : "Members"
@@ -5131,44 +5219,50 @@ Item {
                                         onClicked: { chatPage.showMembers = true; addPick.focusSearch() }
                                     }
                                 }
-                                Help { when: !root.chatGroup && !chatPage.hasAddress; delay: 3000; text: "Their chat address has not arrived yet. Your message waits in the queue and goes out when it arrives." }
-                                Help {
-                                    when: root.chatGroup && chatPage.joining > 0 && !chatPage.showMembers; delay: 3000
-                                    text: "Some members have not joined yet. This can take a minute or two. A member who joins later does not see the messages sent before."
-                                }
-                                Help {   // the one who opens a chat asks the online members for their current chat address
-                                    when: !!root.chat.asking && (chatPage.readOnly || (!root.chatGroup && !chatPage.hasAddress))
-                                    text: "Asking the online members for their chat address."
-                                }
-                                Flash {   // a member restarted: the group moves to a new chat by itself (chat-module.md, "Recovery scenarios")
-                                    readonly property bool moving: !!root.groupInfo.mover
-                                    readonly property string mover: moving ? root.who(root.groupInfo.mover, root.groupInfo.mover_name) : ""
-                                    when: chatPage.readOnly || moving; delay: 3000; tone: "warn"; icon: "warn"
-                                    text: !moving ? "You restarted, so this group is read-only for you. Start the group again to keep writing."
-                                          : root.groupInfo.mover_me ? "A member restarted, so this group moves to a new chat soon. Your messages wait and go to the new chat."
-                                          : "Rejoining: " + mover + " is moving this group to a new chat, because a member restarted. Your messages wait and go to the new chat. This page switches to it by itself."
-                                            + (root.groupInfo.fallback ? " " + mover + " has not done it yet. You can start the group again yourself." : "")
-                                    buttonText: !moving || root.groupInfo.fallback === true ? "Start again" : ""
-                                    buttonName: "Start the group again with the same members"
-                                    buttonEffect: "This makes a new group with the same name and members. The old messages stay above the new ones."
-                                    onActivated: chatPage.startAgain()
+                                Rule {}
+                                ColumnLayout {   // notices about this chat, under its header
+                                    Layout.fillWidth: true; Layout.fillHeight: false; Layout.leftMargin: 20; Layout.rightMargin: 20
+                                    Layout.topMargin: visibleChildren.length > 0 ? 12 : 0
+                                    spacing: 8
+                                    Help {
+                                        when: root.chatGroup && chatPage.joining > 0 && !chatPage.showMembers; delay: 3000
+                                        text: "Some members have not joined yet. This can take a minute or two. A member who joins later does not see the messages sent before."
+                                    }
+                                    Help {   // the one who opens a chat asks the online members for their current chat address
+                                        when: !!root.chat.asking && (chatPage.readOnly || (!root.chatGroup && !chatPage.hasAddress))
+                                        text: "Asking the online members for their chat address."
+                                    }
+                                    Flash {   // a member restarted: the group moves to a new chat by itself (chat-module.md, "Recovery scenarios")
+                                        readonly property bool moving: !!root.groupInfo.mover
+                                        readonly property string mover: moving ? root.who(root.groupInfo.mover, root.groupInfo.mover_name) : ""
+                                        when: chatPage.readOnly || moving; delay: 3000; tone: "warn"; icon: "warn"
+                                        text: !moving ? "You restarted, so this group is read-only for you. Start the group again to keep writing."
+                                              : root.groupInfo.mover_me ? "A member restarted, so this group moves to a new chat soon. Your messages wait and go to the new chat."
+                                              : "Rejoining: " + mover + " is moving this group to a new chat, because a member restarted. Your messages wait and go to the new chat. This page switches to it by itself."
+                                                + (root.groupInfo.fallback ? " " + mover + " has not done it yet. You can start the group again yourself." : "")
+                                        buttonText: !moving || root.groupInfo.fallback === true ? "Start again" : ""
+                                        buttonName: "Start the group again with the same members"
+                                        buttonEffect: "This makes a new group with the same name and members. The old messages stay above the new ones."
+                                        onActivated: chatPage.startAgain()
+                                    }
                                 }
                                 ColumnLayout {   // the members of the group, and a list to add more from
                                     visible: chatPage.membersShown
-                                    Layout.fillWidth: true; Layout.fillHeight: true
+                                    Layout.fillWidth: true; Layout.fillHeight: true; Layout.margins: 20
                                     spacing: 8
                                     Label { font.weight: Font.DemiBold; text: "In the group" }
                                     ListView {
                                         Layout.fillWidth: true
-                                        Layout.preferredHeight: Math.min(contentHeight, 150)
-                                        clip: true
+                                        Layout.preferredHeight: Math.min(contentHeight, 180)
+                                        clip: true; spacing: 6
                                         model: root.groupInfo.members || []
                                         delegate: RowLayout {
                                             id: person
                                             required property var modelData
                                             // a member of the site that is not us: the key is a site member's key (not a bare chat address)
                                             readonly property bool canDm: !modelData.me && root.members.some(function (m) { return m.key === modelData.key })
-                                            width: ListView.view.width; spacing: 8
+                                            width: ListView.view.width; spacing: 10
+                                            Avatar { size: 28; ident: person.modelData.key; name: person.modelData.name || "" }
                                             Label {
                                                 Layout.fillWidth: true; elide: Text.ElideRight; textFormat: Text.PlainText; color: root.t.fg
                                                 text: (person.modelData.me ? "You" : root.who(person.modelData.key, person.modelData.name)) + (person.modelData.pending ? " (joining)" : "")
@@ -5191,11 +5285,12 @@ Item {
                                         onClicked: chatPage.addMembers()
                                     }
                                 }
-                                ListView {
+                                ListView {   // the messages: yours on the right, theirs on the left with an avatar
                                     id: thread
-                                    visible: !chatPage.membersShown
+                                    visible: !chatPage.membersShown && root.chatMessages.length > 0
                                     Layout.fillWidth: true; Layout.fillHeight: true
-                                    clip: true; spacing: 6
+                                    clip: true
+                                    leftMargin: 24; rightMargin: 24; topMargin: 16; bottomMargin: 18
                                     model: root.chatMessages
                                     onCountChanged: Qt.callLater(thread.positionViewAtEnd)
                                     delegate: ColumnLayout {
@@ -5205,30 +5300,63 @@ Item {
                                         readonly property bool mine: modelData.from_self
                                         // the first new message after a chat from before a restart
                                         readonly property bool startsNew: index > 0 && !modelData.old && root.chatMessages[index - 1].old
-                                        width: ListView.view.width
-                                        spacing: 6
-                                        Help { visible: bubble.startsNew; horizontalAlignment: Text.AlignHCenter; text: "The messages above are from before a restart and are read only. New messages start here." }
-                                        Label {   // in a group: who wrote it
-                                            visible: root.chatGroup && !bubble.mine && !!bubble.modelData.sender_key
-                                            Layout.alignment: Qt.AlignLeft
-                                            textFormat: Text.PlainText; font.pointSize: root.smallSize; font.weight: Font.DemiBold; color: root.t.muted
-                                            text: root.who(bubble.modelData.sender_key || "", bubble.modelData.sender_name)
+                                        readonly property bool cont: chatPage.cont(index)
+                                        readonly property bool endsRun: !chatPage.cont(index + 1)
+                                        readonly property bool newDay: chatPage.newDay(index)
+                                        width: ListView.view.width - ListView.view.leftMargin - ListView.view.rightMargin
+                                        spacing: 0
+                                        Help { visible: bubble.startsNew; Layout.topMargin: 12; horizontalAlignment: Text.AlignHCenter; text: "The messages above are from before a restart and are read only. New messages start here." }
+                                        RowLayout {   // the day, once, when it changes
+                                            visible: bubble.newDay
+                                            Layout.fillWidth: true; Layout.topMargin: bubble.index === 0 ? 0 : 12; spacing: 12
+                                            Rule {}
+                                            Label {
+                                                color: root.t.muted; font.pointSize: root.sizes.cap
+                                                text: new Date(bubble.modelData.ts_ms).toDateString() === new Date().toDateString() ? "Today" : root.chatTime(bubble.modelData.ts_ms)
+                                            }
+                                            Rule {}
                                         }
-                                        Rectangle {
+                                        RowLayout {
                                             Layout.alignment: bubble.mine ? Qt.AlignRight : Qt.AlignLeft
-                                            Layout.maximumWidth: thread.width * 0.8
-                                            implicitWidth: Math.min(body.implicitWidth, thread.width * 0.8 - 24) + 24
-                                            implicitHeight: body.implicitHeight + 16
-                                            radius: 8
-                                            color: bubble.mine ? root.t.accentBg : root.t.well
-                                            border.color: bubble.mine ? root.t.accentBd : root.t.bd
+                                            Layout.topMargin: bubble.index === 0 && !bubble.newDay ? 0 : bubble.cont ? 2 : 12
+                                            spacing: 8
+                                            Item {   // the avatar sits at the start of a run; the rest keep the column
+                                                visible: !bubble.mine
+                                                Layout.alignment: Qt.AlignTop; implicitWidth: 28; implicitHeight: 28
+                                                Avatar {
+                                                    visible: !bubble.cont; size: 28
+                                                    ident: root.chatGroup ? bubble.modelData.sender_key || "" : root.chatWith
+                                                    name: root.chatGroup ? bubble.modelData.sender_name || "" : chatPage.peerName
+                                                }
+                                            }
                                             ColumnLayout {
-                                                id: body
-                                                anchors { fill: parent; margins: 8; leftMargin: 12; rightMargin: 12 }
-                                                spacing: 2
-                                                Label { Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText; color: root.t.fg; text: bubble.modelData.content }
-                                                Label {
-                                                    font.pointSize: root.smallSize; color: root.t.muted
+                                                spacing: 0
+                                                Label {   // in a group: who wrote it
+                                                    visible: root.chatGroup && !bubble.mine && !bubble.cont && !!bubble.modelData.sender_key
+                                                    Layout.leftMargin: 2; Layout.bottomMargin: 3
+                                                    textFormat: Text.PlainText; font.pointSize: root.sizes.cap; font.weight: Font.DemiBold; color: root.t.muted
+                                                    text: root.who(bubble.modelData.sender_key || "", bubble.modelData.sender_name)
+                                                }
+                                                Rectangle {
+                                                    Layout.alignment: bubble.mine ? Qt.AlignRight : Qt.AlignLeft
+                                                    implicitWidth: Math.min(msg.implicitWidth + 28, thread.width * 0.7)
+                                                    implicitHeight: msg.implicitHeight + 18
+                                                    radius: 18
+                                                    bottomLeftRadius: !bubble.mine && bubble.endsRun ? 6 : radius   // the run's last bubble points at its sender
+                                                    bottomRightRadius: bubble.mine && bubble.endsRun ? 6 : radius
+                                                    color: bubble.mine ? root.wash(root.t.accent, root.t.well, 0.14) : root.t.card
+                                                    border.width: bubble.mine || !root.dark ? 1 : 0
+                                                    border.color: bubble.mine ? root.fade(root.t.accent, 0.26) : root.t.bd
+                                                    Label {
+                                                        id: msg
+                                                        anchors { fill: parent; leftMargin: 14; rightMargin: 14; topMargin: 9; bottomMargin: 9 }
+                                                        wrapMode: Text.Wrap; textFormat: Text.PlainText; color: root.t.fg; text: bubble.modelData.content
+                                                    }
+                                                }
+                                                Label {   // the time, once under the last bubble of a run; "Sending…" on every queued one
+                                                    visible: bubble.endsRun || !!bubble.modelData.queued
+                                                    Layout.topMargin: 4; Layout.alignment: bubble.mine ? Qt.AlignRight : Qt.AlignLeft
+                                                    font.pointSize: root.sizes.cap; color: root.t.muted
                                                     text: bubble.modelData.queued ? "Sending…" : root.chatTime(bubble.modelData.ts_ms) + (bubble.mine ? " · sent" : "")
                                                 }
                                             }
@@ -5240,24 +5368,31 @@ Item {
                                     Layout.fillHeight: true
                                     icon: "cmt"; title: "No messages yet"; text: "Write the first message below."
                                 }
-                                RowLayout {
+                                Rule { visible: !chatPage.membersShown }
+                                ColumnLayout {   // the send box
                                     visible: !chatPage.membersShown
-                                    Layout.fillWidth: true; spacing: 8
-                                    FramedField {
-                                        id: draft
-                                        Layout.fillWidth: true
-                                        enabled: !chatPage.readOnly
-                                        placeholderText: "Write a message"; maximumLength: 4000
-                                        Accessible.name: "Message to " + chatPage.currentName
-                                        onAccepted: sendButton.submit()
+                                    Layout.fillWidth: true; Layout.fillHeight: false
+                                    Layout.margins: 16; Layout.topMargin: 12; Layout.bottomMargin: 14
+                                    spacing: 8
+                                    RowLayout {
+                                        Layout.fillWidth: true; spacing: 8
+                                        FramedField {
+                                            id: draft
+                                            Layout.fillWidth: true
+                                            enabled: !chatPage.readOnly
+                                            placeholderText: "Write a message"; maximumLength: 4000
+                                            Accessible.name: "Message to " + chatPage.currentName
+                                            onAccepted: sendButton.submit()
+                                        }
+                                        ActionButton {
+                                            id: sendButton
+                                            text: "Send"; kind: "primary"
+                                            allowed: draft.text.trim() !== "" && !chatPage.readOnly
+                                            Accessible.name: "Send the message to " + chatPage.currentName
+                                            onClicked: chatPage.send()
+                                        }
                                     }
-                                    ActionButton {
-                                        id: sendButton
-                                        text: "Send"; kind: "primary"
-                                        allowed: draft.text.trim() !== "" && !chatPage.readOnly
-                                        Accessible.name: "Send the message to " + chatPage.currentName
-                                        onClicked: chatPage.send()
-                                    }
+                                    Help { when: !root.chatGroup && !chatPage.hasAddress; delay: 3000; text: "Their chat address has not arrived yet. Your message waits in the queue and goes out when it arrives." }
                                 }
                             }
                         }
