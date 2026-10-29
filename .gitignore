@@ -20,10 +20,6 @@ modules/pukaar_core/modules/
 modules/pukaar_core/rust-lib/logic/fuzz/corpus/
 modules/pukaar_core/rust-lib/logic/fuzz/artifacts/
 modules/pukaar_core/rust-lib/logic/fuzz/Cargo.lock
-# local planning notes, never committed
-idea-docs/
-plan.md
-next-steps.md
 
 
 graphify-out/cache/
@@ -59,22 +55,14 @@ bug-report/
 **/.impeccable/live/*.png
 # impeccable-ignore-end
 
-UX-AUDIT.md
 design/
 
 Grant.md 
 
-# Local section notes (not for the repo)
-pukar-sections.md
-blockchain-port-possibility.md
-adi-guru-meet1.md
-port-plan.md 
+# Local planning notes (not for the repo)
+docs/idea-docs/
 
 # pukaar_sites guest ELF (built by programs/pukaar_sites/build.sh)
 programs/pukaar_sites/*.bin
-pow-lez-bridge.md
-1-1-meet.md
-chat-module.md
-other-user-profile.md
 
-docs/superpowers
+docs/superpowers/

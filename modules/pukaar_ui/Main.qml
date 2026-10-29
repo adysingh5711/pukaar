@@ -488,7 +488,9 @@ Item {
     readonly property var writeBannersNext: writes.filter(function (w) {
         if (dismissed[w.id]) return false
         if (w.needs_funds) return false      // the funds banner says why it waits
-        return w.state === "rejected" || (w.kind === "create_site" ? true
+        // a refusal is saved on disk: after a restart, show it only while it is fresh (a refused site stays until "Start again")
+        if (w.state === "rejected") return w.kind === "create_site" || (w.age_s || 0) < 600
+        return (w.kind === "create_site" ? true
             : (w.accounts || []).length === 0 && w.kind !== "profile" && isLive(w))
     }).slice(-3)
     function dismiss(id) { var d = Object.assign({}, dismissed); d[id] = true; dismissed = d }

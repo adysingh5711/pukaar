@@ -631,6 +631,8 @@ impl Queue {
                     "needs_funds": e.state == St::Queued && e.reason.as_deref().is_some_and(|r| r.starts_with(SHORT_OF_FUNDS)),
                     // Seconds in `Preparing` (what the reason says it waits for), else null.
                     "waited_s": (e.state == St::Preparing).then(|| now_ms.saturating_sub(e.since_ms) / 1000),
+                    // Seconds since the last change of state, so the UI can let an old refusal go.
+                    "age_s": now_ms.saturating_sub(e.since_ms) / 1000,
                     // The members that the write is about (base58), so the UI can mark their rows.
                     "accounts": e.intent.users().iter().map(crate::chain::b58).collect::<Vec<_>>(),
                     // What the write does for each of them, for the Send changes list.
