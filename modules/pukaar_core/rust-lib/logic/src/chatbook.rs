@@ -10,6 +10,9 @@
 //!   waits here, per person, and goes out when the core can send it.
 //! - groups (the module's `group` conversations): which ones are ours, the members still to be added (their address
 //!   has not arrived), the unsent messages and the read mark of each group, keyed by its conversation id.
+//! - recovery after a restart (chat-module.md, "Recovery scenarios"): the last roster of each group, so that a member
+//!   who restarted still knows who was in it, and the link from a group that was started again to its new group.
+//!   A member who comes online asks the others for their address (`Wire::ChatAsk`).
 
 use crate::event::Key;
 use crate::meet::Signed;
@@ -34,6 +37,31 @@ pub const MAX_TEXT: usize = 4000;
 const SETTLE_MS: u64 = 8_000;
 const PREVIEW_CHARS: usize = 160;
 pub const MAX_GROUP_NAME: usize = 60;
+const ASK_DOMAIN: &[u8] = b"pukaar/chatask/v1\0";
+/// We ask the others for their address at most this often, and answer an ask at most this often, so asks cannot flood.
+const ASK_EVERY_MS: u64 = 60_000;
+const ANSWER_EVERY_MS: u64 = 30_000;
+/// The screen says "asking" for this long after an ask.
+const ASKING_MS: u64 = 20_000;
+/// The description of a group that was started again: this prefix, then the id of the old group.
+pub const AFTER: &str = "pukaar:after:";
+/// A chain of groups started again is followed this far back.
+const MAX_CHAIN: usize = 8;
+/// A move that we started and that did not finish is tried again after this long.
+const MOVE_RETRY_MS: u64 = 120_000;
+/// When the member who moves a group has not done it after this long, the screen offers Start again to everyone.
+pub const FALLBACK_MS: u64 = 180_000;
+/// A re-add (`readd`) has this long to commit before the group moves to a new one. The steward commits after about 60 s.
+const ROLL_AFTER_MS: u64 = 150_000;
+
+/// The body of an ask for the chat addresses of the others.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct AskBody {
+    pub from: Key,
+    pub ts: u64,
+}
+
+pub type AskMsg = Signed<AskBody>;
 
 /// The body of an announce: `ts` is the clock of the sender and the newest wins.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -125,6 +153,25 @@ pub struct ChatBook {
     group_queue: Vec<GroupQueued>,
     #[serde(default)]
     group_read: Vec<Read<String>>,
+    /// The roster of each group the last time it was live for us. After our restart the module has no roster for it,
+    /// so this says who was in it. Absent in a file from before recovery.
+    #[serde(default)]
+    last_roster: BTreeMap<String, Vec<Member>>,
+    /// A group that was started again: `(old id, new id)`. Absent in a file from before recovery.
+    #[serde(default)]
+    next: Vec<(String, String)>,
+    /// A move that we started: the old group and the time (ms). It stops a second round, or a start after a crash, from
+    /// making a second new group for `MOVE_RETRY_MS`. Absent in a file from before recovery.
+    #[serde(default)]
+    moves: Vec<(String, u64)>,
+    /// When we last asked the others for their address, and when we last answered an ask (ms, 0 = never).
+    #[serde(skip)]
+    asked: u64,
+    #[serde(skip)]
+    answered: u64,
+    /// Since when each group has waited for its move (ms), for the fallback on the screen.
+    #[serde(skip)]
+    due: BTreeMap<String, u64>,
     #[serde(skip)]
     pub site: Key,
     #[serde(skip)]
@@ -182,11 +229,14 @@ pub struct Convo {
     /// A group's shared name.
     #[serde(default)]
     pub name: Option<String>,
+    /// A group's shared description. A group that was started again holds `AFTER` and the old id here.
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 /// One element of the module's `list_group_members`: an account address, and whether the group has not
 /// committed it yet (it cannot read the group until then).
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Member {
     pub address: String,
     #[serde(default)]
@@ -354,6 +404,39 @@ impl ChatBook {
         }
         self.save();
         newest.then_some(*from)
+    }
+
+    /// A signed ask to the other members to announce their chat address again. A member that was offline missed
+    /// their announces. `None` when we asked less than `ASK_EVERY_MS` ago.
+    pub fn ask(&mut self, key: &SigningKey, site: &Key, now: u64) -> Option<Vec<u8>> {
+        if self.asked > 0 && now.saturating_sub(self.asked) < ASK_EVERY_MS {
+            return None;
+        }
+        self.asked = now;
+        let body = AskBody {
+            from: key.verifying_key().to_bytes(),
+            ts: now,
+        };
+        Some(Wire::ChatAsk(Signed::new(key, ASK_DOMAIN, site, body)).encode())
+    }
+
+    /// True for a short time after we asked: the screen says that we wait for the answers.
+    #[must_use]
+    pub fn asking(&self, now: u64) -> bool {
+        self.asked > 0 && now.saturating_sub(self.asked) < ASKING_MS
+    }
+
+    /// A `Wire::ChatAsk` from Delivery: our announce again. Only an ask from another active member with a good
+    /// signature counts, and we answer at most once per `ANSWER_EVERY_MS`, whoever asks.
+    pub fn on_ask(&mut self, key: &SigningKey, site: &Key, m: &AskMsg, members: &[Key], now: u64) -> Option<Vec<u8>> {
+        let from = m.body.from;
+        let ok = from != key.verifying_key().to_bytes() && members.contains(&from) && m.check(ASK_DOMAIN, site, &from);
+        if !ok || (self.answered > 0 && now.saturating_sub(self.answered) < ANSWER_EVERY_MS) {
+            return None;
+        }
+        let out = self.resend(key, site)?;
+        self.answered = now;
+        Some(out)
     }
 
     pub fn link(&mut self, convo: &str, who: Key, addr: &str) {
@@ -605,6 +688,7 @@ impl ChatBook {
             self.groups.push(convo.to_owned());
             self.save();
         }
+        self.keep_roster(convo, roster);
         let pending = roster.iter().filter(|m| m.pending).count();
         let sig = (roster.len() - pending, pending);
         let since = match self.rosters.get(convo) {
@@ -617,10 +701,18 @@ impl ChatBook {
     }
 
     /// A member of `convo` that restarted is in its roster with an old chat address, and their newest address is not.
-    /// Keep them to be added again. Only the member of the group with the lowest key does this, so that an add is not
-    /// proposed twice. An add waits for the background step, and a member that is still pending is not asked again.
+    /// Keep them to be added again. This is the first, cheap try: the add is a vote, and the old address never votes
+    /// again, so it commits only while enough live members vote. In a group of two it never commits and is not tried.
+    /// When it does not commit, the group moves to a new one (`moving`). Only the live member of the group with the
+    /// lowest key adds, so that an add is not proposed twice. A member that restarted is not live and cannot add
+    /// anybody. A member that is still pending is not asked again. A group that was started again is left alone.
     pub fn readd(&mut self, convo: &str, roster: &[Member], members: &[Key], me: &Key) {
-        if !self.is_group(convo) || self.my_addr().is_none_or(|a| !roster.iter().any(|m| m.address == a)) {
+        if !self.is_group(convo) || self.next_of(convo).is_some() {
+            return;
+        }
+        self.keep_roster(convo, roster);
+        let seats = roster.iter().filter(|m| !m.pending).count();
+        if seats <= 2 || self.adder(roster, members, me) != Some(*me) {
             return;
         }
         let inn: Vec<Key> = roster
@@ -628,14 +720,175 @@ impl ChatBook {
             .filter_map(|m| self.who_of(&m.address))
             .filter(|w| members.contains(w))
             .collect();
-        if inn.iter().any(|w| w < me) {
-            return;
-        }
         for w in inn {
             if self.latest(&w).is_some_and(|l| !roster.iter().any(|m| m.address == l)) {
                 self.want(convo, w);
             }
         }
+    }
+
+    /// The member whose task is to add the others back: the live member of `roster` with the lowest key. Live means
+    /// committed, active in the site, and in the group with their newest address (for us: our current one).
+    fn adder(&self, roster: &[Member], members: &[Key], me: &Key) -> Option<Key> {
+        roster
+            .iter()
+            .filter(|m| !m.pending)
+            .filter_map(|m| {
+                if self.my_addr() == Some(m.address.as_str()) {
+                    return Some(*me);
+                }
+                let w = self.who_of(&m.address)?;
+                (self.latest(&w) == Some(m.address.as_str())).then_some(w)
+            })
+            .filter(|w| members.contains(w))
+            .min()
+    }
+
+    /// Keep the roster of a live group (see `last_roster`). An empty roster is a failed read and is not kept.
+    fn keep_roster(&mut self, convo: &str, roster: &[Member]) {
+        if !roster.is_empty() && self.last_roster.get(convo).is_none_or(|r| r != roster) {
+            self.last_roster.insert(convo.to_owned(), roster.to_vec());
+            self.save();
+        }
+    }
+
+    /// The last roster that we saw of `convo`, empty when we never saw it live.
+    #[must_use]
+    pub fn last_roster(&self, convo: &str) -> Vec<Member> {
+        self.last_roster.get(convo).cloned().unwrap_or_default()
+    }
+
+    /// Whether `convo` must move to a new group, and who moves it, from `roster` (the module's while the group is live
+    /// for us, else `last_roster`). A move is due when a member restarted: an old address of theirs is in the roster
+    /// and their newest address is not committed. That is also us when the group is read-only for us. Gives
+    /// `(mover, when)`:
+    /// - the mover is the live member with the lowest key. When nobody is live, it is the lowest key among us and the
+    ///   members that announced a new address. Each member works this out alone, so there is one mover by our view.
+    /// - when: at once in a group of two or with nobody live (a re-add cannot commit there), else `ROLL_AFTER_MS` after
+    ///   we first saw it, so that the re-add of `readd` can commit first.
+    ///
+    /// `None` when nothing is to do, the group already moved, or we do not know its roster (a file from before recovery).
+    pub fn moving(&mut self, convo: &str, roster: &[Member], members: &[Key], me: &Key, now: u64) -> Option<(Key, u64)> {
+        let committed = |a: &str| roster.iter().any(|m| !m.pending && m.address == a);
+        let mine = self.my_addr().map(str::to_owned);
+        let moved: Vec<Key> = roster
+            .iter()
+            .filter_map(|m| Some((m, self.who_of(&m.address)?)))
+            .filter(|(_, w)| w != me && members.contains(w))
+            .filter(|(m, w)| self.latest(w).is_some_and(|l| l != m.address && !committed(l)))
+            .map(|(_, w)| w)
+            .collect();
+        let quiet = moved.is_empty() && mine.as_deref().is_some_and(committed);
+        if !self.is_group(convo) || self.next_of(convo).is_some() || roster.is_empty() || mine.is_none() || quiet {
+            self.due.remove(convo);
+            return None;
+        }
+        let since = *self.due.entry(convo.to_owned()).or_insert(now);
+        let live = self.adder(roster, members, me);
+        let seats = roster.iter().filter(|m| !m.pending).count();
+        let wait = if live.is_some() && seats > 2 { ROLL_AFTER_MS } else { 0 };
+        let by = live.or_else(|| moved.into_iter().chain([*me]).min()).unwrap_or(*me);
+        Some((by, since + wait))
+    }
+
+    /// We start the move of `old`: false when we started one less than `MOVE_RETRY_MS` ago (a second round, or a crash
+    /// after the new group was made). The record is kept in the file and goes when the move is linked (`succeed`).
+    pub fn begin_move(&mut self, old: &str, now: u64) -> bool {
+        if self.moves.iter().any(|(o, at)| o == old && now.saturating_sub(*at) < MOVE_RETRY_MS) {
+            return false;
+        }
+        self.moves.retain(|(o, _)| o != old);
+        self.moves.push((old.to_owned(), now));
+        self.save();
+        true
+    }
+
+    /// The members of an old group, to put in the group that starts it again: the active members (not us) in its last
+    /// roster, those still to be added, and the senders of its messages (the roster of a file from before recovery is
+    /// not known).
+    #[must_use]
+    pub fn old_members(&self, convo: &str, senders: &[String], members: &[Key], me: &Key) -> Vec<Key> {
+        let roster = self.last_roster(convo);
+        let by_addr = roster
+            .iter()
+            .map(|m| m.address.as_str())
+            .chain(senders.iter().map(String::as_str))
+            .filter_map(|a| self.who_of(a));
+        distinct(by_addr.chain(self.waiting(convo).copied()))
+            .into_iter()
+            .filter(|w| w != me && members.contains(w))
+            .collect()
+    }
+
+    /// The group that `old` was started again as, if any.
+    #[must_use]
+    pub fn next_of(&self, old: &str) -> Option<&str> {
+        self.next.iter().find(|(o, _)| o == old).map(|(_, n)| n.as_str())
+    }
+
+    /// The groups that `convo` started again, oldest first.
+    #[must_use]
+    pub fn before(&self, convo: &str) -> Vec<String> {
+        let mut out: Vec<String> = vec![];
+        let mut at = convo.to_owned();
+        while out.len() < MAX_CHAIN {
+            match self.next.iter().find(|(o, n)| *n == at && !out.contains(o) && *o != convo) {
+                Some((o, _)) => {
+                    at = o.clone();
+                    out.insert(0, o.clone());
+                }
+                None => break,
+            }
+        }
+        out
+    }
+
+    /// The group `old` goes on as `new`: `new` is ours, and what waits to be sent to `old` (or to the group it was
+    /// linked to before) goes to `new`. The old conversation stays in the module as history; nothing is deleted.
+    pub fn succeed(&mut self, old: &str, new: &str) {
+        if old == new || self.next_of(old) == Some(new) {
+            return;
+        }
+        let was = self.next_of(old).map(str::to_owned);
+        self.next.retain(|(o, _)| o != old);
+        self.next.push((old.to_owned(), new.to_owned()));
+        if !self.is_group(new) {
+            self.groups.push(new.to_owned());
+        }
+        for q in self.group_queue.iter_mut().filter(|q| q.convo == old || was.as_ref() == Some(&q.convo)) {
+            q.convo = new.to_owned();
+        }
+        self.invites.retain(|i| i.convo != old);
+        self.moves.retain(|(o, _)| o != old);
+        self.save();
+    }
+
+    /// A member moved one of our groups and added us to the new group: its description names the old one. Link the
+    /// two. This is also the check against a second new group: the first live one that we see wins, and a link to a
+    /// new group that is not live for us (we restarted, or it is gone) gives way to a live one. A description that
+    /// names a group that is not ours is ignored.
+    pub fn follow(&mut self, convos: &[Convo]) {
+        let live = |id: &str| convos.iter().any(|c| c.id == id && !c.history_only);
+        for c in convos.iter().filter(|c| c.kind == "group" && !c.history_only) {
+            if let Some(old) = c.description.as_deref().and_then(|d| d.strip_prefix(AFTER)) {
+                if self.is_group(old) && !self.next_of(old).is_some_and(live) {
+                    self.succeed(old, &c.id);
+                }
+            }
+        }
+    }
+
+    /// The group that `convo` moved to in the end (itself when it did not move).
+    #[must_use]
+    pub fn newest_group(&self, convo: &str) -> String {
+        let mut at = convo.to_owned();
+        for _ in 0..MAX_CHAIN {
+            match self.next_of(&at) {
+                Some(n) => at = n.to_owned(),
+                None => break,
+            }
+        }
+        at
     }
 
     /// The groups of the chat list: one row each, also when nothing was said in it.
@@ -659,6 +912,7 @@ impl ChatBook {
                 "history_only": c.history_only,
                 "has_address": true,
                 "unread": unread(&self.group_read, id, &[c]),
+                "next": self.next_of(id),
             });
             Some((last_ms, row))
         })
@@ -692,6 +946,7 @@ impl ChatBook {
     /// Keep a message for the group `convo` until it can be sent.
     pub fn enqueue_group(&mut self, convo: &str, text: &str, now_ms: u64) -> Result<(), String> {
         let text = clean(text)?;
+        let convo = &self.newest_group(convo); // a group that moved takes its messages in the new group
         if self.queued_group(convo).count() >= MAX_QUEUED {
             return Err("There are too many unsent messages to this group.".into());
         }
@@ -1009,6 +1264,7 @@ mod tests {
             history_only: false,
             kind: "direct".into(),
             name: None,
+            description: None,
         }];
         let list = |b: &ChatBook| b.threads_json(&empty, &BTreeMap::new(), &[a, me], &me);
         assert_eq!(list(&mine).as_array().unwrap().len(), 0);
@@ -1031,6 +1287,7 @@ mod tests {
             history_only,
             kind: "direct".into(),
             name: None,
+            description: None,
         };
         let convos = [
             convo("c1", NOW, true),
@@ -1081,6 +1338,7 @@ mod tests {
             history_only,
             kind: "direct".into(),
             name: None,
+            description: None,
         };
         let unread = |b: &ChatBook, convos: &[Convo]| {
             b.threads_json(convos, &BTreeMap::new(), &[a, me], &me)[0]["unread"].clone()
@@ -1123,6 +1381,7 @@ mod tests {
             history_only,
             kind: "group".into(),
             name: Some(name.into()),
+            description: None,
         }
     }
 
@@ -1409,5 +1668,208 @@ mod tests {
             "a group from before a restart is never unread"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn ask_msg(wire: &[u8]) -> AskMsg {
+        match Wire::decode(wire) {
+            Some(Wire::ChatAsk(m)) => m,
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_ask_is_answered_with_our_announce_by_members_only_and_neither_side_can_flood() {
+        let ((ka, a), (kb, b), (_, x)) = (person(1), person(3), person(9));
+        let (mut asker, mut other) = (book(), book());
+        let ask = asker.ask(&ka, &SITE, NOW).unwrap();
+        assert!(asker.asking(NOW + 1));
+        assert!(!asker.asking(NOW + ASKING_MS));
+        assert_eq!(asker.ask(&ka, &SITE, NOW + 1), None, "one ask per minute");
+        assert!(asker.ask(&ka, &SITE, NOW + ASK_EVERY_MS).is_some());
+        let m = ask_msg(&ask);
+        assert_eq!(other.on_ask(&kb, &SITE, &m, &[a, b], NOW), None, "no address to give yet");
+        let mine = other.announce(&kb, &SITE, "addr-b", NOW).unwrap();
+        assert_eq!(other.on_ask(&kb, &SITE, &m, &[b, x], NOW), None, "the asker is not a member");
+        let mut forged = m.clone();
+        forged.body.ts += 1;
+        assert_eq!(other.on_ask(&kb, &SITE, &forged, &[a, b], NOW), None, "the signature covers the body");
+        assert_eq!(other.on_ask(&kb, &[8; 32], &m, &[a, b], NOW), None, "the signature covers the site");
+        assert_eq!(other.on_ask(&ka, &SITE, &m, &[a, b], NOW), None, "our own ask is not answered");
+        assert_eq!(other.on_ask(&kb, &SITE, &m, &[a, b], NOW), Some(mine.clone()), "the answer is our announce");
+        assert_eq!(other.on_ask(&kb, &SITE, &m, &[a, b], NOW + 1), None, "one answer per 30 seconds");
+        assert_eq!(other.on_ask(&kb, &SITE, &m, &[a, b], NOW + ANSWER_EVERY_MS), Some(mine));
+    }
+
+    #[test]
+    fn a_restarted_member_with_the_lowest_key_does_not_stop_the_lowest_live_member_from_adding_them() {
+        let mut seeds = [1u8, 3, 5];
+        seeds.sort_by_key(|s| person(*s).1);
+        let [low, mid, high] = seeds;
+        let ((_, l), (km, m), (_, h)) = (person(low), person(mid), person(high));
+        let all = [l, m, h];
+        let mut mine = book();
+        mine.announce(&km, &SITE, "addr-m", NOW);
+        knows(&mut mine, low, "addr-l", &all);
+        knows(&mut mine, high, "addr-h", &all);
+        mine.start_group("g1", &[]);
+        let ours = roster(&[("addr-l", false), ("addr-m", false), ("addr-h", false)]);
+        mine.readd("g1", &ours, &all, &m);
+        assert_eq!(mine.waiting("g1").count(), 0, "l is live and has the lowest key, so l adds");
+        let again = addr_msg(&mut book(), &person(low).0, "addr-l2", NOW + 1).unwrap();
+        mine.on_addr(&SITE, &again, &all);
+        mine.readd("g1", &ours, &all, &m);
+        assert_eq!(mine.waiting("g1").collect::<Vec<_>>(), [&l], "l restarted, so m is the lowest live member");
+        let mut theirs = book();
+        theirs.announce(&person(high).0, &SITE, "addr-h", NOW);
+        knows(&mut theirs, low, "addr-l2", &all);
+        knows(&mut theirs, mid, "addr-m", &all);
+        theirs.start_group("g1", &[]);
+        theirs.readd("g1", &ours, &all, &h);
+        assert_eq!(theirs.waiting("g1").count(), 0, "h leaves it to m");
+    }
+
+    #[test]
+    fn a_member_who_restarts_before_their_add_commits_in_a_group_of_two_moves_the_group_at_once() {
+        let ((k, me), (ka, a)) = (person(1), person(3));
+        let all = [a, me];
+        let mut mine = book();
+        mine.announce(&k, &SITE, "addr-me", NOW);
+        knows(&mut mine, 3, "addr-a", &all);
+        mine.start_group("g1", &[]);
+        let pending_old = roster(&[("addr-me", false), ("addr-a", true)]);
+        assert_eq!(mine.moving("g1", &pending_old, &all, &me, NOW), None, "nobody restarted");
+        let m = addr_msg(&mut book(), &ka, "addr-a2", NOW + 1).unwrap();
+        mine.on_addr(&SITE, &m, &all);
+        mine.readd("g1", &pending_old, &all, &me);
+        assert_eq!(mine.waiting("g1").count(), 0, "a re-add into a group of two never commits, so it is not tried");
+        assert_eq!(mine.moving("g1", &pending_old, &all, &me, NOW + 2), Some((me, NOW + 2)), "FC-15: we move it at once");
+    }
+
+    /// Three members `l < m < h` in `g1`, from the view of `who` (its seed), which knows the first addresses of all.
+    fn three(who: usize) -> (ChatBook, [Key; 3], [u8; 3], Vec<Member>) {
+        let mut seeds = [1u8, 3, 5];
+        seeds.sort_by_key(|s| person(*s).1);
+        let keys = seeds.map(|s| person(s).1);
+        let mut b = book();
+        let addrs = ["addr-l", "addr-m", "addr-h"];
+        for (i, s) in seeds.iter().enumerate() {
+            if i == who {
+                b.announce(&person(*s).0, &SITE, addrs[i], NOW);
+            } else {
+                knows(&mut b, *s, addrs[i], &keys);
+            }
+        }
+        b.start_group("g1", &[]);
+        let r = roster(&[("addr-l", false), ("addr-m", false), ("addr-h", false)]);
+        (b, keys, seeds, r)
+    }
+
+    #[test]
+    fn the_lowest_live_member_moves_the_group_when_the_re_add_does_not_commit_in_time() {
+        let (mut mine, [l, m, h], seeds, r) = three(1);
+        let all = [l, m, h];
+        assert_eq!(mine.moving("g1", &r, &all, &m, NOW), None, "nobody restarted");
+        knows(&mut mine, seeds[0], "addr-l2", &all);
+        mine.readd("g1", &r, &all, &m);
+        assert_eq!(mine.waiting("g1").collect::<Vec<_>>(), [&l], "the cheap try first");
+        assert_eq!(mine.moving("g1", &r, &all, &m, NOW + 5), Some((m, NOW + 5 + ROLL_AFTER_MS)), "m is the lowest live member");
+        let pending = roster(&[("addr-l", false), ("addr-m", false), ("addr-h", false), ("addr-l2", true)]);
+        assert_eq!(mine.moving("g1", &pending, &all, &m, NOW + 9), Some((m, NOW + 5 + ROLL_AFTER_MS)), "a pending re-add does not stop the clock");
+        let done = roster(&[("addr-l", false), ("addr-m", false), ("addr-h", false), ("addr-l2", false)]);
+        assert_eq!(mine.moving("g1", &done, &all, &m, NOW + 10), None, "the re-add committed");
+        let (mut theirs, ..) = three(2);
+        knows(&mut theirs, seeds[0], "addr-l2", &all);
+        assert_eq!(theirs.moving("g1", &r, &all, &h, NOW).map(|w| w.0), Some(m), "h agrees that m moves it");
+        assert_eq!(theirs.moving("g1", &r, &[m, h], &h, NOW), None, "a member removed from the site does not count");
+    }
+
+    #[test]
+    fn after_our_restart_a_live_member_moves_the_group_and_when_all_restarted_the_lowest_with_a_new_address_does() {
+        let (mut mine, [l, m, h], seeds, r) = three(2);
+        let all = [l, m, h];
+        mine.readd("g1", &r, &all, &h); // keeps the roster
+        mine.announce(&person(seeds[2]).0, &SITE, "addr-h2", NOW + 1); // our restart: the group is read-only for us
+        let old = mine.last_roster("g1");
+        assert_eq!(mine.moving("g1", &old, &all, &h, NOW + 2), Some((l, NOW + 2 + ROLL_AFTER_MS)), "l can add us back first");
+        knows(&mut mine, seeds[0], "addr-l2", &all);
+        assert_eq!(mine.moving("g1", &old, &all, &h, NOW + 3).map(|w| w.0), Some(m), "l restarted too");
+        knows(&mut mine, seeds[1], "addr-m2", &all);
+        assert_eq!(mine.moving("g1", &old, &all, &h, NOW + 4), Some((l, NOW + 2)), "nobody is live: the lowest with a new address, at once");
+        assert_eq!(mine.moving("g1", &old, &[m, h], &h, NOW + 4).map(|w| w.0), Some(m), "l left the site");
+        assert_eq!(mine.moving("unknown", &[], &all, &h, NOW), None, "a roster that we never saw: only the button");
+        let senders = ["addr-m".to_owned(), "stranger".to_owned()];
+        let mut back = mine.old_members("g1", &senders, &all, &h);
+        back.sort_unstable();
+        assert_eq!(back, vec![l, m], "the roster and the senders, once each, not us");
+        assert_eq!(mine.old_members("g1", &[], &[m, h], &h), vec![m], "a member who left the site is not put back");
+        assert_eq!(mine.old_members("never-seen", &senders, &all, &h), vec![m], "a file from before recovery: the senders");
+    }
+
+    #[test]
+    fn a_new_group_is_made_once_and_its_fresh_invites_do_not_move_it_again() {
+        let (mut mine, [l, m, h], seeds, r) = three(1);
+        let all = [l, m, h];
+        knows(&mut mine, seeds[0], "addr-l2", &all);
+        assert!(mine.begin_move("g1", NOW));
+        assert!(!mine.begin_move("g1", NOW + 1), "a second round makes no second group");
+        assert!(mine.begin_move("g1", NOW + MOVE_RETRY_MS), "a move that did not finish is tried again");
+        mine.start_group("g2", &[l, h]);
+        mine.succeed("g1", "g2");
+        assert!(mine.begin_move("g1", NOW + MOVE_RETRY_MS + 1), "the record went with the link");
+        assert_eq!(mine.moving("g1", &r, &all, &m, NOW), None, "a group that moved is not moved again");
+        let fresh = roster(&[("addr-m", false), ("addr-l2", true), ("addr-h", true)]);
+        assert_eq!(mine.moving("g2", &fresh, &all, &m, NOW), None, "pending invites with the newest addresses are no restart");
+    }
+
+    #[test]
+    fn a_group_that_moved_takes_the_queue_hides_behind_the_new_one_and_other_members_follow_one_live_group() {
+        let dir = std::env::temp_dir().join(format!("pukaar-chat-again-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let ((_, a), (_, me)) = (person(1), person(2));
+        let mut mine = ChatBook::load(&dir, SITE);
+        mine.start_group("g1", &[a]);
+        mine.enqueue_group("g1", "still here?", NOW).unwrap();
+        mine.succeed("g1", "g2");
+        assert_eq!(mine.next_of("g1"), Some("g2"));
+        assert!(mine.is_group("g2"));
+        assert_eq!(mine.group_targets(), ["g2"], "the message waits for the new group");
+        mine.enqueue_group("g1", "written during the move", NOW + 1).unwrap();
+        assert_eq!(mine.queued_group("g2").count(), 2, "a message to the old group goes to the new one");
+        assert_eq!(mine.waiting("g1").count(), 0);
+        mine.succeed("g2", "g4");
+        assert_eq!(mine.before("g4"), ["g1", "g2"]);
+        assert!(mine.before("g1").is_empty());
+        assert_eq!(mine.newest_group("g1"), "g4");
+        assert_eq!(mine.group_targets(), ["g4"]);
+        let again = ChatBook::load(&dir, SITE);
+        assert_eq!(again.next_of("g2"), Some("g4"), "the link is kept in the file");
+        let mut new = group_convo("g4", "Club", NOW, false);
+        new.description = None;
+        let rows = mine.threads_json(&[group_convo("g1", "Club", NOW, true), new], &BTreeMap::new(), &[a, me], &me);
+        let row = |id: &str| rows.as_array().unwrap().iter().find(|r| r["key"] == id).unwrap().clone();
+        assert_eq!(row("g1")["next"], "g2", "the screen moves from the old group to the new one");
+        assert!(row("g4")["next"].is_null());
+
+        let mut theirs = book();
+        theirs.start_group("old", &[]);
+        let after = |id: &str, old: &str, history_only| {
+            let mut c = group_convo(id, "Club", 0, history_only);
+            c.description = Some(format!("{AFTER}{old}"));
+            c
+        };
+        theirs.follow(&[after("dead", "old", true), after("evil", "someone-else", false)]);
+        assert_eq!(theirs.next_of("old"), None, "a new group that is not live, or that names a group not ours, is not followed");
+        assert!(!theirs.is_group("evil"));
+        theirs.follow(&[after("new", "old", false), after("twin", "old", false)]);
+        assert_eq!(theirs.next_of("old"), Some("new"), "the first live one wins");
+        theirs.follow(&[after("new", "old", true), after("twin", "old", false)]);
+        assert_eq!(theirs.next_of("old"), Some("twin"), "a dead link gives way to a live group");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_file_from_before_recovery_still_loads() {
+        let b: ChatBook = serde_json::from_str(r#"{"addrs":[],"links":[],"queue":[],"groups":["g1"]}"#).unwrap();
+        assert!(b.is_group("g1") && b.next_of("g1").is_none() && b.last_roster("g1").is_empty());
     }
 }

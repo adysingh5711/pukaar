@@ -6,7 +6,7 @@
 use crate::storage::call;
 use crate::{chats, now_ms};
 use logos_rust_sdk::{LogosModuleSDK, PluginProxy};
-use pukaar_logic::chatbook::{list_of, thread_messages, Convo, Member, Msg, MAX_GROUP_NAME};
+use pukaar_logic::chatbook::{list_of, thread_messages, Convo, Member, Msg, AFTER, FALLBACK_MS, MAX_GROUP_NAME};
 use pukaar_logic::event::Key;
 use pukaar_logic::node::Node;
 use serde_json::{json, Value};
@@ -28,7 +28,9 @@ const OPENING: &str = "Opening the chat with them.";
 const NO_ADDR: &str = "Their chat address has not arrived yet.";
 /// A group takes a message once the members that were added have joined (see `ChatBook::group_seen`).
 const OPENING_GROUP: &str = "Waiting for the other members to join the group.";
-const OLD_GROUP: &str = "This group is from before a restart. A member has to add you to it again before you can write.";
+const OLD_GROUP: &str = "Rejoining: you restarted, so this group moves to a new chat. Your message waits and goes to the new chat.";
+const MOVING: &str = "A member restarted, so this group moves to a new chat. Your message waits and goes to the new chat.";
+const NOBODY: &str = "Nobody else of this group is known. Make a new group instead.";
 const NOT_GROUP: &str = "That is not a group of this site.";
 /// Shown when chat, not Pukaar, created the shared Delivery node (see `delivery_adopted`).
 const OTHER_MODE: &str = "Chat started the shared Delivery node first, so it runs in the chat's setup and not in Pukaar's. Messages should work. If the site stops syncing, restart Basecamp.";
@@ -114,14 +116,19 @@ fn status_json() -> Value {
 }
 
 /// Start the module, then announce its address to the site when it is new (a new one at each start; the
-/// announce repeats from `send_queued`).
+/// announce repeats from `send_queued`). With a new address we also ask the others for theirs: they may have
+/// restarted while we were away, and Delivery does not keep their announces for us.
 pub fn ensure() -> Result<Value, String> {
     let r = chats(|node, _, _| active(node, &node.me()))
         .and_then(|()| start())
         .and_then(|st| {
             let addr = st["address"].as_str().unwrap_or_default().to_owned();
             chats(|node, book, outbox| {
-                outbox.extend(book.announce(&node.key, &node.store.site, &addr, now_ms()));
+                let (site, now) = (node.store.site, now_ms());
+                if let Some(a) = book.announce(&node.key, &site, &addr, now) {
+                    outbox.push(a);
+                    outbox.extend(book.ask(&node.key, &site, now));
+                }
                 Ok(())
             })?;
             Ok(st)
@@ -221,6 +228,7 @@ pub fn send(id: &str, text: &str) -> Result<Value, String> {
                 active(node, &node.me())?;
                 book.enqueue_group(&convo, text, now_ms())
             })?;
+            let convo = chats(|_, book, _| Ok(book.newest_group(&convo)))?;
             Ok(reply(drain_group(&convo)))
         }
     }
@@ -264,6 +272,7 @@ pub fn threads() -> Result<Value, String> {
         for (id, sender) in &senders {
             book.link_sender(id, sender);
         }
+        book.follow(&convos);
         let (members, me) = (node.approved_keys(), node.me());
         for (id, members_in) in &rosters {
             book.group_seen(id, members_in, &members, &me, now_ms());
@@ -275,6 +284,7 @@ pub fn threads() -> Result<Value, String> {
             "known": members.iter().filter(|m| book.latest(m).is_some()).map(hex::encode).collect::<Vec<_>>(),
             "chat": status_json(),
             "problem": problem,
+            "asking": book.asking(now_ms()),
         }))
     })
 }
@@ -293,8 +303,17 @@ pub fn mark_read(id: &str) -> Result<Value, String> {
 }
 
 /// The thread with a person: every conversation with them, old ones first, then what is not sent yet. Or the messages
-/// of a group, each with its sender.
+/// of a group, each with its sender, after those of the groups that it started again. An open chat also asks the
+/// others for their chat address (at most once a minute), with ours: the one who opens a chat refreshes the addresses.
 pub fn messages(id: &str) -> Result<Value, String> {
+    chats(|node, book, outbox| {
+        let site = node.store.site;
+        if let Some(ask) = book.ask(&node.key, &site, now_ms()) {
+            outbox.extend(book.resend(&node.key, &site));
+            outbox.push(ask);
+        }
+        Ok(())
+    })?;
     let p = proxy();
     let convos = conversations(&p).unwrap_or_default();
     let rows = match chat_of(id)? {
@@ -319,14 +338,21 @@ pub fn messages(id: &str) -> Result<Value, String> {
         }
         Chat::Group(convo) => {
             let old = convos.iter().any(|c| c.id == convo && c.history_only);
+            let before = chats(|_, book, _| Ok(book.before(&convo)))?;
+            let earlier: Vec<Vec<Msg>> = before.iter().map(|b| messages_of(&p, b).unwrap_or_default()).collect();
             let msgs = messages_of(&p, &convo)?;
             chats(|node, book, _| {
-                Ok(book.group_thread(
+                let mut rows: Vec<Value> = earlier
+                    .into_iter()
+                    .flat_map(|m| book.group_thread(m, &[], &node.names, true))
+                    .collect();
+                rows.extend(book.group_thread(
                     msgs,
                     &book.queued_group(&convo).collect::<Vec<_>>(),
                     &node.names,
                     old,
-                ))
+                ));
+                Ok(rows)
             })?
         }
     };
@@ -410,13 +436,79 @@ pub fn group_info(convo: &str) -> Result<Value, String> {
         if !book.is_group(convo) {
             return Err(NOT_GROUP.into());
         }
+        // a group that is read-only for us has no roster in the module: show the last one that we saw
+        let members = if members.is_empty() { book.last_roster(convo) } else { members };
+        let (me, now) = (node.me(), now_ms());
+        let mover = book.moving(convo, &members, &node.approved_keys(), &me, now);
         Ok(json!({
             "ok": true,
             "name": c.as_ref().and_then(|c| c.name.as_deref()),
             "history_only": c.as_ref().is_some_and(|c| c.history_only),
             "members": book.roster_json(convo, &members, &node.names),
+            "mover": mover.map(|(w, _)| hex::encode(w)),
+            "mover_name": mover.and_then(|(w, _)| node.names.get(&w)),
+            "mover_me": mover.is_some_and(|(w, _)| w == me),
+            "fallback": mover.is_some_and(|(_, at)| now >= at + FALLBACK_MS),
+            "next": book.next_of(convo),
         }))
     })
+}
+
+/// Start a group again by hand: the fallback when the member who moves it (`ChatBook::moving`) has not done it in
+/// time, or when we never saw its roster. A new group that exists already is opened, not made twice. `{"ok":true,"convo"}`.
+pub fn group_again(convo: &str) -> Result<Value, String> {
+    let p = proxy();
+    let live = conversations(&p)?;
+    let c = live
+        .iter()
+        .find(|c| c.id == convo && c.kind == "group")
+        .ok_or(NOT_GROUP)?;
+    let done = chats(|node, book, _| {
+        if !book.is_group(convo) {
+            return Err(NOT_GROUP.into());
+        }
+        active(node, &node.me())?;
+        book.follow(&live);
+        if book.next_of(convo).is_some() {
+            return Ok(Some(book.newest_group(convo)));
+        }
+        if !book.begin_move(convo, now_ms()) {
+            return Err("The group is moving to a new chat now. Wait a moment.".into());
+        }
+        Ok(None)
+    })?;
+    let next = match done {
+        Some(next) => next,
+        None => move_group(&p, c)?,
+    };
+    Ok(json!({ "ok": true, "convo": next }))
+}
+
+/// Move the group `c` to a new group with the same name and the same active members, and its description naming the
+/// old group. A member whose address is not known waits on the invite list of the new group. The old conversation
+/// stays in the module as history: the thread shows it above the new one. Gives the new group's id.
+fn move_group(p: &PluginProxy, c: &Convo) -> Result<String, String> {
+    let senders: Vec<String> = messages_of(p, &c.id)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|m| m.sender)
+        .collect();
+    let who = chats(|node, book, _| Ok(book.old_members(&c.id, &senders, &node.approved_keys(), &node.me())))?;
+    if who.is_empty() {
+        return Err(NOBODY.into());
+    }
+    let name = c.name.as_deref().unwrap_or("Group");
+    let next = call(p, "create_group_conversation", json!([name, format!("{AFTER}{}", c.id)]), CALL)?
+        .as_str()
+        .ok_or("chat_module gave no conversation id")?
+        .to_owned();
+    chats(|_, book, _| {
+        book.start_group(&next, &who);
+        book.succeed(&c.id, &next);
+        Ok(())
+    })?;
+    let _ = invite_due(); // what cannot go now stays on the list
+    Ok(next)
 }
 
 /// Only one round of invites runs at a time, so a member is never added twice.
@@ -444,17 +536,43 @@ fn invite_due() -> Result<usize, String> {
     failed.map_or(Ok(added), Err)
 }
 
-/// A member that restarted has a new chat address that the groups do not have. Keep them to be added again (see
-/// `ChatBook::readd`). The roster of each live group is read once for each round.
-fn readd_restarted() {
+/// Recovery after a restart (chat-module.md, "Recovery scenarios"), once for each round: link the groups that a
+/// member moved, try the cheap re-add (`ChatBook::readd`), and move a group to a new one when we are its mover and its
+/// time has come (`ChatBook::moving`). The roster of each live group of ours is read once.
+fn recover() {
     let p = proxy();
     let Ok(live) = conversations(&p) else { return };
-    for c in live.iter().filter(|c| c.kind == "group" && !c.history_only) {
-        let Ok(members) = roster(&p, &c.id) else { continue };
-        let _ = chats(|node, book, _| {
-            book.readd(&c.id, &members, &node.approved_keys(), &node.me());
-            Ok(())
-        });
+    let _ = chats(|_, book, _| {
+        book.follow(&live);
+        Ok(())
+    });
+    for c in live.iter().filter(|c| c.kind == "group") {
+        if !chats(|_, book, _| Ok(book.is_group(&c.id))).unwrap_or(false) {
+            continue;
+        }
+        let members_in = if c.history_only {
+            None
+        } else {
+            let Ok(r) = roster(&p, &c.id) else { continue };
+            Some(r)
+        };
+        let now = now_ms();
+        let go = chats(|node, book, _| {
+            let (members, me) = (node.approved_keys(), node.me());
+            let r = match &members_in {
+                Some(r) => {
+                    book.readd(&c.id, r, &members, &me);
+                    r.clone()
+                }
+                None => book.last_roster(&c.id),
+            };
+            let due = book.moving(&c.id, &r, &members, &me, now).is_some_and(|(by, at)| by == me && now >= at);
+            Ok(due && book.begin_move(&c.id, now))
+        })
+        .unwrap_or(false);
+        if go {
+            let _ = move_group(&p, c); // a failure is tried again after `MOVE_RETRY_MS`
+        }
     }
 }
 
@@ -475,6 +593,10 @@ fn drain_group(convo: &str) -> Result<usize, String> {
         return Err(OLD_GROUP.into());
     }
     let members = roster(&p, convo)?;
+    // while the group waits to move, a message would not reach the member who restarted: it waits for the new group
+    if chats(|node, book, _| Ok(book.moving(convo, &members, &node.approved_keys(), &node.me(), now_ms()).is_some()))? {
+        return Err(MOVING.into());
+    }
     if !chats(|node, book, _| {
         Ok(book.group_seen(convo, &members, &node.approved_keys(), &node.me(), now_ms()))
     })? {
@@ -508,7 +630,7 @@ pub fn tick() {
             for who in chats(|_, book, _| Ok(book.queue_targets())).unwrap_or_default() {
                 let _ = drain(&who); // a failure leaves the message queued for the next round
             }
-            readd_restarted();
+            recover();
             let _ = invite_due();
             for convo in chats(|_, book, _| Ok(book.group_targets())).unwrap_or_default() {
                 let _ = drain_group(&convo);

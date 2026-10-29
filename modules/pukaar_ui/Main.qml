@@ -73,6 +73,8 @@ Item {
     function applyChat(c) {
         if (!c || !Array.isArray(c.threads)) return
         chat = c
+        // the open group was started again: show the new group, which holds the old messages too
+        if (page === "messages" && chatThread.next) { openChat(chatThread.next); return }
         // the open thread is read: clear its dot (the next poll shows the new flag)
         if (page === "messages" && c.threads.some(function (t) { return t.key === chatWith && t.unread }))
             call("chat_mark_read", [chatWith], function () {})
@@ -4617,7 +4619,8 @@ Item {
                     id: chatPage
                     enabled: !root.syncing
                     spacing: 8
-                    readonly property var threads: root.chat.threads || []
+                    // a group that was started again is not listed: the new group shows its messages
+                    readonly property var threads: (root.chat.threads || []).filter(function (t) { return !t.next })
                     readonly property var known: root.chat.known || []
                     readonly property var link: root.chat.chat || ({})          // {ok, status} or {ok: false, error | starting}
                     readonly property var st: link.status || ({})
@@ -4840,9 +4843,22 @@ Item {
                                     when: root.chatGroup && chatPage.joining > 0 && !chatPage.showMembers; delay: 3000
                                     text: "Some members have not joined yet. This can take a minute or two. A member who joins later does not see the messages sent before."
                                 }
-                                Flash {
-                                    when: chatPage.readOnly; delay: 3000; tone: "warn"; icon: "warn"
-                                    text: "This group is from before a restart. You can read it, and you cannot write in it until a member adds you again."
+                                Help {   // the one who opens a chat asks the online members for their current chat address
+                                    when: !!root.chat.asking && (chatPage.readOnly || (!root.chatGroup && !chatPage.hasAddress))
+                                    text: "Asking the online members for their chat address."
+                                }
+                                Flash {   // a member restarted: the group moves to a new chat by itself (chat-module.md, "Recovery scenarios")
+                                    readonly property bool moving: !!root.groupInfo.mover
+                                    readonly property string mover: moving ? root.who(root.groupInfo.mover, root.groupInfo.mover_name) : ""
+                                    when: chatPage.readOnly || moving; delay: 3000; tone: "warn"; icon: "warn"
+                                    text: !moving ? "You restarted, so this group is read-only for you. Start the group again to keep writing."
+                                          : root.groupInfo.mover_me ? "A member restarted, so this group moves to a new chat soon. Your messages wait and go to the new chat."
+                                          : "Rejoining: " + mover + " is moving this group to a new chat, because a member restarted. Your messages wait and go to the new chat. This page switches to it by itself."
+                                            + (root.groupInfo.fallback ? " " + mover + " has not done it yet. You can start the group again yourself." : "")
+                                    buttonText: !moving || root.groupInfo.fallback === true ? "Start again" : ""
+                                    buttonName: "Start the group again with the same members"
+                                    buttonEffect: "This makes a new group with the same name and members. The old messages stay above the new ones."
+                                    onActivated: chatPage.startAgain()
                                 }
                                 ColumnLayout {   // the members of the group, and a list to add more from
                                     visible: chatPage.membersShown
@@ -4947,6 +4963,13 @@ Item {
                                         text: "Send"; kind: "primary"
                                         allowed: draft.text.trim() !== "" && !chatPage.readOnly
                                         Accessible.name: "Send the message to " + chatPage.currentName
+                    // a group that is read-only after our restart: a new group with the same name and members takes its place
+                    function startAgain() {
+                        root.run("chat_group_again", [root.chatWith], function (r) {
+                            root.notice = "The group is started again. The other members are added as soon as their chat address is known, and join within a minute or two."
+                            root.call("chat_threads", [], function (c) { root.applyChat(c); root.openChat(r.convo) })
+                        })
+                    }
                                         onClicked: chatPage.send()
                                     }
                                 }

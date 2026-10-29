@@ -204,9 +204,16 @@ pub trait PukaarCoreModule: Send + 'static {
     /// Adds active members (keys, separated by commas) to a group of the site; the ones in it already are skipped.
     /// `{"ok":true}`, or `error: …`.
     fn chat_group_add(&mut self, convo: String, members_hex: String) -> String;
-    /// A group for its header: `{"ok":true,"name","history_only","members":[{"key","name","me","pending"}]}`. A member
-    /// that waits for their chat address, or for the group to commit the add, is `pending`.
+    /// A group for its header: `{"ok":true,"name","history_only","members":[{"key","name","me","pending"}],"mover",
+    /// "mover_name","mover_me","fallback","next"}`. A member that waits for their chat address, or for the group to commit
+    /// the add, is `pending`. When a member restarted, the group moves to a new group by itself: `mover` is the member
+    /// who does it (null when nothing is to do), `fallback` is true when they did not do it in time, and `next` is the new
+    /// group once it exists.
     fn chat_group_info(&mut self, convo: String) -> String;
+    /// Starts a group again by hand, the fallback when its mover did not act: a new group with the same name and the same
+    /// active members, linked to the old one. A new group that exists already is given back, not made twice.
+    /// `{"ok":true,"convo"}`, or `error: …`.
+    fn chat_group_again(&mut self, convo: String) -> String;
     fn on_context_ready(&mut self, _ctx: &RustModuleContext) {}
 }
 
@@ -705,6 +712,11 @@ fn on_wire(channel: &str, bytes: &[u8]) {
         Some(Wire::ChatAddr(m)) => {
             let (site, members) = (node.store.site, node.approved_keys());
             chats.for_site(dir, &site).on_addr(&site, &m, &members);
+        }
+        // A member came online and asks for the addresses: ours goes out again.
+        Some(Wire::ChatAsk(m)) => {
+            let (site, members) = (node.store.site, node.approved_keys());
+            outbox.extend(chats.for_site(dir, &site).on_ask(&node.key, &site, &m, &members, now_ms()));
         }
         // Only recorded: `site_info.chain.pending_peers` shows it for a while.
         Some(Wire::ChainPending { tx, kind }) => {
@@ -1445,6 +1457,10 @@ impl PukaarCoreModule for Pukaar {
 
     fn chat_group_info(&mut self, convo: String) -> String {
         chat::group_info(&convo).map_or_else(err, |v| v.to_string())
+    }
+
+    fn chat_group_again(&mut self, convo: String) -> String {
+        chat::group_again(&convo).map_or_else(err, |v| v.to_string())
     }
 
     fn meet_restore(&mut self, cid: String) -> String {
