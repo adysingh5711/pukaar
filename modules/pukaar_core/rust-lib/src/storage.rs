@@ -76,11 +76,15 @@ impl Events {
         let end = Instant::now() + limit;
         let mut q = self.queue.lock().unwrap();
         loop {
-            let hit = q.iter().position(|(k, v)| *k == kind && (sid.is_empty() || v["sessionId"].as_str().is_none_or(|s| s == sid)));
+            let hit = q.iter().position(|(k, v)| {
+                *k == kind && (sid.is_empty() || v["sessionId"].as_str().is_none_or(|s| s == sid))
+            });
             if let Some(i) = hit {
                 return Ok(q.remove(i).1);
             }
-            let left = end.checked_duration_since(Instant::now()).ok_or("timed out waiting for Storage")?;
+            let left = end
+                .checked_duration_since(Instant::now())
+                .ok_or("timed out waiting for Storage")?;
             q = self.arrived.wait_timeout(q, left).unwrap().0;
         }
     }
@@ -88,7 +92,11 @@ impl Events {
 
 /// The payload of a Storage event: one JSON string (LIDL: `payload: tstr`), or already an object.
 fn payload(ev: &EventData) -> Option<Value> {
-    let first = ev.data.as_array().and_then(|a| a.first()).unwrap_or(&ev.data);
+    let first = ev
+        .data
+        .as_array()
+        .and_then(|a| a.first())
+        .unwrap_or(&ev.data);
     match first {
         Value::String(s) => serde_json::from_str(s).ok(),
         Value::Object(_) => Some(first.clone()),
@@ -109,8 +117,15 @@ fn truthy(v: &Value) -> bool {
     matches!(v, Value::Bool(true)) || matches!(v.get("value"), Some(Value::Bool(true)))
 }
 
-pub(crate) fn call(p: &PluginProxy, method: &str, args: Value, limit: Duration) -> Result<Value, String> {
-    let r = p.call_json_with_timeout(method, &args, limit).map_err(|e: LogosError| format!("{method}: {e}"))?;
+pub(crate) fn call(
+    p: &PluginProxy,
+    method: &str,
+    args: Value,
+    limit: Duration,
+) -> Result<Value, String> {
+    let r = p
+        .call_json_with_timeout(method, &args, limit)
+        .map_err(|e: LogosError| format!("{method}: {e}"))?;
     value_of(r).map_err(|e| format!("{method}: {e}"))
 }
 
@@ -126,13 +141,16 @@ fn next_wait(last: Option<Duration>) -> Duration {
 /// The config of this node: `base` (what the module loaded) with its own data dir, a free listen
 /// port and no REST or metrics server, then the keys of `over` (`PUKAAR_STORAGE_CFG`).
 fn node_config(mut base: Value, data_dir: &Path, over: Option<&str>) -> Result<Value, String> {
-    let o = base.as_object_mut().ok_or("loadConfigOrDefault: not an object")?;
+    let o = base
+        .as_object_mut()
+        .ok_or("loadConfigOrDefault: not an object")?;
     o.insert("data-dir".into(), json!(data_dir.to_string_lossy()));
     o.insert("listen-port".into(), json!(0));
     o.remove("api-bindaddr");
     o.remove("metrics");
     if let Some(over) = over {
-        let over: Value = serde_json::from_str(over).map_err(|e| format!("PUKAAR_STORAGE_CFG: {e}"))?;
+        let over: Value =
+            serde_json::from_str(over).map_err(|e| format!("PUKAAR_STORAGE_CFG: {e}"))?;
         for (k, v) in over.as_object().into_iter().flatten() {
             o.insert(k.clone(), v.clone());
         }
@@ -159,7 +177,11 @@ fn keep_file<T>(path: &Path, f: impl FnOnce() -> T) -> T {
 /// The file that `init` writes: `$HOME/.logos_storage/config.json`.
 fn user_config_file() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").filter(|h| !h.is_empty())?;
-    Some(PathBuf::from(home).join(".logos_storage").join("config.json"))
+    Some(
+        PathBuf::from(home)
+            .join(".logos_storage")
+            .join("config.json"),
+    )
 }
 
 /// The proxy and the events. `ready` is true once `init` and `start` worked. The subscriptions are
@@ -208,8 +230,13 @@ impl Client {
     fn subscribe() -> Result<Client, String> {
         let mut proxy = LogosModuleSDK::new().plugin(MODULE);
         let events = Arc::new(Events::default());
-        for (name, kind) in [("storageUploadDone", "upload"), ("storageDownloadDone", "download")] {
-            let sub = proxy.on(name).map_err(|e| format!("subscribe {name}: {e}"))?;
+        for (name, kind) in [
+            ("storageUploadDone", "upload"),
+            ("storageDownloadDone", "download"),
+        ] {
+            let sub = proxy
+                .on(name)
+                .map_err(|e| format!("subscribe {name}: {e}"))?;
             let events = events.clone();
             std::thread::spawn(move || {
                 for ev in sub {
@@ -219,7 +246,13 @@ impl Client {
                 }
             });
         }
-        Ok(Client { proxy, events, ready: false, hold: None, wait: None })
+        Ok(Client {
+            proxy,
+            events,
+            ready: false,
+            hold: None,
+            wait: None,
+        })
     }
 
     /// Load the config, `init`, `start`, and wait until the node runs. `init` refuses a second
@@ -227,12 +260,18 @@ impl Client {
     fn bring_up(&mut self, data_dir: &Path) -> Result<(), String> {
         let p = &self.proxy;
         let base = match call(p, "loadConfigOrDefault", json!([]), CALL)? {
-            Value::String(s) => serde_json::from_str(&s).map_err(|e| format!("loadConfigOrDefault: {e}"))?,
+            Value::String(s) => {
+                serde_json::from_str(&s).map_err(|e| format!("loadConfigOrDefault: {e}"))?
+            }
             v => v,
         };
         let data = data_dir.join("storage");
         std::fs::create_dir_all(&data).map_err(|e| format!("{}: {e}", data.display()))?;
-        let cfg = node_config(base, &data, std::env::var("PUKAAR_STORAGE_CFG").ok().as_deref())?;
+        let cfg = node_config(
+            base,
+            &data,
+            std::env::var("PUKAAR_STORAGE_CFG").ok().as_deref(),
+        )?;
         // A refused `init` answers a bare `false`, and the module writes the reason only to its log
         // (seen: a config key it does not know, or a data dir that another node holds). The node may
         // also be set up by another module, so go on to `start`, which then reports the failure.
@@ -245,16 +284,38 @@ impl Client {
         match init {
             Ok(v) if !matches!(v, Value::Bool(false)) => {}
             Err(e) if e.contains("already") => {}
-            Ok(_) => note = format!("init was refused (see the storage_module log; data dir {})", data.display()),
+            Ok(_) => {
+                note = format!(
+                    "init was refused (see the storage_module log; data dir {})",
+                    data.display()
+                )
+            }
             Err(e) => note = e,
         }
         if matches!(call(p, "start", json!([]), START)?, Value::Bool(false)) {
-            return Err(format!("storage start was refused{}", if note.is_empty() { String::new() } else { format!(": {note}") }));
+            return Err(format!(
+                "storage start was refused{}",
+                if note.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {note}")
+                }
+            ));
         }
         let end = Instant::now() + START;
-        while !truthy(&p.call_json_with_timeout("isRunning", &json!([]), CALL).map_err(|e| format!("isRunning: {e}"))?) {
+        while !truthy(
+            &p.call_json_with_timeout("isRunning", &json!([]), CALL)
+                .map_err(|e| format!("isRunning: {e}"))?,
+        ) {
             if Instant::now() > end {
-                return Err(format!("the Storage node did not start{}", if note.is_empty() { String::new() } else { format!(": {note}") }));
+                return Err(format!(
+                    "the Storage node did not start{}",
+                    if note.is_empty() {
+                        String::new()
+                    } else {
+                        format!(": {note}")
+                    }
+                ));
             }
             std::thread::sleep(Duration::from_millis(500));
         }
@@ -265,18 +326,28 @@ impl Client {
 
 impl LogosStore {
     pub fn new(dir: PathBuf) -> LogosStore {
-        LogosStore { dir, seq: AtomicU64::new(0), node: Mutex::new(None) }
+        LogosStore {
+            dir,
+            seq: AtomicU64::new(0),
+            node: Mutex::new(None),
+        }
     }
 
     /// `patient` false: do not queue behind a transfer or a start of another thread. The write thread
     /// then answers "busy" at once, and the queue tries again at its next tick.
-    fn with_node<T>(&self, patient: bool, f: impl FnOnce(&PluginProxy, &Events) -> Result<T, String>) -> Result<T, String> {
+    fn with_node<T>(
+        &self,
+        patient: bool,
+        f: impl FnOnce(&PluginProxy, &Events) -> Result<T, String>,
+    ) -> Result<T, String> {
         let mut guard = if patient {
             self.node.lock().unwrap()
         } else {
             match self.node.try_lock() {
                 Ok(g) => g,
-                Err(TryLockError::WouldBlock) => return Err("Storage is busy with another transfer, will try again".into()),
+                Err(TryLockError::WouldBlock) => {
+                    return Err("Storage is busy with another transfer, will try again".into())
+                }
                 Err(TryLockError::Poisoned(p)) => p.into_inner(),
             }
         };
@@ -308,7 +379,11 @@ impl LogosStore {
     fn temp(&self, tag: &str) -> Result<PathBuf, String> {
         let dir = self.dir.join("storage-tmp");
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        Ok(dir.join(format!("{tag}-{}-{}", std::process::id(), self.seq.fetch_add(1, Ordering::Relaxed))))
+        Ok(dir.join(format!(
+            "{tag}-{}-{}",
+            std::process::id(),
+            self.seq.fetch_add(1, Ordering::Relaxed)
+        )))
     }
 }
 
@@ -318,11 +393,19 @@ impl Store for LogosStore {
         std::fs::write(&path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
         let r = self.with_node(true, |p, ev| {
             ev.clear("upload");
-            let sid = call(p, "uploadUrl", json!([path.to_string_lossy(), CHUNK, true]), CALL)?;
+            let sid = call(
+                p,
+                "uploadUrl",
+                json!([path.to_string_lossy(), CHUNK, true]),
+                CALL,
+            )?;
             let done = ev.wait("upload", sid.as_str().unwrap_or(""), TRANSFER)?;
             match (done["success"].as_bool(), done["cid"].as_str()) {
                 (Some(true), Some(cid)) | (None, Some(cid)) => Ok(cid.to_string()),
-                _ => Err(format!("upload: {}", done["error"].as_str().unwrap_or("no CID in the answer"))),
+                _ => Err(format!(
+                    "upload: {}",
+                    done["error"].as_str().unwrap_or("no CID in the answer")
+                )),
             }
         });
         let _ = std::fs::remove_file(&path);
@@ -343,10 +426,22 @@ impl LogosStore {
         let path = self.temp("down")?;
         let r = self.with_node(patient, |p, ev| {
             ev.clear("download");
-            let sid = call(p, "downloadToUrl", json!([cid, path.to_string_lossy(), false, CHUNK, false, true]), CALL)?;
-            let done = ev.wait("download", sid.as_str().unwrap_or(""), if patient { TRANSFER } else { QUICK })?;
+            let sid = call(
+                p,
+                "downloadToUrl",
+                json!([cid, path.to_string_lossy(), false, CHUNK, false, true]),
+                CALL,
+            )?;
+            let done = ev.wait(
+                "download",
+                sid.as_str().unwrap_or(""),
+                if patient { TRANSFER } else { QUICK },
+            )?;
             if done["success"].as_bool() == Some(false) {
-                return Err(format!("download {cid}: {}", done["error"].as_str().unwrap_or("failed")));
+                return Err(format!(
+                    "download {cid}: {}",
+                    done["error"].as_str().unwrap_or("failed")
+                ));
             }
             std::fs::read(&path).map_err(|e| format!("download {cid}: {e}"))
         });
@@ -376,9 +471,19 @@ mod tests {
 
     #[test]
     fn env_override_wins_and_bad_json_is_an_error() {
-        let c = node_config(base(), Path::new("/m/s"), Some(r#"{"data-dir":"/t","nat":"extip:1.2.3.4"}"#)).unwrap();
-        assert_eq!((c["data-dir"].as_str(), c["nat"].as_str()), (Some("/t"), Some("extip:1.2.3.4")));
-        assert!(node_config(base(), Path::new("/m/s"), Some("{")).unwrap_err().starts_with("PUKAAR_STORAGE_CFG"));
+        let c = node_config(
+            base(),
+            Path::new("/m/s"),
+            Some(r#"{"data-dir":"/t","nat":"extip:1.2.3.4"}"#),
+        )
+        .unwrap();
+        assert_eq!(
+            (c["data-dir"].as_str(), c["nat"].as_str()),
+            (Some("/t"), Some("extip:1.2.3.4"))
+        );
+        assert!(node_config(base(), Path::new("/m/s"), Some("{"))
+            .unwrap_err()
+            .starts_with("PUKAAR_STORAGE_CFG"));
         assert!(node_config(json!("x"), Path::new("/m/s"), None).is_err());
     }
 
@@ -389,12 +494,25 @@ mod tests {
         let (ready, error) = status();
         let mut s = json!({ "pending": 0, "error": null });
         merge_status(&mut s, ready, error);
-        assert_eq!((s["ready"].as_bool(), s["error"].as_str()), (Some(false), Some("storage start was refused (next try in 5 s)")));
+        assert_eq!(
+            (s["ready"].as_bool(), s["error"].as_str()),
+            (
+                Some(false),
+                Some("storage start was refused (next try in 5 s)")
+            )
+        );
         note_bring_up(&Ok(()));
         let (ready, error) = status();
         let mut s = json!({ "pending": 2, "error": null });
         merge_status(&mut s, ready, error);
-        assert_eq!((s["ready"].as_bool(), s["pending"].as_u64(), s["error"].is_null()), (Some(true), Some(2), true));
+        assert_eq!(
+            (
+                s["ready"].as_bool(),
+                s["pending"].as_u64(),
+                s["error"].is_null()
+            ),
+            (Some(true), Some(2), true)
+        );
         let mut s = json!({ "pending": 1, "error": "storage: download failed" });
         merge_status(&mut s, false, Some("old".into()));
         assert_eq!(s["error"], "storage: download failed");
@@ -402,7 +520,11 @@ mod tests {
 
     #[test]
     fn wait_grows_to_one_minute() {
-        let w: Vec<u64> = std::iter::successors(Some(next_wait(None)), |w| Some(next_wait(Some(*w)))).take(6).map(|d| d.as_secs()).collect();
+        let w: Vec<u64> =
+            std::iter::successors(Some(next_wait(None)), |w| Some(next_wait(Some(*w))))
+                .take(6)
+                .map(|d| d.as_secs())
+                .collect();
         assert_eq!(w, [5, 10, 20, 40, 60, 60]);
     }
 

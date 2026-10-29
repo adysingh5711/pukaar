@@ -42,8 +42,17 @@ pub struct WalletWriter {
 impl WalletWriter {
     /// `dir` holds `wallet_config.json` only. `rpc` is the URL of the sequencer.
     pub fn new(dir: PathBuf, rpc: String) -> WalletWriter {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("tokio runtime");
-        WalletWriter { dir, rpc, rt, wallet: Mutex::new(None), last_error: Mutex::new(String::new()) }
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        WalletWriter {
+            dir,
+            rpc,
+            rt,
+            wallet: Mutex::new(None),
+            last_error: Mutex::new(String::new()),
+        }
     }
 
     /// The last error of a send or a poll, for the status text. Empty when there was none.
@@ -56,8 +65,15 @@ impl WalletWriter {
         e
     }
 
-    fn run<T, E: std::fmt::Display>(&self, limit: Duration, f: impl Future<Output = Result<T, E>>) -> Result<T, String> {
-        match self.rt.block_on(async { tokio::time::timeout(limit, f).await }) {
+    fn run<T, E: std::fmt::Display>(
+        &self,
+        limit: Duration,
+        f: impl Future<Output = Result<T, E>>,
+    ) -> Result<T, String> {
+        match self
+            .rt
+            .block_on(async { tokio::time::timeout(limit, f).await })
+        {
             Ok(Ok(v)) => Ok(v),
             Ok(Err(e)) => Err(self.fail(format!("{e:#}"))),
             Err(_) => Err(self.fail("timed out".into())),
@@ -74,28 +90,44 @@ impl WalletWriter {
             ..Default::default()
         };
         // The mnemonic of this throw-away wallet is not used: the only key is the one we import.
-        WalletCore::new_init_storage(self.dir.join("wallet_config.json"), self.dir.join("storage.json"), Some(overrides), "")
-            .map(|(w, _)| w)
-            .map_err(|e| format!("wallet start failed: {e:#}"))
+        WalletCore::new_init_storage(
+            self.dir.join("wallet_config.json"),
+            self.dir.join("storage.json"),
+            Some(overrides),
+            "",
+        )
+        .map(|(w, _)| w)
+        .map_err(|e| format!("wallet start failed: {e:#}"))
     }
 
     #[cfg(test)]
     fn has_key(&self, id: [u8; 32]) -> bool {
         let g = self.wallet.lock().unwrap();
-        g.as_ref().is_some_and(|w| w.get_account_public_signing_key(AccountId::new(id)).is_some())
+        g.as_ref().is_some_and(|w| {
+            w.get_account_public_signing_key(AccountId::new(id))
+                .is_some()
+        })
     }
 }
 
 impl ChainWriter for WalletWriter {
     fn import_key(&self, secret_hex: &str) -> Result<(), String> {
-        let sk: [u8; 32] = hex::decode(secret_hex).ok().and_then(|b| b.try_into().ok()).ok_or("key import failed: the key is not 64 hex characters")?;
-        let sk = lee::PrivateKey::try_new(sk).map_err(|_| "key import failed: not a valid secp256k1 key".to_string())?;
+        let sk: [u8; 32] = hex::decode(secret_hex)
+            .ok()
+            .and_then(|b| b.try_into().ok())
+            .ok_or("key import failed: the key is not 64 hex characters")?;
+        let sk = lee::PrivateKey::try_new(sk)
+            .map_err(|_| "key import failed: not a valid secp256k1 key".to_string())?;
         let mut g = self.wallet.lock().unwrap();
         if g.is_none() {
             *g = Some(self.build()?);
         }
         // Importing the same key twice replaces the same entry.
-        g.as_mut().unwrap().storage_mut().key_chain_mut().add_imported_public_account(sk);
+        g.as_mut()
+            .unwrap()
+            .storage_mut()
+            .key_chain_mut()
+            .add_imported_public_account(sk);
         Ok(())
     }
 
@@ -108,12 +140,24 @@ impl ChainWriter for WalletWriter {
                 .iter()
                 .map(|m| {
                     let id = AccountId::new(m.id);
-                    let who = if m.sign { AccountIdentity::Public(id) } else { AccountIdentity::PublicNoSign(id) };
+                    let who = if m.sign {
+                        AccountIdentity::Public(id)
+                    } else {
+                        AccountIdentity::PublicNoSign(id)
+                    };
                     who.select_program_shard(AccountId::new(m.shard))
                 })
                 .collect();
-            let send = w.send_pub_tx_paid_by(mentions, tx.ix.clone(), AccountId::new(tx.program), Some(AccountId::new(tx.payer)));
-            match self.rt.block_on(async { tokio::time::timeout(SEND, send).await }) {
+            let send = w.send_pub_tx_paid_by(
+                mentions,
+                tx.ix.clone(),
+                AccountId::new(tx.program),
+                Some(AccountId::new(tx.payer)),
+            );
+            match self
+                .rt
+                .block_on(async { tokio::time::timeout(SEND, send).await })
+            {
                 Ok(Ok(h)) => return Ok(h.to_string()),
                 // The wallet reads accounts from the sequencer BEFORE it submits, so nothing was sent: a try is safe.
                 // Any other error, and a timeout, may come after the submit and is never tried again.
@@ -130,7 +174,9 @@ impl ChainWriter for WalletWriter {
 
     fn poll(&self, tx_hash: &str) -> Poll {
         let g = self.wallet.lock().unwrap();
-        let (Some(w), Ok(hash)) = (g.as_ref(), tx_hash.parse()) else { return Poll::Pending };
+        let (Some(w), Ok(hash)) = (g.as_ref(), tx_hash.parse()) else {
+            return Poll::Pending;
+        };
         // Some = in a block, None = not yet. An error is "not yet" and is kept in `last_error`.
         match self.run(POLL, w.get_transaction(hash)) {
             Ok(Some(_)) => Poll::Included,
@@ -148,7 +194,10 @@ mod tests {
 
     /// A fresh temp folder for `wallet_config.json`, removed by the test.
     fn temp() -> PathBuf {
-        let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let n = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         std::env::temp_dir().join(format!("pukaar-wallet-test-{}-{n}", std::process::id()))
     }
 
@@ -168,10 +217,19 @@ mod tests {
         w.import_key(&hex_sk).unwrap();
         w.import_key(&hex_sk).unwrap();
         let id = lez_account_id(&sk);
-        assert_eq!(bs58::encode(id).into_string(), "AVi7Fm67WkAqJwLVD7PeA7KisBNuA2o6ew1CxmdtGrGP");
-        assert!(w.has_key(id), "the wallet holds no key for the account of lezkey");
+        assert_eq!(
+            bs58::encode(id).into_string(),
+            "AVi7Fm67WkAqJwLVD7PeA7KisBNuA2o6ew1CxmdtGrGP"
+        );
+        assert!(
+            w.has_key(id),
+            "the wallet holds no key for the account of lezkey"
+        );
         assert!(!w.has_key([7; 32]));
-        assert!(!dir.join("storage.json").exists(), "the key must not reach the disk");
+        assert!(
+            !dir.join("storage.json").exists(),
+            "the key must not reach the disk"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -181,10 +239,28 @@ mod tests {
         let w = WalletWriter::new(dir.clone(), "http://127.0.0.1:1".into());
         let (sk, hex_sk) = seed_key();
         assert!(w.import_key("zz").is_err());
-        assert!(w.send(&Tx { program: [1; 32], ix: vec![], accounts: vec![], payer: [2; 32] }).is_err(), "no key yet");
+        assert!(
+            w.send(&Tx {
+                program: [1; 32],
+                ix: vec![],
+                accounts: vec![],
+                payer: [2; 32]
+            })
+            .is_err(),
+            "no key yet"
+        );
         w.import_key(&hex_sk).unwrap();
         let me = lez_account_id(&sk);
-        let tx = Tx { program: [1; 32], ix: vec![0], accounts: vec![Mention { id: me, sign: true, shard: [1; 32] }], payer: me };
+        let tx = Tx {
+            program: [1; 32],
+            ix: vec![0],
+            accounts: vec![Mention {
+                id: me,
+                sign: true,
+                shard: [1; 32],
+            }],
+            payer: me,
+        };
         let t = Instant::now();
         let err = w.send(&tx).unwrap_err();
         assert!(err.starts_with("send failed: ") && err.len() > 14, "{err}");

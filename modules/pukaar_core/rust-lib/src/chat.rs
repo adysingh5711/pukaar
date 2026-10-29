@@ -43,7 +43,10 @@ fn start() -> Result<Value, String> {
     let p = proxy();
     call(&p, "init", json!([{ "delivery_preset": PRESET }]), CALL)?;
     let address = call(&p, "get_address", json!([]), CALL)?;
-    let address = address.as_str().filter(|a| !a.is_empty()).ok_or("chat_module has no address yet")?;
+    let address = address
+        .as_str()
+        .filter(|a| !a.is_empty())
+        .ok_or("chat_module has no address yet")?;
     let status = call(&p, "status", json!([]), CALL)?;
     let adopted = status["delivery_adopted"].as_bool().unwrap_or(false);
     Ok(json!({
@@ -57,15 +60,18 @@ fn start() -> Result<Value, String> {
 }
 
 fn conversations(p: &PluginProxy) -> Result<Vec<Convo>, String> {
-    list_of(call(p, "list_conversations", json!([]), CALL)?).map_err(|e| format!("list_conversations: {e}"))
+    list_of(call(p, "list_conversations", json!([]), CALL)?)
+        .map_err(|e| format!("list_conversations: {e}"))
 }
 
 fn messages_of(p: &PluginProxy, convo: &str) -> Result<Vec<Msg>, String> {
-    list_of(call(p, "get_messages", json!([convo]), CALL)?).map_err(|e| format!("get_messages: {e}"))
+    list_of(call(p, "get_messages", json!([convo]), CALL)?)
+        .map_err(|e| format!("get_messages: {e}"))
 }
 
 fn roster(p: &PluginProxy, convo: &str) -> Result<Vec<Member>, String> {
-    list_of(call(p, "list_group_members", json!([convo]), CALL)?).map_err(|e| format!("list_group_members: {e}"))
+    list_of(call(p, "list_group_members", json!([convo]), CALL)?)
+        .map_err(|e| format!("list_group_members: {e}"))
 }
 
 /// A thread of the chat list is a person (its key) or a group (its conversation id).
@@ -96,7 +102,11 @@ fn active(node: &Node, who: &Key) -> Result<(), String> {
 static STATUS: Mutex<Option<Result<Value, String>>> = Mutex::new(None);
 
 fn status_json() -> Value {
-    match STATUS.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
+    match STATUS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_ref()
+    {
         Some(Ok(v)) => json!({ "ok": true, "status": v }),
         Some(Err(e)) => json!({ "ok": false, "error": e }),
         None => json!({ "ok": false, "starting": true }),
@@ -141,18 +151,27 @@ fn drain(who: &Key) -> Result<usize, String> {
         active(node, who)?;
         let addr = book.latest(who).ok_or(NO_ADDR)?.to_owned();
         let known: Vec<String> = book.convos_for(who, &addr).map(str::to_owned).collect();
-        Ok((addr, book.queued(who).map(|q| q.text.clone()).collect::<Vec<_>>(), known))
+        Ok((
+            addr,
+            book.queued(who).map(|q| q.text.clone()).collect::<Vec<_>>(),
+            known,
+        ))
     })?;
     if texts.is_empty() {
         return Ok(0);
     }
     let p = proxy();
     let live = conversations(&p)?;
-    let usable = known.into_iter().find(|id| live.iter().any(|c| c.id == *id && !c.history_only));
+    let usable = known
+        .into_iter()
+        .find(|id| live.iter().any(|c| c.id == *id && !c.history_only));
     let convo = match usable {
         Some(id) => id,
         None => {
-            let id = call(&p, "create_conversation", json!([addr]), CALL)?.as_str().ok_or("chat_module gave no conversation id")?.to_owned();
+            let id = call(&p, "create_conversation", json!([addr]), CALL)?
+                .as_str()
+                .ok_or("chat_module gave no conversation id")?
+                .to_owned();
             chats(|_, book, _| {
                 book.link(&id, *who, &addr);
                 book.opened(&id, now_ms());
@@ -215,11 +234,32 @@ pub fn send(id: &str, text: &str) -> Result<Value, String> {
 pub fn threads() -> Result<Value, String> {
     let p = proxy();
     let (convos, problem) = conversations(&p).map_or_else(|e| (vec![], Some(e)), |c| (c, None));
-    let open: Vec<&str> = chats(|_, book, _| Ok(convos.iter().filter(|c| c.kind == "direct" && book.who_of_convo(&c.id).is_none()).map(|c| c.id.as_str()).collect()))?;
+    let open: Vec<&str> = chats(|_, book, _| {
+        Ok(convos
+            .iter()
+            .filter(|c| c.kind == "direct" && book.who_of_convo(&c.id).is_none())
+            .map(|c| c.id.as_str())
+            .collect())
+    })?;
     // ponytail: the roster of each live group is read on every call (a group of another app is never ours); keep a set
     // of the ones that were checked if that ever shows.
-    let rosters: Vec<(&str, Vec<Member>)> = convos.iter().filter(|c| c.kind == "group" && !c.history_only).filter_map(|c| Some((c.id.as_str(), roster(&p, &c.id).ok()?))).collect();
-    let senders: Vec<(&str, String)> = open.into_iter().filter_map(|id| Some((id, messages_of(&p, id).ok()?.into_iter().find_map(|m| m.sender)?))).collect();
+    let rosters: Vec<(&str, Vec<Member>)> = convos
+        .iter()
+        .filter(|c| c.kind == "group" && !c.history_only)
+        .filter_map(|c| Some((c.id.as_str(), roster(&p, &c.id).ok()?)))
+        .collect();
+    let senders: Vec<(&str, String)> = open
+        .into_iter()
+        .filter_map(|id| {
+            Some((
+                id,
+                messages_of(&p, id)
+                    .ok()?
+                    .into_iter()
+                    .find_map(|m| m.sender)?,
+            ))
+        })
+        .collect();
     chats(|node, book, _| {
         for (id, sender) in &senders {
             book.link_sender(id, sender);
@@ -259,14 +299,35 @@ pub fn messages(id: &str) -> Result<Value, String> {
     let convos = conversations(&p).unwrap_or_default();
     let rows = match chat_of(id)? {
         Chat::Person(who) => {
-            let mine: Vec<(String, bool)> = chats(|_, book, _| Ok(convos.iter().filter(|c| book.who_of_convo(&c.id) == Some(who)).map(|c| (c.id.clone(), c.history_only)).collect()))?;
-            let parts = mine.into_iter().map(|(id, old)| Ok((old, messages_of(&p, &id)?))).collect::<Result<Vec<_>, String>>()?;
-            chats(|_, book, _| Ok(thread_messages(parts, &book.queued(&who).collect::<Vec<_>>())))?
+            let mine: Vec<(String, bool)> = chats(|_, book, _| {
+                Ok(convos
+                    .iter()
+                    .filter(|c| book.who_of_convo(&c.id) == Some(who))
+                    .map(|c| (c.id.clone(), c.history_only))
+                    .collect())
+            })?;
+            let parts = mine
+                .into_iter()
+                .map(|(id, old)| Ok((old, messages_of(&p, &id)?)))
+                .collect::<Result<Vec<_>, String>>()?;
+            chats(|_, book, _| {
+                Ok(thread_messages(
+                    parts,
+                    &book.queued(&who).collect::<Vec<_>>(),
+                ))
+            })?
         }
         Chat::Group(convo) => {
             let old = convos.iter().any(|c| c.id == convo && c.history_only);
             let msgs = messages_of(&p, &convo)?;
-            chats(|node, book, _| Ok(book.group_thread(msgs, &book.queued_group(&convo).collect::<Vec<_>>(), &node.names, old)))?
+            chats(|node, book, _| {
+                Ok(book.group_thread(
+                    msgs,
+                    &book.queued_group(&convo).collect::<Vec<_>>(),
+                    &node.names,
+                    old,
+                ))
+            })?
         }
     };
     Ok(json!({ "messages": rows }))
@@ -294,10 +355,20 @@ fn pickable(node: &Node, who: &[Key]) -> Result<Vec<Key>, String> {
 pub fn group_create(name: &str, who: &[Key]) -> Result<Value, String> {
     let name = name.trim();
     if name.is_empty() || name.chars().count() > MAX_GROUP_NAME {
-        return Err(format!("A group name needs 1 to {MAX_GROUP_NAME} characters."));
+        return Err(format!(
+            "A group name needs 1 to {MAX_GROUP_NAME} characters."
+        ));
     }
     let who = chats(|node, _, _| pickable(node, who))?;
-    let convo = call(&proxy(), "create_group_conversation", json!([name, ""]), CALL)?.as_str().ok_or("chat_module gave no conversation id")?.to_owned();
+    let convo = call(
+        &proxy(),
+        "create_group_conversation",
+        json!([name, ""]),
+        CALL,
+    )?
+    .as_str()
+    .ok_or("chat_module gave no conversation id")?
+    .to_owned();
     chats(|_, book, _| {
         book.start_group(&convo, &who);
         Ok(())
@@ -316,7 +387,10 @@ pub fn group_add(convo: &str, who: &[Key]) -> Result<Value, String> {
     })?;
     let have = roster(&proxy(), convo)?;
     chats(|_, book, _| {
-        let fresh: Vec<Key> = who.into_iter().filter(|w| !have.iter().any(|m| book.who_of(&m.address) == Some(*w))).collect();
+        let fresh: Vec<Key> = who
+            .into_iter()
+            .filter(|w| !have.iter().any(|m| book.who_of(&m.address) == Some(*w)))
+            .collect();
         for w in fresh {
             book.want(convo, w);
         }
@@ -388,16 +462,22 @@ fn readd_restarted() {
 /// sent stays queued. Gives how many went out.
 fn drain_group(convo: &str) -> Result<usize, String> {
     let _one = DRAIN.lock().unwrap_or_else(PoisonError::into_inner);
-    let texts: Vec<String> = chats(|_, book, _| Ok(book.queued_group(convo).map(|q| q.text.clone()).collect()))?;
+    let texts: Vec<String> =
+        chats(|_, book, _| Ok(book.queued_group(convo).map(|q| q.text.clone()).collect()))?;
     if texts.is_empty() {
         return Ok(0);
     }
     let p = proxy();
-    if !conversations(&p)?.iter().any(|c| c.id == convo && !c.history_only) {
+    if !conversations(&p)?
+        .iter()
+        .any(|c| c.id == convo && !c.history_only)
+    {
         return Err(OLD_GROUP.into());
     }
     let members = roster(&p, convo)?;
-    if !chats(|node, book, _| Ok(book.group_seen(convo, &members, &node.approved_keys(), &node.me(), now_ms())))? {
+    if !chats(|node, book, _| {
+        Ok(book.group_seen(convo, &members, &node.approved_keys(), &node.me(), now_ms()))
+    })? {
         return Err(OPENING_GROUP.into());
     }
     let (sent, failed) = send_all(&p, convo, &texts);
