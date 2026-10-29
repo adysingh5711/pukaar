@@ -858,15 +858,17 @@ Item {
         id: fb
         property string kind: "default"
         property string iconName: ""       // optional leading icon, drawn in the label colour
+        property bool quiet: false         // Harbor's .ra: a row action, text only until hovered (danger kind: red text)
         readonly property bool solid: kind === "primary" && enabled
         readonly property bool hot: hovered || down
-        readonly property color ink: !enabled ? (kind === "primary" ? root.t.accent : root.t.disabled) : solid ? root.t.onPrimary : kind === "danger" ? root.t.danger : root.t.fg
+        readonly property color ink: !enabled ? (kind === "primary" ? root.t.accent : root.t.disabled) : solid ? root.t.onPrimary : kind === "danger" ? root.t.danger : quiet && !hot ? root.t.muted : root.t.fg
         readonly property color fill: !enabled ? (kind === "primary" ? root.t.primaryOff : "transparent")
             : solid ? (hot ? root.t.primaryHover : root.t.primary)
+            : quiet ? (hot ? root.t.hover : "transparent")
             : kind === "danger" ? (hot ? root.t.dangerHover : root.t.dangerBg)
             : kind === "ghost" ? (hot ? root.t.hover : "transparent")
             : hot ? Qt.tint(root.t.btn, root.fade(root.t.fg, 0.18)) : root.t.btn
-        leftPadding: text === "" ? 9 : 14; rightPadding: leftPadding; topPadding: 6; bottomPadding: 6
+        leftPadding: text === "" ? 9 : quiet ? 8 : 14; rightPadding: leftPadding; topPadding: quiet ? 5 : 6; bottomPadding: topPadding
         font.weight: solid ? Font.DemiBold : Font.Medium
         scale: down && enabled ? 0.97 : 1
         Behavior on scale { Eased { duration: 100 } }
@@ -883,7 +885,7 @@ Item {
         background: Frame {
             ring: fb.visualFocus
             fill: fb.fill
-            edge: fb.kind === "ghost" || fb.kind === "default" || !fb.enabled && fb.kind !== "primary" ? root.t.btnBd : fb.fill
+            edge: fb.quiet ? "transparent" : fb.kind === "ghost" || fb.kind === "default" || !fb.enabled && fb.kind !== "primary" ? root.t.btnBd : fb.fill
         }
     }
     component FramedCombo: ComboBox {
@@ -1582,6 +1584,41 @@ Item {
     // A hairline across a layout (Harbor's border-top / border-bottom between the parts of a panel).
     component Rule: Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: root.t.bd }
 
+    // Harbor's .panel: a floating well (radius 20, hairline) with its content in a column inset by `pad`. `pad: 0` lets
+    // rows and rules run edge to edge.
+    component Panel: Rectangle {
+        id: panelBox
+        property int pad: 20
+        property alias spacing: panelCol.spacing
+        default property alias content: panelCol.data
+        Layout.fillWidth: true
+        implicitHeight: panelCol.implicitHeight + 2 * pad
+        radius: root.radii.panel; color: root.t.well; border.color: root.t.bd
+        ColumnLayout { id: panelCol; x: panelBox.pad; y: panelBox.pad; width: panelBox.width - 2 * panelBox.pad; spacing: 10 }
+    }
+
+    // Harbor's .sset: one section of the Profile panel. Title and help on the left, the controls on the right (stacked on a narrow page).
+    component SetSection: ColumnLayout {
+        id: sect
+        property string title
+        property string help
+        default property alias body: bodyCol.data
+        Layout.fillWidth: true
+        spacing: 0
+        Rule { visible: sect.y > 0 }
+        GridLayout {
+            Layout.fillWidth: true; Layout.margins: 26; Layout.topMargin: 22; Layout.bottomMargin: 22
+            columns: root.compactRows ? 1 : 2; columnSpacing: 32; rowSpacing: 12
+            ColumnLayout {
+                Layout.alignment: Qt.AlignTop; Layout.fillWidth: root.compactRows; Layout.preferredWidth: 230
+                spacing: 6
+                Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: sect.title; font.pointSize: root.sizes.h3; font.weight: Font.DemiBold }
+                Help { visible: sect.help !== ""; text: sect.help; font.pointSize: root.sizes.cap }
+            }
+            ColumnLayout { id: bodyCol; Layout.alignment: Qt.AlignTop; Layout.fillWidth: true; Layout.maximumWidth: 620; spacing: 8 }
+        }
+    }
+
     // Harbor's .av: a round initials avatar on the control fill (the people's photos are not wired yet). `group` is the
     // accent wash with the members icon. A member with no name shows the first two characters of their key.
     component Avatar: Rectangle {
@@ -1709,6 +1746,7 @@ Item {
         property string aside              // muted, after the title: "· 6" or "(site admin only)"
         property bool open: false
         property bool inner: false         // no box of its own: a rule on top and a 44 px header
+        property bool panel: false         // Harbor's .panel: a floating well, a bare 52 px header (chevron, 16 px title), no band
         property int pad: 16               // margin round the body; 0 lets rows run edge to edge
         default property alias content: body.data
         signal toggled()
@@ -1717,7 +1755,7 @@ Item {
         Layout.rightMargin: inner ? -16 : 0
         Layout.topMargin: inner ? 16 : 0
         implicitHeight: stack.implicitHeight + 2 * stack.x
-        radius: root.radii.card; color: inner ? "transparent" : root.t.card
+        radius: panel ? root.radii.panel : root.radii.card; color: inner ? "transparent" : panel ? root.t.well : root.t.card
         border.color: inner ? "transparent" : root.t.bd
         ColumnLayout {
             id: stack
@@ -1728,7 +1766,7 @@ Item {
                 id: header
                 Layout.fillWidth: true
                 implicitHeight: section.inner ? 44 : 52
-                leftPadding: 16; rightPadding: 16
+                leftPadding: section.panel ? 20 : 16; rightPadding: leftPadding
                 text: section.title
                 Accessible.role: Accessible.Button
                 Accessible.name: section.title + (section.aside ? " " + section.aside : "") + (section.open ? ", expanded" : ", collapsed")
@@ -1736,17 +1774,17 @@ Item {
                 Keys.onReturnPressed: clicked()
                 Keys.onEnterPressed: clicked()
                 background: Rectangle {
-                    readonly property real r: section.inner ? 0 : root.radii.card - 1
-                    color: header.hovered ? root.t.hover : section.inner ? "transparent" : root.t.well
+                    readonly property real r: section.inner ? 0 : (section.panel ? root.radii.panel : root.radii.card) - 1
+                    color: header.hovered ? (section.panel ? root.t.hoverSoft : root.t.hover) : section.inner || section.panel ? "transparent" : root.t.well
                     topLeftRadius: r; topRightRadius: r
                     bottomLeftRadius: section.open ? 0 : r; bottomRightRadius: section.open ? 0 : r
                     border.width: header.visualFocus ? 2 : 0; border.color: root.t.focus
-                    Rectangle { visible: section.open && !section.inner; anchors.bottom: parent.bottom; width: parent.width; height: 1; color: root.t.bd }
+                    Rectangle { visible: section.open && !section.inner && !section.panel; anchors.bottom: parent.bottom; width: parent.width; height: 1; color: root.t.bd }
                 }
                 contentItem: RowLayout {
                     spacing: 10
                     Icon { name: "chev"; size: 16; color: root.t.muted; rotation: section.open ? 90 : 0 }
-                    Label { text: header.text; elide: Text.ElideRight; font.weight: Font.DemiBold; font.pointSize: section.inner ? root.baseSize : root.baseSize * 16 / 14 }
+                    Label { text: header.text; elide: Text.ElideRight; font.weight: Font.DemiBold; font.pointSize: section.inner ? root.baseSize : root.sizes.h3 }
                     Label { visible: section.aside !== ""; Layout.fillWidth: true; text: section.aside; elide: Text.ElideRight; color: root.t.muted; font.pointSize: root.smallSize }
                     Item { visible: section.aside === ""; Layout.fillWidth: true }
                 }
@@ -1879,19 +1917,13 @@ Item {
     // A muted 13 px paragraph under a field or title.
     component Help: Note { color: root.t.muted; font.pointSize: root.smallSize }
 
-    // A fingerprint in a monospace chip; `big` for the one read aloud at the kiosk.
-    component Fingerprint: Rectangle {
-        id: fp
-        property string text
+    // A fingerprint in monospace, no box. `big` (Harbor's .keybig, 26 px) for the one read aloud; small is the muted 12 px key in a row.
+    component Fingerprint: Label {
         property bool big: false
-        implicitWidth: fpText.implicitWidth + (big ? 22 : 14); implicitHeight: big ? 32 : 24
-        radius: 6; color: root.t.well; border.color: root.t.bd
-        Label {
-            id: fpText
-            anchors.centerIn: parent; text: fp.text; font.family: "monospace"; textFormat: Text.PlainText
-            font.pointSize: fp.big ? root.baseSize * 18 / 14 : root.smallSize; font.weight: fp.big ? Font.DemiBold : Font.Normal
-            font.letterSpacing: fp.big ? 1 : 0
-        }
+        textFormat: Text.PlainText; font.family: "monospace"
+        color: big ? root.t.fg : root.t.muted
+        font.pointSize: big ? root.sizes.key : root.sizes.cap; font.weight: big ? Font.Medium : Font.Normal
+        font.letterSpacing: big ? 0.5 : 0
     }
 
     // What the chain is doing with the change to one member: a chip while it waits or is on its way, and
@@ -2094,7 +2126,7 @@ Item {
     }
 
     // A person the admin can give a role (waiting for approval, or removed and `again`): who they are
-    // (the content), then, for the admin only, Grant resident, or a name and Grant steward.
+    // (the content), then, for the admin only, Grant resident, or a name and Grant steward (Harbor's .grant).
     component GrantRow: ColumnLayout {
         id: grant
         required property var modelData
@@ -2105,21 +2137,19 @@ Item {
         readonly property string person: modelData.name || modelData.fingerprint
         Layout.fillWidth: true
         spacing: 0
-        Rectangle { visible: grant.index > 0; Layout.fillWidth: true; implicitHeight: 1; color: root.t.bd }
-        GridLayout {
-            Layout.fillWidth: true; Layout.margins: 12; Layout.leftMargin: 16; Layout.rightMargin: 16
-            columns: root.compactRows ? 2 : 3; columnSpacing: 12; rowSpacing: 8
+        Rule { visible: grant.index > 0 }
+        ColumnLayout {
+            Layout.fillWidth: true; Layout.margins: 20; Layout.topMargin: 16; Layout.bottomMargin: 16
+            spacing: 8
             ColumnLayout { id: whoCell; Layout.fillWidth: true; spacing: 4 }
             ActionButton {
-                visible: root.isAdmin
+                visible: root.isAdmin; Layout.fillWidth: true
                 text: "Grant resident" + grant.suffix; Accessible.name: text + ": " + grant.person
                 onClicked: root.run("grant_role", [grant.modelData.key, "resident", staffName.text])
             }
             LabelledField {
                 id: staffName
                 visible: root.isAdmin
-                Layout.fillWidth: root.compactRows; Layout.columnSpan: root.compactRows ? 2 : 1
-                Layout.preferredWidth: 330
                 name: "Name, optional for a resident"
                 placeholder: "Name, e.g. Ravi Kumar (a steward needs one)"
                 buttonText: "Grant steward" + grant.suffix
@@ -2136,6 +2166,7 @@ Item {
         property alias text: first.text
         property alias kind: first.kind
         property alias iconName: first.iconName
+        property alias quiet: first.quiet
         property alias allowed: first.allowed
         property string name: text           // what a screen reader says for the first button
         property string confirmText: "Confirm"
@@ -2144,6 +2175,8 @@ Item {
         signal confirmed()
         function submit() { first.submit() }
         spacing: 6
+        readonly property Flow flowHost: parent as Flow
+        Binding on width { when: cb.armed && cb.flowHost; value: cb.flowHost ? cb.flowHost.width : 0 }   // in a Flow, the question takes a line of its own
         Help { visible: cb.armed; text: cb.effect }
         RowLayout {
             Layout.fillHeight: true
@@ -3484,11 +3517,12 @@ Item {
                         visible: root.isAdmin && (root.waitingCount > 0 || root.batchBusy)
                         Layout.fillWidth: true
                         property bool showChanges: false
-                        implicitHeight: batchCol.implicitHeight + 24
-                        radius: 8; color: root.t.accentBg; border.color: root.t.accentBd
+                        Layout.bottomMargin: root.gaps.row
+                        implicitHeight: batchCol.implicitHeight + 28
+                        radius: root.radii.card; color: root.t.accentBg; border.color: root.t.accentBd
                         ColumnLayout {
                             id: batchCol
-                            anchors { fill: parent; margins: 12 }
+                            anchors { fill: parent; leftMargin: 20; rightMargin: 20; topMargin: 14; bottomMargin: 14 }
                             spacing: 8
                             RowLayout {
                                 id: batchRow
@@ -3533,256 +3567,267 @@ Item {
                             }
                         }
                     }
-                    CollapsibleSection {
-                        visible: root.isAdmin
-                        title: "Waiting for approval"; aside: "· " + root.pending.length
-                        open: true; pad: 0
-                        Flash { Layout.margins: 16; Layout.bottomMargin: 12; icon: "mega"; text: "Grant a role only after the person reads this fingerprint aloud. Granting only queues the change. It goes to the chain when you press Send changes." }
-                        Blank {   // empty: say so and say when someone appears
-                            visible: root.pending.length === 0
-                            Layout.topMargin: 12
-                            icon: "res"; title: "No one is waiting."; text: "New people appear here after they join with the site id."
-                        }
-                        Repeater {
-                            model: root.pending
-                            delegate: GrantRow {
-                                id: pendingRow
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 10
+                    GridLayout {   // Harbor's .people: waiting and removed in a 336 px column beside the roster; stacked on a narrow page
+                        Layout.fillWidth: true
+                        columns: root.compactRows ? 1 : 2; columnSpacing: root.gaps.gutter; rowSpacing: root.gaps.gutter
+                        CollapsibleSection {
+                            visible: root.isAdmin
+                            title: "Waiting for approval"; aside: "· " + root.pending.length
+                            open: true; pad: 0; panel: true
+                            Layout.row: 0; Layout.column: 0; Layout.alignment: Qt.AlignTop
+                            Layout.fillWidth: root.compactRows; Layout.preferredWidth: 336; Layout.maximumWidth: root.compactRows ? 100000 : 336
+                            Help {
+                                Layout.leftMargin: 20; Layout.rightMargin: 20; Layout.bottomMargin: 12
+                                text: "Grant a role only after the person reads this fingerprint aloud. Granting only queues the change. It goes to the chain when you press Send changes."
+                            }
+                            Help {   // empty: say so and say when someone appears
+                                visible: root.pending.length === 0
+                                Layout.leftMargin: 20; Layout.rightMargin: 20; Layout.bottomMargin: 20
+                                text: "No one is waiting. New people appear here after they join with the site id."
+                            }
+                            Repeater {
+                                model: root.pending
+                                delegate: GrantRow {
+                                    id: pendingRow
                                     Fingerprint { big: true; text: pendingRow.modelData.fingerprint }
                                     Label {
                                         Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
                                         text: pendingRow.modelData.name || "Details have not arrived yet."
                                         color: pendingRow.modelData.name ? root.t.fg : root.t.muted
                                         font.weight: pendingRow.modelData.name ? Font.DemiBold : Font.Normal
+                                        font.pointSize: root.sizes.small
                                     }
-                                }
-                                WriteMark { account: pendingRow.modelData.account || ""; queued: !!pendingRow.modelData.queued }
-                                Help {
-                                    visible: !!pendingRow.modelData.valid_until
-                                    text: "Valid until " + root.when(pendingRow.modelData.valid_until, "ddd d MMM, HH:mm") + (pendingRow.modelData.left ? " (" + pendingRow.modelData.left + " left)." : ".")
-                                }
-                                ConfirmButton {   // free: nothing goes to the chain
-                                    text: "Reject"; name: "Reject: " + pendingRow.person; confirmText: "Confirm reject"
-                                    effect: "They can send the request again."
-                                    onConfirmed: root.run("reject_join", [pendingRow.modelData.key])
-                                }
-                            }
-                        }
-                    }
-                    CollapsibleSection {
-                        objectName: "memberList"
-                        title: "Members"; aside: "· " + root.members.length
-                        open: !root.isAdmin; pad: 0
-                        Help {
-                            visible: root.isSuper && root.superCount >= 2
-                            Layout.margins: 16; Layout.bottomMargin: 6
-                            text: "Two super admins already, the most allowed."
-                        }
-                        Repeater {
-                            model: root.members
-                            // Who changes what: an admin, the residents and stewards; a super admin, also the admins.
-                            delegate: ColumnLayout {
-                                id: memberRow
-                                objectName: "memberRow-" + modelData.fingerprint
-                                required property var modelData
-                                required property int index
-                                readonly property bool own: modelData.key === root.me.key
-                                readonly property bool admin: modelData.role === "Admin"
-                                readonly property bool sup: !!modelData.super_admin
-                                readonly property bool elevated: admin || modelData.role === "Steward"
-                                readonly property string person: root.who(modelData.key, modelData.name)
-                                readonly property bool canAddSuper: root.isSuper && admin && !sup
-                                property string panel                // "" or the open step: "revoke" or "transfer"
-                                onPanelChanged: revokeStep.reset()
-                                Layout.fillWidth: true
-                                spacing: 0
-                                Rectangle { visible: memberRow.index > 0; Layout.fillWidth: true; implicitHeight: 1; color: root.t.bd }
-                                GridLayout {
-                                    Layout.fillWidth: true; Layout.margins: 10; Layout.leftMargin: 16; Layout.rightMargin: 16
-                                    columns: root.compactRows ? 3 : 4; columnSpacing: 12; rowSpacing: 8
-                                    Fingerprint { Layout.alignment: Qt.AlignTop; Layout.preferredWidth: 92; text: memberRow.modelData.fingerprint }
-                                    Item {   // the role chip has its own column; a narrow row puts it after the name
-                                        visible: !root.compactRows
-                                        Layout.alignment: Qt.AlignTop
-                                        Layout.preferredWidth: 100; implicitHeight: roleChip.height
-                                        StatusChip { id: roleChip; label: memberRow.modelData.role; stage: memberRow.elevated ? root.t.progress : root.t.closed }
+                                    WriteMark { account: pendingRow.modelData.account || ""; queued: !!pendingRow.modelData.queued }
+                                    Help {
+                                        visible: !!pendingRow.modelData.valid_until
+                                        text: "Valid until " + root.when(pendingRow.modelData.valid_until, "ddd d MMM, HH:mm") + (pendingRow.modelData.left ? " (" + pendingRow.modelData.left + " left)." : ".")
                                     }
-                                    ColumnLayout {
-                                        Layout.fillWidth: true; Layout.alignment: Qt.AlignTop
-                                        spacing: 0
-                                        Flow {
-                                            id: nameFlow
-                                            Layout.fillWidth: true; spacing: 6
-                                            Label {
-                                                width: Math.min(implicitWidth, nameFlow.width)
-                                                wrapMode: Text.Wrap; textFormat: Text.PlainText; font.weight: Font.DemiBold
-                                                text: memberRow.person
-                                            }
-                                            StatusChip { visible: memberRow.sup; label: "Super admin"; stage: root.t.progress; strong: true }
-                                            StatusChip { visible: root.compactRows; label: memberRow.modelData.role; stage: memberRow.elevated ? root.t.progress : root.t.closed }
-                                        }
-                                        Label { visible: memberRow.own; text: "you"; color: root.t.muted; font.pointSize: root.smallSize }
-                                        LinkButton {
-                                            objectName: "memberOpen-" + memberRow.modelData.fingerprint
-                                            text: "View profile  ›"; Accessible.name: "Open the profile of " + memberRow.person
-                                            onClicked: root.showMember(memberRow.modelData.key)
-                                        }
-                                        LinkButton { visible: !memberRow.own && root.approved; text: "Message  ›"; Accessible.name: "Message " + memberRow.person; onClicked: root.openChat(memberRow.modelData.key) }
-                                        LinkButton { visible: !memberRow.own && root.approved; text: "1:1 meeting  ›"; Accessible.name: "Plan a 1:1 meeting with " + memberRow.person; onClicked: root.startMeet(memberRow.modelData) }
-                                        Label {   // O5: a staff name counts only with the signature of an admin
-                                            visible: memberRow.elevated
-                                            Layout.fillWidth: true; wrapMode: Text.Wrap; color: root.t.muted; font.pointSize: root.smallSize
-                                            text: memberRow.modelData.name_signed_by_admin ? "Name signed by an admin"
-                                                : root.isAdmin ? "No name yet. Use Set name to sign one." : "No name yet. An admin must sign one."
-                                        }
-                                        WriteMark { Layout.topMargin: 4; account: memberRow.modelData.account || "" }
-                                    }
-                                    RowLayout {   // only the controls this viewer may use; nothing at all for residents and stewards
-                                        visible: root.isAdmin
-                                        Layout.alignment: Qt.AlignTop | Qt.AlignRight; Layout.fillHeight: false   // buttons their own height, not the row's
-                                        spacing: 8
-                                        Help {
-                                            visible: memberRow.admin && !root.isSuper
-                                            Layout.fillWidth: false; Layout.maximumWidth: 240
-                                            text: "Only a super admin can revoke an admin."
-                                        }
-                                        ActionButton {   // O5: an admin signs the name of staff
-                                            visible: memberRow.elevated && (!memberRow.admin || root.isSuper || memberRow.own)
-                                            text: "Set name"; Accessible.name: "Set the name of " + memberRow.person
-                                            onClicked: memberRow.panel = "name"
-                                        }
-                                        ConfirmButton {
-                                            visible: root.isSuper && !memberRow.admin && !!memberRow.modelData.name
-                                            text: "Grant admin"; name: text + ": " + memberRow.person; confirmText: "Confirm grant"
-                                            effect: "They become an admin when you send the batch. Your signature on their name is sent now and costs a network fee."
-                                            onConfirmed: root.run("grant_role", [memberRow.modelData.key, "admin", memberRow.modelData.name])
-                                        }
-                                        ConfirmButton {
-                                            visible: memberRow.canAddSuper && !!memberRow.modelData.name
-                                            text: "Make steward"; name: text + ": " + memberRow.person; confirmText: "Confirm"
-                                            effect: "They become a steward when you send the batch. Your signature on their name is sent now and costs a network fee. Everyone on the site can see the change."
-                                            onConfirmed: root.run("grant_role", [memberRow.modelData.key, "steward", memberRow.modelData.name])
-                                        }
-                                        ConfirmButton {
-                                            visible: memberRow.canAddSuper
-                                            text: "Make resident"; name: text + ": " + memberRow.person; confirmText: "Confirm"
-                                            effect: "They become a resident when you send the batch. Everyone on the site can see the change."
-                                            onConfirmed: root.run("grant_role", [memberRow.modelData.key, "resident", ""])
-                                        }
-                                        ConfirmButton {
-                                            visible: memberRow.canAddSuper && root.superCount < 2 && !!memberRow.modelData.name
-                                            text: "Add super admin"; name: text + ": " + memberRow.person; confirmText: "Confirm"
-                                            effect: "They become the second super admin once the chain accepts it."
-                                            onConfirmed: root.run("add_super_admin", [memberRow.modelData.key])
-                                        }
-                                        ActionButton {
-                                            visible: root.isSuper && memberRow.sup && memberRow.own
-                                            text: "Transfer super admin"
-                                            onClicked: memberRow.panel = "transfer"
-                                        }
-                                        ConfirmButton {
-                                            visible: root.isSuper && memberRow.sup && !memberRow.own
-                                            text: "Remove super admin"; kind: "danger"; name: text + ": " + memberRow.person; confirmText: "Confirm remove"
-                                            effect: "They become a regular admin once the chain accepts it."
-                                            onConfirmed: root.run("remove_super_admin", [memberRow.modelData.key])
-                                        }
-                                        ActionButton {
-                                            visible: !memberRow.admin || (root.isSuper && !memberRow.sup)
-                                            text: "Revoke"; kind: "danger"; Accessible.name: "Revoke " + memberRow.person
-                                            onClicked: memberRow.panel = "revoke"
-                                        }
-                                    }
-                                }
-                                ReasonPanel {   // O5: the name of a steward or an admin, signed by us
-                                    visible: memberRow.panel === "name" && root.isAdmin
-                                    Layout.leftMargin: 16 + 92 + 12
-                                    title: "Set the name of " + memberRow.person
-                                    withReason: false
-                                    ready: staffNameField.text.trim().length > 0
-                                    effect: "Sent to the chain now and costs a network fee. Everyone sees it marked as signed by an admin."
-                                    okText: "Sign name"
-                                    onConfirmed: root.run("set_staff_name", [memberRow.modelData.key, staffNameField.text], function () { memberRow.panel = "" })
-                                    onCancelled: memberRow.panel = ""
-                                    FormRow {
-                                        label: "Name"; compact: true
-                                        FramedField {
-                                            id: staffNameField
-                                            Layout.fillWidth: true; maximumLength: 64
-                                            text: memberRow.modelData.name || ""; Accessible.name: "Name for " + memberRow.person
-                                            placeholderText: "e.g. Ravi Kumar"
-                                        }
-                                    }
-                                }
-                                ReasonPanel {
-                                    id: revokeStep
-                                    visible: memberRow.panel === "revoke" && root.isAdmin
-                                    Layout.leftMargin: 16 + 92 + 12
-                                    title: "Revoke " + memberRow.person + "?"
-                                    reasonName: "Reason for revoking " + memberRow.person
-                                    effect: "They lose the " + memberRow.modelData.role + " role when you send the batch. Everyone on the site can see the reason."
-                                    okText: "Confirm revoke"
-                                    onConfirmed: root.run("revoke_role", [memberRow.modelData.key, reason], function () { memberRow.panel = "" })
-                                    onCancelled: memberRow.panel = ""
-                                }
-                                ReasonPanel {   // hand our place to a named member
-                                    visible: memberRow.panel === "transfer" && root.isSuper
-                                    Layout.leftMargin: 16 + 92 + 12
-                                    title: "Transfer super admin"
-                                    withReason: false
-                                    ready: transferTo.currentIndex >= 0
-                                    effect: "They become a super admin and you become a regular admin, once the chain accepts it. Everyone can see it."
-                                    okText: "Transfer"
-                                    onConfirmed: root.run("transfer_super_admin", [transferTo.currentValue], function () { memberRow.panel = "" })
-                                    onCancelled: memberRow.panel = ""
-                                    FormRow {
-                                        label: "Pick a member"; compact: true
-                                        FramedCombo {
-                                            id: transferTo
-                                            Layout.preferredWidth: 260
-                                            textRole: "name"; valueRole: "key"
-                                            model: root.members.filter(function (m) { return !!m.name && m.key !== root.me.key })
-                                            Accessible.name: "Member to make super admin"
-                                        }
+                                    ConfirmButton {   // free: nothing goes to the chain
+                                        quiet: true; kind: "danger"
+                                        text: "Reject"; name: "Reject: " + pendingRow.person; confirmText: "Confirm reject"
+                                        effect: "They can send the request again."
+                                        onConfirmed: root.run("reject_join", [pendingRow.modelData.key])
                                     }
                                 }
                             }
                         }
-                    }
-                    CollapsibleSection {
-                        title: "Removed"; aside: "· " + root.revoked.length
-                        pad: 0
-                        Blank {
-                            visible: root.revoked.length === 0
-                            icon: "res"; title: "No one has been removed."
-                            text: root.isAdmin ? "When you revoke a role, the person shows here with your reason."
-                                               : "When the admin removes someone's role, they show here with the reason."
-                        }
-                        Repeater {
-                            model: root.revoked
-                            delegate: GrantRow {
-                                id: removedRow
-                                again: true
-                                RowLayout {
+                        CollapsibleSection {
+                            objectName: "memberList"
+                            title: "Members"; aside: "· " + root.members.length
+                            open: !root.isAdmin; pad: 0; panel: true
+                            Layout.row: root.compactRows ? 1 : 0; Layout.column: root.compactRows ? 0 : 1; Layout.rowSpan: root.compactRows ? 1 : 3; Layout.alignment: Qt.AlignTop
+                            Help {
+                                visible: root.isSuper && root.superCount >= 2
+                                Layout.margins: 20; Layout.topMargin: 0; Layout.bottomMargin: 8
+                                text: "Two super admins already, the most allowed."
+                            }
+                            Repeater {
+                                model: root.members
+                                // Who changes what: an admin, the residents and stewards; a super admin, also the admins.
+                                delegate: ColumnLayout {
+                                    id: memberRow
+                                    objectName: "memberRow-" + modelData.fingerprint
+                                    required property var modelData
+                                    required property int index
+                                    readonly property bool own: modelData.key === root.me.key
+                                    readonly property bool admin: modelData.role === "Admin"
+                                    readonly property bool sup: !!modelData.super_admin
+                                    readonly property bool elevated: admin || modelData.role === "Steward"
+                                    readonly property string person: root.who(modelData.key, modelData.name)
+                                    readonly property bool canAddSuper: root.isSuper && admin && !sup
+                                    property string panel                // "" or the open step: "revoke" or "transfer"
+                                    onPanelChanged: revokeStep.reset()
                                     Layout.fillWidth: true
-                                    spacing: 10
-                                    Fingerprint { text: removedRow.modelData.fingerprint }
+                                    spacing: 0
+                                    Rule { visible: memberRow.index > 0 }
+                                    RowLayout {   // Harbor's .row: avatar, then the name and the key, then the actions under them
+                                        Layout.fillWidth: true; Layout.margins: 12; Layout.leftMargin: 20; Layout.rightMargin: 20
+                                        spacing: 12
+                                        Avatar { Layout.alignment: Qt.AlignTop; size: 40; name: memberRow.modelData.name || ""; ident: memberRow.modelData.fingerprint }
+                                        ColumnLayout {
+                                            Layout.fillWidth: true; Layout.alignment: Qt.AlignTop; Layout.fillHeight: false
+                                            spacing: 3
+                                            Flow {
+                                                id: nameFlow
+                                                Layout.fillWidth: true; spacing: 8
+                                                Label {
+                                                    width: Math.min(implicitWidth, nameFlow.width)
+                                                    wrapMode: Text.Wrap; textFormat: Text.PlainText; font.weight: Font.DemiBold
+                                                    text: memberRow.person
+                                                }
+                                                Label { visible: memberRow.own; text: "you"; color: root.t.muted; font.pointSize: root.sizes.cap }
+                                                RoleChip { role: memberRow.modelData.role }
+                                                RoleChip { visible: memberRow.sup; owner: true }
+                                            }
+                                            Flow {   // the key, and for staff what the name rests on (O5: a staff name counts only with the signature of an admin)
+                                                Layout.fillWidth: true; spacing: 8
+                                                Fingerprint { text: memberRow.modelData.fingerprint }
+                                                Label {
+                                                    visible: memberRow.elevated
+                                                    color: root.t.muted; font.pointSize: root.sizes.cap
+                                                    text: "· " + (memberRow.modelData.name_signed_by_admin ? "Name signed by an admin"
+                                                        : root.isAdmin ? "No name yet. Use Set name to sign one." : "No name yet. An admin must sign one.")
+                                                }
+                                            }
+                                            WriteMark { Layout.topMargin: 4; account: memberRow.modelData.account || "" }
+                                            Flow {   // only the controls this viewer may use; residents and stewards see the profile and chat links
+                                                id: actions
+                                                Layout.fillWidth: true; Layout.topMargin: 4
+                                                spacing: 2
+                                                ActionButton {   // O5: an admin signs the name of staff
+                                                    visible: root.isAdmin && memberRow.elevated && (!memberRow.admin || root.isSuper || memberRow.own)
+                                                    quiet: true; text: "Set name"; Accessible.name: "Set the name of " + memberRow.person
+                                                    onClicked: memberRow.panel = "name"
+                                                }
+                                                ConfirmButton {
+                                                    visible: root.isAdmin && root.isSuper && !memberRow.admin && !!memberRow.modelData.name
+                                                    quiet: true; text: "Grant admin"; name: text + ": " + memberRow.person; confirmText: "Confirm grant"
+                                                    effect: "They become an admin when you send the batch. Your signature on their name is sent now and costs a network fee."
+                                                    onConfirmed: root.run("grant_role", [memberRow.modelData.key, "admin", memberRow.modelData.name])
+                                                }
+                                                ConfirmButton {
+                                                    visible: root.isAdmin && memberRow.canAddSuper && !!memberRow.modelData.name
+                                                    quiet: true; text: "Make steward"; name: text + ": " + memberRow.person; confirmText: "Confirm"
+                                                    effect: "They become a steward when you send the batch. Your signature on their name is sent now and costs a network fee. Everyone on the site can see the change."
+                                                    onConfirmed: root.run("grant_role", [memberRow.modelData.key, "steward", memberRow.modelData.name])
+                                                }
+                                                ConfirmButton {
+                                                    visible: root.isAdmin && memberRow.canAddSuper
+                                                    quiet: true; text: "Make resident"; name: text + ": " + memberRow.person; confirmText: "Confirm"
+                                                    effect: "They become a resident when you send the batch. Everyone on the site can see the change."
+                                                    onConfirmed: root.run("grant_role", [memberRow.modelData.key, "resident", ""])
+                                                }
+                                                ConfirmButton {
+                                                    visible: root.isAdmin && memberRow.canAddSuper && root.superCount < 2 && !!memberRow.modelData.name
+                                                    quiet: true; text: "Add super admin"; name: text + ": " + memberRow.person; confirmText: "Confirm"
+                                                    effect: "They become the second super admin once the chain accepts it."
+                                                    onConfirmed: root.run("add_super_admin", [memberRow.modelData.key])
+                                                }
+                                                ActionButton {
+                                                    visible: root.isAdmin && root.isSuper && memberRow.sup && memberRow.own
+                                                    quiet: true; text: "Transfer super admin"
+                                                    onClicked: memberRow.panel = "transfer"
+                                                }
+                                                ConfirmButton {
+                                                    visible: root.isAdmin && root.isSuper && memberRow.sup && !memberRow.own
+                                                    quiet: true; text: "Remove super admin"; kind: "danger"; name: text + ": " + memberRow.person; confirmText: "Confirm remove"
+                                                    effect: "They become a regular admin once the chain accepts it."
+                                                    onConfirmed: root.run("remove_super_admin", [memberRow.modelData.key])
+                                                }
+                                                ActionButton {
+                                                    visible: root.isAdmin && (!memberRow.admin || (root.isSuper && !memberRow.sup))
+                                                    quiet: true; text: "Revoke"; kind: "danger"; Accessible.name: "Revoke " + memberRow.person
+                                                    onClicked: memberRow.panel = "revoke"
+                                                }
+                                                FramedButton {
+                                                    visible: !memberRow.own && root.approved
+                                                    quiet: true; text: "Message ›"; Accessible.name: "Message " + memberRow.person; onClicked: root.openChat(memberRow.modelData.key)
+                                                }
+                                                FramedButton {
+                                                    visible: !memberRow.own && root.approved
+                                                    quiet: true; text: "1:1 meeting ›"; Accessible.name: "Plan a 1:1 meeting with " + memberRow.person; onClicked: root.startMeet(memberRow.modelData)
+                                                }
+                                                FramedButton {
+                                                    objectName: "memberOpen-" + memberRow.modelData.fingerprint
+                                                    quiet: true; text: "View profile ›"; Accessible.name: "Open the profile of " + memberRow.person
+                                                    onClicked: root.showMember(memberRow.modelData.key)
+                                                }
+                                                Help {
+                                                    visible: root.isAdmin && memberRow.admin && !root.isSuper
+                                                    height: 26; leftPadding: 8; verticalAlignment: Text.AlignVCenter
+                                                    text: "Only a super admin can revoke an admin."
+                                                }
+                                            }
+                                        }
+                                    }
+                                    ReasonPanel {   // O5: the name of a steward or an admin, signed by us
+                                        visible: memberRow.panel === "name" && root.isAdmin
+                                        Layout.leftMargin: 20 + 40 + 12
+                                        title: "Set the name of " + memberRow.person
+                                        withReason: false
+                                        ready: staffNameField.text.trim().length > 0
+                                        effect: "Sent to the chain now and costs a network fee. Everyone sees it marked as signed by an admin."
+                                        okText: "Sign name"
+                                        onConfirmed: root.run("set_staff_name", [memberRow.modelData.key, staffNameField.text], function () { memberRow.panel = "" })
+                                        onCancelled: memberRow.panel = ""
+                                        FormRow {
+                                            label: "Name"; compact: true
+                                            FramedField {
+                                                id: staffNameField
+                                                Layout.fillWidth: true; maximumLength: 64
+                                                text: memberRow.modelData.name || ""; Accessible.name: "Name for " + memberRow.person
+                                                placeholderText: "e.g. Ravi Kumar"
+                                            }
+                                        }
+                                    }
+                                    ReasonPanel {
+                                        id: revokeStep
+                                        visible: memberRow.panel === "revoke" && root.isAdmin
+                                        Layout.leftMargin: 20 + 40 + 12
+                                        title: "Revoke " + memberRow.person + "?"
+                                        reasonName: "Reason for revoking " + memberRow.person
+                                        effect: "They lose the " + memberRow.modelData.role + " role when you send the batch. Everyone on the site can see the reason."
+                                        okText: "Confirm revoke"
+                                        onConfirmed: root.run("revoke_role", [memberRow.modelData.key, reason], function () { memberRow.panel = "" })
+                                        onCancelled: memberRow.panel = ""
+                                    }
+                                    ReasonPanel {   // hand our place to a named member
+                                        visible: memberRow.panel === "transfer" && root.isSuper
+                                        Layout.leftMargin: 20 + 40 + 12
+                                        title: "Transfer super admin"
+                                        withReason: false
+                                        ready: transferTo.currentIndex >= 0
+                                        effect: "They become a super admin and you become a regular admin, once the chain accepts it. Everyone can see it."
+                                        okText: "Transfer"
+                                        onConfirmed: root.run("transfer_super_admin", [transferTo.currentValue], function () { memberRow.panel = "" })
+                                        onCancelled: memberRow.panel = ""
+                                        FormRow {
+                                            label: "Pick a member"; compact: true
+                                            FramedCombo {
+                                                id: transferTo
+                                                Layout.preferredWidth: 260
+                                                textRole: "name"; valueRole: "key"
+                                                model: root.members.filter(function (m) { return !!m.name && m.key !== root.me.key })
+                                                Accessible.name: "Member to make super admin"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        CollapsibleSection {
+                            title: "Removed"; aside: "· " + root.revoked.length
+                            pad: 0; panel: true
+                            Layout.row: root.compactRows ? 2 : root.isAdmin ? 1 : 0; Layout.column: 0; Layout.alignment: Qt.AlignTop
+                            Layout.fillWidth: root.compactRows; Layout.preferredWidth: 336; Layout.maximumWidth: root.compactRows ? 100000 : 336
+                            Help {
+                                visible: root.revoked.length === 0
+                                Layout.leftMargin: 20; Layout.rightMargin: 20; Layout.bottomMargin: 20
+                                text: "No one has been removed. " + (root.isAdmin ? "When you revoke a role, the person shows here with your reason."
+                                                                                    : "When the admin removes someone's role, they show here with the reason.")
+                            }
+                            Repeater {
+                                model: root.revoked
+                                delegate: GrantRow {
+                                    id: removedRow
+                                    again: true
                                     Label {
                                         Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText; font.weight: Font.DemiBold
                                         text: root.who(removedRow.modelData.key, removedRow.modelData.name)
                                     }
-                                }
-                                Help {
-                                    text: "Removed by " + root.who(removedRow.modelData.by, removedRow.modelData.by_name) + " on "
-                                          + root.when(removedRow.modelData.ts, "d MMM") + ": " + removedRow.modelData.reason
-                                }
-                                LinkButton {
-                                    text: "View profile  ›"; Accessible.name: "Open the profile of " + root.who(removedRow.modelData.key, removedRow.modelData.name)
-                                    onClicked: root.showMember(removedRow.modelData.key)
+                                    Fingerprint { text: removedRow.modelData.fingerprint }
+                                    Help {
+                                        text: "Removed by " + root.who(removedRow.modelData.by, removedRow.modelData.by_name) + " on "
+                                              + root.when(removedRow.modelData.ts, "d MMM") + ": " + removedRow.modelData.reason
+                                    }
+                                    LinkButton {
+                                        text: "View profile  ›"; Accessible.name: "Open the profile of " + root.who(removedRow.modelData.key, removedRow.modelData.name)
+                                        onClicked: root.showMember(removedRow.modelData.key)
+                                    }
                                 }
                             }
                         }
+                        Item { visible: !root.compactRows; Layout.row: 2; Layout.column: 0; Layout.fillHeight: true }   // takes the roster's extra height
                     }
                 }
 
@@ -4061,6 +4106,7 @@ Item {
                 // Profile (the you block opens it): me on this device. Name, backup, invite, leave.
                 TabPage {
                     id: profilePage
+                    maxWidth: 1000
                     readonly property bool staffLocked: root.me.role === "Steward"   // O5: only an admin signs a steward's name
                     readonly property string myName: root.me.name || ""   // a string: changes only when the name does, not on every refresh
                     readonly property string myBio: root.me.bio || ""
@@ -4088,197 +4134,208 @@ Item {
                         buttonText: "Back up key"
                         onActivated: exportPassword.forceActiveFocus()
                     }
-                    Heading { text: "Connection status" }
-                    Rectangle {
-                        objectName: "connCard"
-                        Layout.fillWidth: true
-                        implicitHeight: connCol.implicitHeight + 2
-                        radius: 8; color: root.t.card; border.color: root.t.bd
-                        ColumnLayout {
-                            id: connCol
-                            x: 1; y: 1; width: parent.width - 2
-                            spacing: 0
-                            Repeater {
-                                model: root.connRows.concat([root.balanceRow])
-                                delegate: ColumnLayout {
-                                    id: crow
-                                    required property var modelData
-                                    required property int index
-                                    Layout.fillWidth: true
-                                    spacing: 0
-                                    Accessible.role: Accessible.StaticText
-                                    Accessible.name: modelData.name + ": " + modelData.state + ". " + modelData.detail
-                                    Rectangle { visible: crow.index > 0; Layout.fillWidth: true; implicitHeight: 1; color: root.t.bd }
-                                    RowLayout {
-                                        Layout.fillWidth: true; Layout.margins: 12; Layout.leftMargin: 16; Layout.rightMargin: 16
-                                        spacing: 12
-                                        Rectangle {
-                                            Layout.alignment: Qt.AlignTop; Layout.topMargin: 5
-                                            implicitWidth: 12; implicitHeight: 12; radius: 6; color: root.toneColor(crow.modelData.tone)
-                                        }
-                                        ColumnLayout {
-                                            Layout.fillWidth: true
-                                            spacing: 2
-                                            Label {
-                                                Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.RichText
-                                                text: "<b>" + root.esc(crow.modelData.name) + "</b> &nbsp;<font color='" + (crow.modelData.tone === "idle" ? root.t.muted : crow.modelData.tone === "off" ? root.t.danger : root.t.fg) + "'>" + root.esc(crow.modelData.state) + "</font>"
+                    Panel {   // Harbor's .set: one floating panel, a section per topic (title and help left, controls right)
+                        pad: 0; spacing: 0
+                        SetSection {
+                            title: "Connection status"
+                            ColumnLayout {
+                                Layout.fillWidth: true; spacing: 0
+                                Repeater {
+                                    model: root.connRows.concat([root.balanceRow])
+                                    delegate: ColumnLayout {
+                                        id: crow
+                                        required property var modelData
+                                        required property int index
+                                        Layout.fillWidth: true
+                                        spacing: 0
+                                        Accessible.role: Accessible.StaticText
+                                        Accessible.name: modelData.name + ": " + modelData.state + ". " + modelData.detail
+                                        Rule { visible: crow.index > 0 }
+                                        GridLayout {   // Harbor's .srow: name, a dot and the state, then what it means
+                                            Layout.fillWidth: true; Layout.topMargin: 10; Layout.bottomMargin: 10
+                                            columns: 3; columnSpacing: 12
+                                            Label { Layout.preferredWidth: 130; Layout.alignment: Qt.AlignTop; text: crow.modelData.name; textFormat: Text.PlainText; font.weight: Font.DemiBold }
+                                            RowLayout {
+                                                Layout.preferredWidth: 110; Layout.alignment: Qt.AlignTop; spacing: 8
+                                                Rectangle { implicitWidth: 8; implicitHeight: 8; radius: 4; color: root.toneColor(crow.modelData.tone) }
+                                                Label {
+                                                    Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText; text: crow.modelData.state; font.pointSize: root.sizes.small
+                                                    color: crow.modelData.tone === "idle" ? root.t.muted : crow.modelData.tone === "off" ? root.t.danger : root.t.fg
+                                                }
                                             }
-                                            Help { text: crow.modelData.detail }
+                                            Help { Layout.fillWidth: true; Layout.minimumWidth: 160; Layout.preferredWidth: 1; text: crow.modelData.detail }
                                         }
                                     }
                                 }
                             }
+                            Help { text: root.latestWrite }
                         }
-                    }
-                    Help { Layout.bottomMargin: 8; text: root.latestWrite }
-                    FormRow {
-                        label: "Your code"; sub: root.unapproved ? "(read it aloud at the kiosk)" : ""
-                        Fingerprint { text: root.me.fingerprint || ""; big: root.unapproved }
-                    }
-                    Heading { text: "About you" }
-                    Help { visible: !profilePage.staffLocked; text: "Members of this site read these. Leave them empty to stay a pseudonym." }
-                    Help { visible: profilePage.staffLocked; text: "An admin sets the name of staff. Ask an admin to sign your name." }
-                    FormRow {
-                        visible: !profilePage.staffLocked
-                        label: "Display name"
-                        FramedField {
-                            id: nameField
-                            Layout.fillWidth: true; maximumLength: 64
-                            text: profilePage.myName; Accessible.name: "Display name"
-                            placeholderText: "e.g. Asha"
-                            onTextEdited: profilePage.saved = false
+                        SetSection {
+                            title: "Your code"
+                            help: root.unapproved ? "Read it aloud at the kiosk." : "Read it aloud when an admin asks."
+                            Fingerprint { big: true; text: root.me.fingerprint || "" }
                         }
-                    }
-                    FormRow {
-                        visible: !profilePage.staffLocked
-                        label: "Bio"; sub: "(optional)"
-                        FramedTextArea {
-                            id: bioField
-                            boxHeight: 70; maxLength: 500
-                            wrap: TextEdit.WrapAtWordBoundaryOrAnywhere
-                            text: profilePage.myBio; name: "Bio"
-                            placeholder: "e.g. I live near the water tank and help with the pump."
-                            onEdited: profilePage.saved = false
-                        }
-                    }
-                    FormRow {
-                        visible: !profilePage.staffLocked
-                        label: "Experience"; sub: "(optional)"
-                        FramedTextArea {
-                            id: experienceField
-                            boxHeight: 70; maxLength: 500
-                            wrap: TextEdit.WrapAtWordBoundaryOrAnywhere
-                            text: profilePage.myExperience; name: "Experience"
-                            placeholder: "e.g. Ten years as a plumber."
-                            onEdited: profilePage.saved = false
-                        }
-                    }
-                    FramedCheck {
-                        id: shareProfile
-                        visible: !profilePage.staffLocked
-                        text: "Share my bio, experience and links with the site (off: members see my name and role only)"
-                        Binding on checked { value: root.me.private !== true }
-                        onToggled: profilePage.saved = false
-                    }
-                    FormRow {
-                        visible: !profilePage.staffLocked
-                        label: "Links"; sub: "(optional, up to 4)"
-                        Help { text: "Write the address without https://, at most 30 characters, for example github.com/asha." }
-                        Repeater {
-                            id: socialRows
-                            model: 4
-                            delegate: RowLayout {
-                                id: socialRow
-                                required property int index
-                                readonly property var kept: profilePage.mySocials[index] || null   // [label, address] from the saved profile
-                                property alias label: socialLabel
-                                property alias address: socialAddress
-                                Layout.fillWidth: true; spacing: 8
-                                FramedCombo {
-                                    id: socialLabel
-                                    Layout.preferredWidth: 130
-                                    model: root.socialLabels; Accessible.name: "Type of link " + (socialRow.index + 1)
-                                    currentIndex: socialRow.kept ? Math.max(0, root.socialLabels.indexOf(socialRow.kept[0])) : 0
-                                    onActivated: profilePage.saved = false
-                                }
+                        SetSection {
+                            title: "About you"
+                            help: profilePage.staffLocked ? "An admin sets the name of staff. Ask an admin to sign your name." : "Members of this site read these. Leave them empty to stay a pseudonym."
+                            FormRow {
+                                visible: !profilePage.staffLocked
+                                label: "Display name"; compact: true
                                 FramedField {
-                                    id: socialAddress
-                                    Layout.fillWidth: true; maximumLength: 30
-                                    text: socialRow.kept ? socialRow.kept[1] : ""; Accessible.name: "Address of link " + (socialRow.index + 1)
-                                    placeholderText: "e.g. github.com/asha"
+                                    id: nameField
+                                    Layout.fillWidth: true; maximumLength: 64
+                                    text: profilePage.myName; Accessible.name: "Display name"
+                                    placeholderText: "e.g. Asha"
                                     onTextEdited: profilePage.saved = false
                                 }
                             }
+                            FormRow {
+                                visible: !profilePage.staffLocked
+                                label: "Bio"; sub: "(optional)"; compact: true
+                                FramedTextArea {
+                                    id: bioField
+                                    boxHeight: 70; maxLength: 500
+                                    wrap: TextEdit.WrapAtWordBoundaryOrAnywhere
+                                    text: profilePage.myBio; name: "Bio"
+                                    placeholder: "e.g. I live near the water tank and help with the pump."
+                                    onEdited: profilePage.saved = false
+                                }
+                            }
+                            FormRow {
+                                visible: !profilePage.staffLocked
+                                label: "Experience"; sub: "(optional)"; compact: true
+                                FramedTextArea {
+                                    id: experienceField
+                                    boxHeight: 70; maxLength: 500
+                                    wrap: TextEdit.WrapAtWordBoundaryOrAnywhere
+                                    text: profilePage.myExperience; name: "Experience"
+                                    placeholder: "e.g. Ten years as a plumber."
+                                    onEdited: profilePage.saved = false
+                                }
+                            }
+                            FramedCheck {
+                                id: shareProfile
+                                visible: !profilePage.staffLocked
+                                text: "Share my bio, experience and links with the site (off: members see my name and role only)"
+                                Binding on checked { value: root.me.private !== true }
+                                onToggled: profilePage.saved = false
+                            }
+                            FormRow {
+                                visible: !profilePage.staffLocked
+                                label: "Links"; sub: "(optional, up to 4)"; compact: true
+                                Repeater {
+                                    id: socialRows
+                                    model: 4
+                                    delegate: RowLayout {
+                                        id: socialRow
+                                        required property int index
+                                        readonly property var kept: profilePage.mySocials[index] || null   // [label, address] from the saved profile
+                                        property alias label: socialLabel
+                                        property alias address: socialAddress
+                                        Layout.fillWidth: true; spacing: 8
+                                        FramedCombo {
+                                            id: socialLabel
+                                            Layout.preferredWidth: 130
+                                            model: root.socialLabels; Accessible.name: "Type of link " + (socialRow.index + 1)
+                                            currentIndex: socialRow.kept ? Math.max(0, root.socialLabels.indexOf(socialRow.kept[0])) : 0
+                                            onActivated: profilePage.saved = false
+                                        }
+                                        FramedField {
+                                            id: socialAddress
+                                            Layout.fillWidth: true; maximumLength: 30
+                                            text: socialRow.kept ? socialRow.kept[1] : ""; Accessible.name: "Address of link " + (socialRow.index + 1)
+                                            placeholderText: "e.g. github.com/asha"
+                                            onTextEdited: profilePage.saved = false
+                                        }
+                                    }
+                                }
+                                Help { text: "Write the address without https://, at most 30 characters, for example github.com/asha." }
+                            }
+                            RowLayout {   // Harbor's .savebar
+                                visible: !profilePage.staffLocked
+                                Layout.fillWidth: true; Layout.topMargin: 12
+                                spacing: 14
+                                ActionButton {
+                                    text: "Save profile"; kind: "primary"
+                                    onClicked: root.run("set_profile", [nameField.text, bioField.text, experienceField.text, profilePage.socialsJson(), shareProfile.checked ? "" : "1"],
+                                                        function () { profilePage.saved = true })
+                                }
+                                Help { visible: profilePage.saved; Layout.fillWidth: true; text: "Members see this now. The chain record updates at the next admin batch." }
+                            }
+                            Help { visible: root.removed; text: "Saving your profile does not give back your role. Ask the admin to approve you again." }
                         }
-                    }
-                    RowLayout {
-                        visible: !profilePage.staffLocked
-                        Layout.fillWidth: true
-                        spacing: 12
-                        ActionButton {
-                            text: "Save profile"; kind: "primary"
-                            onClicked: root.run("set_profile", [nameField.text, bioField.text, experienceField.text, profilePage.socialsJson(), shareProfile.checked ? "" : "1"],
-                                                function () { profilePage.saved = true })
+                        SetSection {
+                            visible: !!root.me.account
+                            title: "Network account"
+                            AccountBox {}
                         }
-                        Help { visible: profilePage.saved; text: "Members see this now. The chain record updates at the next admin batch." }
-                    }
-                    Help { visible: root.removed; text: "Saving your profile does not give back your role. Ask the admin to approve you again." }
-                    AccountBox { Layout.topMargin: 12 }
-                    Heading { text: "Back up this identity" }
-                    Help { text: "Your identity is a key on this device. A backup lets you continue as the same person after a reinstall." }
-                    Flash {
-                        err: true
-                        lead: "Keep this and your password safe."
-                        text: "Anyone with both can act as you. Never run the same identity on two devices at once."
-                    }
-                    FormRow {
-                        label: "Password"; sub: "(at least 8 characters)"
-                        FramedField { id: exportPassword; Layout.fillWidth: true; echoMode: TextInput.Password; Accessible.name: "Backup password"; placeholderText: "e.g. a long phrase only you know" }
-                    }
-                    LabelledField {
-                        id: exportConfirm
-                        label: "Repeat the password"
-                        placeholder: "type the same password again"
-                        echoMode: TextInput.Password
-                        buttonText: "Export identity"; buttonKind: "primary"
-                        missing: exportPassword.text.length < 8 ? "The password needs at least 8 characters."
-                               : exportConfirm.text !== exportPassword.text ? "Repeat the same password." : ""
-                        onSubmitted: {
-                            root.run("export_identity", [exportPassword.text],
-                                     function (r) { exportOut.text = r; exportPassword.text = ""; exportConfirm.text = "" })
+                        SetSection {
+                            title: "Back up this identity"
+                            help: "Your identity is a key on this device. A backup lets you continue as the same person after a reinstall."
+                            Flash {
+                                err: true
+                                lead: "Keep this and your password safe."
+                                text: "Anyone with both can act as you. Never run the same identity on two devices at once."
+                            }
+                            FormRow {
+                                label: "Password"; sub: "(at least 8 characters)"; compact: true
+                                FramedField { id: exportPassword; Layout.fillWidth: true; echoMode: TextInput.Password; Accessible.name: "Backup password"; placeholderText: "e.g. a long phrase only you know" }
+                            }
+                            LabelledField {
+                                id: exportConfirm
+                                label: "Repeat the password"; compact: true
+                                placeholder: "type the same password again"
+                                echoMode: TextInput.Password
+                                buttonText: "Export identity"; buttonKind: "primary"
+                                missing: exportPassword.text.length < 8 ? "The password needs at least 8 characters."
+                                       : exportConfirm.text !== exportPassword.text ? "Repeat the same password." : ""
+                                onSubmitted: {
+                                    root.run("export_identity", [exportPassword.text],
+                                             function (r) { exportOut.text = r; exportPassword.text = ""; exportConfirm.text = "" })
+                                }
+                            }
+                            FormRow {
+                                visible: exportOut.text !== ""
+                                label: "Identity backup"; compact: true
+                                FramedTextArea {
+                                    id: exportOut
+                                    readOnly: true; mono: true; boxHeight: 90
+                                    name: "identity backup"
+                                    FramedButton { text: "Hide"; onClicked: exportOut.text = "" }
+                                }
+                            }
                         }
-                    }
-                    FormRow {
-                        visible: exportOut.text !== ""
-                        label: "Identity backup"
-                        FramedTextArea {
-                            id: exportOut
-                            readOnly: true; mono: true; boxHeight: 90
-                            name: "identity backup"
-                            FramedButton { text: "Hide"; onClicked: exportOut.text = "" }
+                        SetSection {
+                            visible: root.approved
+                            title: "Invite someone"
+                            help: "People join with this site id. An admin approves them after they read their code aloud."
+                            FormRow {
+                                label: "Site id"; compact: true
+                                RowLayout {
+                                    Layout.fillWidth: true; spacing: 8
+                                    FramedField { Layout.fillWidth: true; readOnly: true; text: root.shortId(root.me.site || ""); font.family: "monospace"; Accessible.name: "Site id" }
+                                    FramedButton { text: "Copy"; iconName: "copy"; Accessible.name: "Copy the full site id"; onClicked: root.copyText(root.me.site) }
+                                }
+                            }
                         }
-                    }
-                    Heading { visible: root.approved; text: "Invite someone" }
-                    Help { visible: root.approved; text: "People join with this site id. An admin approves them after they read their code aloud." }
-                    RowLayout {
-                        visible: root.approved
-                        spacing: 8
-                        Label { text: "Site id  " + root.shortId(root.me.site || ""); font.family: "monospace" }
-                        FramedButton { text: "Copy"; iconName: "copy"; Accessible.name: "Copy the full site id"; onClicked: root.copyText(root.me.site) }
-                    }
-                    Heading { visible: root.approved; text: "My reports" }
-                    RowLayout {
-                        visible: root.approved
-                        spacing: 12
-                        Label { text: profilePage.mineOpen + " open · " + (profilePage.myReports.length - profilePage.mineOpen) + " closed" }
-                        LinkButton { text: "Show in the Issue Tracker  ›"; onClicked: { root.onlyMine = true; root.openPage("board") } }
-                    }
-                    Heading { text: "Leave this site" }
-                    Help { text: "Removes this device's copy of the site. Your key stays." }
-                    ConfirmButton {
-                        text: "Leave this site…"; kind: "danger"; confirmText: "Confirm leave"
-                        effect: "You go back to the start screen."
-                        onConfirmed: root.leave()
+                        SetSection {
+                            visible: root.approved
+                            title: "My reports"
+                            RowLayout {
+                                spacing: 12
+                                Label { text: profilePage.mineOpen + " open · " + (profilePage.myReports.length - profilePage.mineOpen) + " closed" }
+                                LinkButton { text: "Show in the Issue Tracker  ›"; onClicked: { root.onlyMine = true; root.openPage("board") } }
+                            }
+                        }
+                        SetSection {
+                            title: "Leave this site"
+                            help: "Removes this device's copy of the site. Your key stays."
+                            ConfirmButton {
+                                text: "Leave this site…"; kind: "danger"; confirmText: "Confirm leave"
+                                effect: "You go back to the start screen."
+                                onConfirmed: root.leave()
+                            }
+                        }
                     }
                 }
 
@@ -4865,6 +4922,7 @@ Item {
                 TabPage {
                     id: memberPage
                     objectName: "memberPage"
+                    maxWidth: 1040
                     readonly property var v: root.viewed
                     readonly property bool ok: !!v && !v.error
                     readonly property bool full: ok && !v.removed && v.role !== "Steward" && v.state !== "private"   // bio, experience and links show
@@ -4872,60 +4930,71 @@ Item {
                     readonly property var links: ok && v.socials ? v.socials : []
                     readonly property bool empty: ok && !v.bio && !v.experience && links.length === 0
                     LinkButton { text: "‹  Back to People"; Accessible.name: "Back to People"; onClicked: root.openPage("people") }
-                    PageHead { title: memberPage.ok ? memberPage.person : "Member"; lede: memberPage.ok ? root.esc(memberPage.v.removed ? "Removed" : (memberPage.v.super_admin ? "Super admin" : memberPage.v.role || "Pending")) : "" }
                     Help { visible: !memberPage.v; text: "Loading this member…" }
                     Help { visible: !!memberPage.v && !!memberPage.v.error; color: root.t.danger; text: memberPage.v ? String(memberPage.v.error || "") : "" }
-                    RowLayout {
+                    GridLayout {   // Harbor's .mem: who they are (372 px) beside what they wrote
                         visible: memberPage.ok
-                        spacing: 8
-                        Fingerprint { text: memberPage.ok ? memberPage.v.fingerprint : "" }
-                        StatusChip { visible: memberPage.ok && !memberPage.v.removed && memberPage.v.role !== "Resident"; label: memberPage.ok ? (memberPage.v.super_admin ? "Super admin" : memberPage.v.role || "") : ""; stage: root.t.progress }
-                        StatusChip { visible: memberPage.ok && !!memberPage.v.removed; label: "Removed"; stage: root.t.closed }
-                        Label { visible: memberPage.ok && memberPage.v.own; text: "you"; color: root.t.muted; font.pointSize: root.smallSize }
-                    }
-                    FormRow {
-                        visible: memberPage.ok && memberPage.v.granted_at_ms > 0
-                        label: "Joined"
-                        Label { text: memberPage.ok ? root.when(memberPage.v.granted_at_ms / 1000, "d MMMM yyyy") : "" }
-                    }
-                    Help { visible: memberPage.ok && !!memberPage.v.removed; text: "This member was removed from the site. Only the name stays." }
-                    Help { visible: memberPage.ok && memberPage.v.role === "Steward"; text: "A steward has a name and a role only." }
-                    Help { visible: memberPage.ok && memberPage.v.state === "private"; text: "This member keeps their profile private. You see the name and the role only." }
-                    Help { visible: memberPage.ok && memberPage.v.own && memberPage.v.private; text: "Your profile is private. Other members see your name and role only." }
-                    Help { visible: memberPage.ok && memberPage.v.pointer === "announced"; text: "This profile has a newer edit. The chain record updates at the next admin batch." }
-                    ColumnLayout {
-                        visible: memberPage.full
-                        Layout.fillWidth: true; spacing: 8
-                        Help { visible: memberPage.v && memberPage.v.state === "loading"; text: "This profile has not arrived yet. The app tries again by itself." }
-                        ActionButton { visible: memberPage.v && memberPage.v.state === "loading"; text: "Try again"; onClicked: root.call("member_profile", [root.viewKey], root.applyViewed) }
-                        Help { visible: memberPage.v && memberPage.v.state !== "loading" && memberPage.empty; text: memberPage.v && memberPage.v.own ? "You have no bio yet. Add one on the You page." : "This member has no bio yet." }
-                        Heading { visible: !!(memberPage.v && memberPage.v.bio); text: "Bio" }
-                        Note { visible: !!(memberPage.v && memberPage.v.bio); text: memberPage.v ? memberPage.v.bio || "" : "" }
-                        Heading { visible: !!(memberPage.v && memberPage.v.experience); text: "Experience" }
-                        Note { visible: !!(memberPage.v && memberPage.v.experience); text: memberPage.v ? memberPage.v.experience || "" : "" }
-                        Heading { visible: memberPage.links.length > 0; text: "Links" }
-                        Repeater {
-                            model: memberPage.links
-                            delegate: RowLayout {
-                                id: linkRow
-                                required property var modelData
-                                Layout.fillWidth: true; spacing: 12
-                                Label { Layout.preferredWidth: 90; text: linkRow.modelData[0]; textFormat: Text.PlainText; color: root.t.muted }
-                                Label { Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText; font.family: "monospace"; text: linkRow.modelData[1] }
-                                ConfirmButton {
-                                    text: "Open"; name: "Open the " + linkRow.modelData[0] + " link"; confirmText: "Open link"
-                                    effect: "This opens https://" + linkRow.modelData[1] + " in your browser. Open only links that you trust."
-                                    onConfirmed: Qt.openUrlExternally("https://" + linkRow.modelData[1])
+                        Layout.fillWidth: true
+                        columns: root.compactRows ? 1 : 2; columnSpacing: root.gaps.gutter; rowSpacing: root.gaps.gutter
+                        Panel {
+                            pad: 26; spacing: 14
+                            Layout.alignment: Qt.AlignTop; Layout.fillWidth: root.compactRows; Layout.preferredWidth: 372; Layout.maximumWidth: root.compactRows ? 100000 : 372
+                            RowLayout {
+                                Layout.fillWidth: true; spacing: 18
+                                Avatar { Layout.alignment: Qt.AlignTop; size: 88; name: memberPage.ok ? memberPage.v.name || "" : ""; ident: memberPage.ok ? memberPage.v.fingerprint : "" }
+                                ColumnLayout {
+                                    Layout.fillWidth: true; Layout.fillHeight: false; spacing: 6
+                                    Label { Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText; text: memberPage.person; font.pointSize: root.px(23); font.weight: Font.DemiBold }
+                                    Fingerprint { text: memberPage.ok ? memberPage.v.fingerprint : "" }
+                                    Flow {
+                                        Layout.fillWidth: true; spacing: 8
+                                        RoleChip { visible: memberPage.ok && !memberPage.v.removed; role: memberPage.ok ? memberPage.v.role || "Pending" : ""; owner: memberPage.ok && !!memberPage.v.super_admin }
+                                        RoleChip { visible: memberPage.ok && !!memberPage.v.removed; role: "Removed" }
+                                        Label { visible: memberPage.ok && !!memberPage.v.own; text: "you"; color: root.t.muted; font.pointSize: root.sizes.cap }
+                                    }
+                                    Help { visible: memberPage.ok && memberPage.v.granted_at_ms > 0; text: memberPage.ok ? "Joined " + root.when(memberPage.v.granted_at_ms / 1000, "d MMMM yyyy") : "" }
                                 }
                             }
+                            Help { visible: memberPage.ok && !!memberPage.v.removed; text: "This member was removed from the site. Only the name stays." }
+                            Help { visible: memberPage.ok && memberPage.v.role === "Steward"; text: "A steward has a name and a role only." }
+                            Help { visible: memberPage.ok && memberPage.v.state === "private"; text: "This member keeps their profile private. You see the name and the role only." }
+                            Help { visible: memberPage.ok && memberPage.v.own && memberPage.v.private; text: "Your profile is private. Other members see your name and role only." }
+                            Help { visible: memberPage.ok && memberPage.v.pointer === "announced"; text: "This profile has a newer edit. The chain record updates at the next admin batch." }
+                            Heading { visible: memberPage.full && memberPage.links.length > 0; Layout.topMargin: 6; text: "Links" }
+                            Flow {   // Harbor's .socs: one pill per link; a click asks first, in a line of its own
+                                visible: memberPage.full && memberPage.links.length > 0
+                                Layout.fillWidth: true; spacing: 8
+                                Repeater {
+                                    model: memberPage.links
+                                    delegate: ConfirmButton {
+                                        required property var modelData
+                                        kind: "ghost"; text: modelData[0] + " · " + modelData[1]; name: "Open the " + modelData[0] + " link"; confirmText: "Open link"
+                                        effect: "This opens https://" + modelData[1] + " in your browser. Open only links that you trust."
+                                        onConfirmed: Qt.openUrlExternally("https://" + modelData[1])
+                                    }
+                                }
+                            }
+                            ColumnLayout {   // Harbor's .mbtns
+                                visible: memberPage.ok && !memberPage.v.removed
+                                Layout.fillWidth: true; Layout.topMargin: 6; spacing: 8
+                                ActionButton { visible: memberPage.ok && memberPage.v.own; Layout.fillWidth: true; text: "Edit your profile"; kind: "primary"; onClicked: root.openPage("profile") }
+                                ActionButton { visible: memberPage.ok && !memberPage.v.own && root.approved; Layout.fillWidth: true; text: "Message"; kind: "primary"; onClicked: root.openChat(root.viewKey) }
+                                ActionButton { visible: memberPage.ok && !memberPage.v.own && root.approved; Layout.fillWidth: true; text: "Plan a 1:1 meeting"; onClicked: root.startMeet(memberPage.v) }
+                            }
                         }
-                    }
-                    RowLayout {
-                        visible: memberPage.ok && !memberPage.v.removed
-                        spacing: 12
-                        ActionButton { visible: memberPage.ok && memberPage.v.own; text: "Edit your profile"; kind: "primary"; onClicked: root.openPage("profile") }
-                        ActionButton { visible: memberPage.ok && !memberPage.v.own && root.approved; text: "Message"; onClicked: root.openChat(root.viewKey) }
-                        ActionButton { visible: memberPage.ok && !memberPage.v.own && root.approved; text: "Plan a 1:1 meeting"; onClicked: root.startMeet(memberPage.v) }
+                        Panel {
+                            visible: memberPage.full
+                            pad: 26; spacing: 12
+                            Layout.alignment: Qt.AlignTop
+                            Help { visible: memberPage.v && memberPage.v.state === "loading"; text: "This profile has not arrived yet. The app tries again by itself." }
+                            ActionButton { visible: memberPage.v && memberPage.v.state === "loading"; text: "Try again"; onClicked: root.call("member_profile", [root.viewKey], root.applyViewed) }
+                            Help { visible: memberPage.v && memberPage.v.state !== "loading" && memberPage.empty; text: memberPage.v && memberPage.v.own ? "You have no bio yet. Add one on the You page." : "This member has no bio yet." }
+                            Heading { visible: !!(memberPage.v && memberPage.v.bio); text: "Bio" }
+                            Note { visible: !!(memberPage.v && memberPage.v.bio); font.pointSize: root.sizes.lead; text: memberPage.v ? memberPage.v.bio || "" : "" }
+                            Rule { visible: !!(memberPage.v && memberPage.v.bio && memberPage.v.experience); Layout.topMargin: 8; Layout.bottomMargin: 8 }
+                            Heading { visible: !!(memberPage.v && memberPage.v.experience); text: "Experience" }
+                            Note { visible: !!(memberPage.v && memberPage.v.experience); font.pointSize: root.sizes.lead; text: memberPage.v ? memberPage.v.experience || "" : "" }
+                        }
                     }
                 }
                 // Messages: private chat with another active member, or a group of active members. The chats on the left, the open
