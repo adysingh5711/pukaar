@@ -105,19 +105,19 @@ Item {
     property string viewKey: ""          // the member whose page is open
     property var viewed: null            // member_profile of viewKey, or {error} once the core refused
     readonly property var socialMetaMap: ({
-        website: { icon: "website", title: "Website", filled: false },
-        github: { icon: "github", title: "GitHub", filled: true },
-        x: { icon: "socialX", title: "X", filled: true },
-        linkedin: { icon: "linkedin", title: "LinkedIn", filled: true },
-        telegram: { icon: "telegram", title: "Telegram", filled: true },
-        working: { icon: "hammer", title: "Currently working on", filled: false },
-        other: { icon: "link", title: "Other", filled: false }
+        website: { icon: "website", title: "Website", filled: false, placeholder: "yourwebsite.com" },
+        github: { icon: "github", title: "GitHub", filled: true, placeholder: "github.com/username" },
+        x: { icon: "socialX", title: "X", filled: true, placeholder: "x.com/username" },
+        linkedin: { icon: "linkedin", title: "LinkedIn", filled: true, placeholder: "linkedin.com/in/username" },
+        telegram: { icon: "telegram", title: "Telegram", filled: true, placeholder: "t.me/username" },
+        working: { icon: "hammer", title: "Currently working on", filled: false, placeholder: "github.com/username/project" },
+        other: { icon: "link", title: "Other", filled: false, placeholder: "example.com/username" }
     })
     function socialMeta(label) { return socialMetaMap[label] || socialMetaMap.other }
     // The link types a member can pick, in the order of the dropdown and of the default rows.
     readonly property var socialTypes: ["github", "x", "linkedin", "telegram", "website", "working", "other"].map(function (k) {
         var m = socialMetaMap[k]
-        return { label: k, title: m.title, icon: m.icon, filled: m.filled }
+        return { label: k, title: m.title, icon: m.icon, filled: m.filled, placeholder: m.placeholder }
     })
     function socialUrl(address) { return "https://" + String(address).replace(/^https?:\/\//i, "") }
     function applyViewed(v) { if (v && v.key === viewKey) viewed = v; else if (typeof v === "string") viewed = { error: v } }
@@ -244,7 +244,7 @@ Item {
     function px(n) { return baseSize * n / 14 }
     readonly property var sizes: ({ cap: px(12), small: px(13), body: px(14), lead: px(15), h3: px(16), title: px(18), h2: px(20),
                                     brand: px(22), key: px(26), h1: px(28), hero: px(40) })
-    // Motion: 120 to 220 ms, ease-out, hover and press colour only (see the Eased components).
+    // Motion: 120 to 220 ms, ease-out: hover and press colour changes (see the Eased components) and the page change (pageStack).
     readonly property var motion: ({ fast: 120, base: 160, slow: 220, ease: Easing.OutCubic })
     // Every control reads these roles. Set once on the root, so nothing falls back to the
     // system palette (a dark OS would otherwise give light-on-light or dark-on-dark controls).
@@ -1036,9 +1036,15 @@ Item {
         SideTip { text: nav.text + nav.waiting; visible: nav.compact && (nav.hovered || nav.visualFocus) }
         background: Rectangle {
             radius: root.radii.nav
-            color: nav.hovered && !nav.current ? root.t.hoverSoft : "transparent"
+            color: "transparent"
             border.width: nav.visualFocus ? 2 : 0; border.color: root.t.focus
-            Behavior on color { EasedColor {} }
+            Rectangle {   // the hover and press fill: its opacity fades, never its colour (a ColorAnimation to "transparent" dips through black); on the current item it matches the highlight beneath, so a click never dips
+                anchors.fill: parent; radius: parent.radius
+                color: nav.down ? root.t.hover : root.t.hoverSoft
+                opacity: nav.hovered || nav.down ? 1 : 0
+                Behavior on opacity { Eased { duration: root.motion.fast } }
+                Behavior on color { EasedColor { duration: root.motion.fast } }
+            }
             Rectangle {   // the count pill: right of the label, or the rail icon's top-right corner
                 visible: nav.count > 0
                 width: Math.max(height, pill.implicitWidth + 12); height: 20; radius: 10
@@ -1055,11 +1061,15 @@ Item {
             }
         }
         contentItem: Item {
-            Icon { name: nav.glyph; size: 18; color: nav.current ? root.t.accent : nav.lit ? root.t.fg : root.t.muted; anchors.verticalCenter: parent.verticalCenter; x: nav.compact ? (parent.width - width) / 2 : 0 }
+            Icon {
+                name: nav.glyph; size: 18; color: nav.current ? root.t.accent : nav.lit ? root.t.fg : root.t.muted; anchors.verticalCenter: parent.verticalCenter; x: nav.compact ? (parent.width - width) / 2 : 0
+                Behavior on color { EasedColor { duration: root.motion.fast } }
+            }
             Label {
                 visible: !nav.compact
                 x: 30; width: parent.width - 30 - (nav.count > 0 || nav.dot ? 36 : 0); anchors.verticalCenter: parent.verticalCenter
                 text: nav.text; color: nav.lit ? root.t.fg : root.t.muted; elide: Text.ElideRight; font.weight: Font.Medium
+                Behavior on color { EasedColor { duration: root.motion.fast } }
             }
         }
     }
@@ -1677,6 +1687,7 @@ Item {
         id: sect
         property string title
         property string help
+        property bool glow: false       // a brief accent on the title: "this is the part you were sent to"
         default property alias body: bodyCol.data
         Layout.fillWidth: true
         spacing: 0
@@ -1687,7 +1698,8 @@ Item {
             ColumnLayout {
                 Layout.alignment: Qt.AlignTop; Layout.fillWidth: root.compactRows; Layout.preferredWidth: 230
                 spacing: 6
-                Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: sect.title; font.pointSize: root.sizes.h3; font.weight: Font.DemiBold }
+                Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: sect.title; font.pointSize: root.sizes.h3; font.weight: Font.DemiBold
+                    color: sect.glow ? root.t.accent : root.t.fg; Behavior on color { EasedColor {} } }
                 Help { visible: sect.help !== ""; text: sect.help; font.pointSize: root.sizes.cap }
             }
             ColumnLayout { id: bodyCol; Layout.alignment: Qt.AlignTop; Layout.fillWidth: true; Layout.maximumWidth: 620; spacing: 8 }
@@ -2591,7 +2603,7 @@ Item {
                     y: navBox.hlY
                     opacity: navBox.curItem ? 1 : 0
                     Behavior on opacity { Eased {} }
-                    Behavior on y { enabled: hl.opacity === 1; Eased { duration: root.motion.slow } }
+                    Behavior on y { enabled: hl.opacity === 1; Eased { duration: root.motion.base } }
                 }
                 ColumnLayout {
                     id: navCol
@@ -2632,15 +2644,16 @@ Item {
                             hoverEnabled: true
                             focusPolicy: Qt.StrongFocus
                             objectName: "statusDot-" + modelData.name
-                            Accessible.name: modelData.name + ": " + modelData.state + ". See Profile for details"
+                            Accessible.name: modelData.name + ": " + modelData.state + ". " + modelData.detail + (root.inSite ? " Show in Profile" : "")
                             HoverHandler { cursorShape: Qt.PointingHandCursor }
                             SideTip {
                                 objectName: "statusTip-" + dot.modelData.name
                                 x: (dot.width - width) / 2; y: -height - 6; margins: 4     // above the dot: a tip on the right would hide the next dot
-                                text: root.inSite ? "See Profile for details" : dot.modelData.name + ": " + dot.modelData.state.toLowerCase()
+                                width: Math.min(implicitWidth, 260)     // long details wrap
+                                text: dot.modelData.name + ": " + dot.modelData.state + ". " + dot.modelData.detail + (root.inSite ? " Click to see it in Profile." : "")
                                 visible: dot.hovered || dot.visualFocus
                             }
-                            onClicked: if (root.inSite) root.openPage("profile")
+                            onClicked: if (root.inSite) { root.openPage("profile"); profilePage.showConnections() }
                             background: Rectangle {
                                 radius: root.radii.tag
                                 color: dot.hovered ? root.t.hover : "transparent"
@@ -2685,7 +2698,7 @@ Item {
                 onClicked: root.openPage("profile")
                 background: Rectangle {
                     radius: root.radii.card
-                    color: root.page === "profile" ? root.t.hover : you.hovered ? root.t.hoverSoft : "transparent"
+                    color: root.page === "profile" ? root.t.hover : you.hovered ? root.t.hoverSoft : root.fade(root.t.hover, 0)   // same colour at alpha 0: "transparent" would dip through black
                     border.width: you.visualFocus ? 2 : 0; border.color: root.t.focus
                     Behavior on color { EasedColor {} }
                 }
@@ -3196,12 +3209,28 @@ Item {
             StackLayout {
                 id: pageStack
                 visible: !(root.narrow && root.paneOpen)   // narrow: the pane takes the page's place
-                currentIndex: root.pages.indexOf(root.page)
+                // The page being shown follows `want` only once the old one has faded out: the swap happens at opacity 0, so
+                // the new page is never drawn at full strength for a frame (that was the flicker).
+                // While it fades the whole stack is one layer: without it every panel, header wash and label fades on its own
+                // and they show through each other. Panels are lighter than the window in the light palette (well #fafafa on
+                // page #f1f1f1), so that shows there and not in the dark one (#1c1c1c on #171717).
+                layer.enabled: pageSwap.running
+                property int want: root.pages.indexOf(root.page)
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                // A short fade-in whenever the page changes (160 ms, ease-out)
-                onCurrentIndexChanged: pageFade.restart()
-                Eased { id: pageFade; target: pageStack; property: "opacity"; from: 0; to: 1 }
+                transform: Translate { id: pageShift }
+                // Old page fades out (120 ms), the new one fades in and rises 10 px (160 ms, ease-out); a click mid-way resumes from
+                // the current opacity.
+                onWantChanged: pageSwap.restart()
+                SequentialAnimation {
+                    id: pageSwap
+                    Eased { target: pageStack; property: "opacity"; to: 0; duration: root.motion.fast }
+                    ScriptAction { script: { pageStack.currentIndex = pageStack.want; pageShift.y = 10 } }
+                    ParallelAnimation {
+                        Eased { target: pageStack; property: "opacity"; to: 1 }
+                        Eased { target: pageShift; property: "y"; to: 0 }
+                    }
+                }
 
                 // Home (opens first): what Pukaar is for, said once, then this site in its own numbers: what is open, what
                 // waits for you, how a report moves here, and every page with one line on what it is for.
@@ -4293,6 +4322,22 @@ Item {
                         return type
                     }
                     property bool saved: false           // the last save went through: say where it is shown
+                    // A status dot of the sidebar sends here: scroll (eased) to Connection status once the page has faded in, then flash its title.
+                    function showConnections() {
+                        var flick = contentItem as Flickable
+                        var y = connSection.mapToItem(flick.contentItem, 0, 0).y - 16
+                        scrollToConn.to = Math.max(0, Math.min(y, flick.contentHeight - flick.height))
+                        scrollToConn.restart()
+                    }
+                    SequentialAnimation {
+                        id: scrollToConn
+                        property real to: 0
+                        PauseAnimation { duration: root.motion.fast }
+                        Eased { target: profilePage.contentItem; property: "contentY"; to: scrollToConn.to; duration: root.motion.slow * 2 }
+                        ScriptAction { script: connSection.glow = true }
+                        PauseAnimation { duration: 1000 }
+                        ScriptAction { script: connSection.glow = false }
+                    }
                     readonly property var myReports: root.issues.filter(function (i) { return i.reporter === root.me.key })
                     readonly property int mineOpen: myReports.filter(function (i) { return !root.isTerminal(i.status) }).length
                     RowLayout {
@@ -4339,7 +4384,7 @@ Item {
                                 label: "Bio"; sub: "(optional)"; compact: true
                                 FramedTextArea {
                                     id: bioField
-                                    boxHeight: 70; maxLength: 500
+                                    boxHeight: 70; maxLength: 400
                                     wrap: TextEdit.WrapAtWordBoundaryOrAnywhere
                                     text: profilePage.myBio; name: "Bio"
                                     placeholder: "e.g. I live near the water tank and help with the pump."
@@ -4351,7 +4396,7 @@ Item {
                                 label: "Experience"; sub: "(optional)"; compact: true
                                 FramedTextArea {
                                     id: experienceField
-                                    boxHeight: 70; maxLength: 500
+                                    boxHeight: 70; maxLength: 400
                                     wrap: TextEdit.WrapAtWordBoundaryOrAnywhere
                                     text: profilePage.myExperience; name: "Experience"
                                     placeholder: "e.g. Ten years as a plumber."
@@ -4367,10 +4412,10 @@ Item {
                             }
                             FormRow {
                                 visible: !profilePage.staffLocked
-                                label: "Links"; sub: "(optional, up to 4)"; compact: true
+                                label: "Links"; sub: "(optional)"; compact: true
                                 Repeater {
                                     id: socialRows
-                                    model: 4
+                                    model: 7
                                     delegate: RowLayout {
                                         id: socialRow
                                         required property int index
@@ -4400,12 +4445,12 @@ Item {
                                             id: socialAddress
                                             Layout.fillWidth: true; maximumLength: 30
                                             text: socialRow.kept ? socialRow.kept[1] : ""; Accessible.name: "Address of link " + (socialRow.index + 1)
-                                            placeholderText: "e.g. github.com/asha"
+                                            placeholderText: "e.g. " + root.socialMeta(socialLabel.currentValue).placeholder
                                             onTextEdited: profilePage.saved = false
                                         }
                                     }
                                 }
-                                Help { text: "Write the address without https://, at most 30 characters, for example github.com/asha." }
+                                Help { text: "Write the address without https://, at most 30 characters, for example github.com/username." }
                             }
                             RowLayout {   // Harbor's .savebar
                                 visible: !profilePage.staffLocked
@@ -4484,6 +4529,7 @@ Item {
                             }
                         }
                         SetSection {
+                            id: connSection
                             title: "Connection status"
                             ColumnLayout {
                                 Layout.fillWidth: true; spacing: 0
