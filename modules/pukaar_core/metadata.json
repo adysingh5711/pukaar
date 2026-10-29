@@ -15,6 +15,11 @@
     "packages": { "build": [], "runtime": [] },
     "rust": { "toolchain": "1.98.1", "packages": { "build": ["clang", "pkg-config", "rustPlatform.bindgenHook"], "runtime": [] } },
     "external_libraries": [],
-    "cmake": { "find_packages": [], "extra_sources": [], "extra_include_dirs": [], "extra_link_libraries": [] }
+    "cmake": { "find_packages": [], "extra_sources": [], "extra_include_dirs": [], "extra_link_libraries": [] },
+    "platforms": [
+      { "when": { "os": "linux" },
+        "packages": { "runtime": ["pcsclite"] },
+        "rust": { "packages": { "runtime": ["pcsclite"] } } }
+    ]
   }
 }

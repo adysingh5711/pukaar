@@ -1,5 +1,5 @@
 name: ci
-on: [push, pull_request]
+on: [push, pull_request, workflow_dispatch]
 jobs:
   logic:
     runs-on: ubuntu-latest
@@ -32,3 +32,33 @@ jobs:
           v=$(jq -r .version modules/pukaar_ui/metadata.json)
           [ "$v" = "$(jq -r .version modules/pukaar_core/metadata.json)" ] || { echo "metadata.json versions differ"; exit 1; }
           [[ "$GITHUB_REF" != refs/tags/v* ]] || [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME != v$v in metadata.json"; exit 1; }
+  # Linux .lgx packages, one artifact per os-arch. The full build takes long, so it runs only on a
+  # v* tag or by hand. scripts/release.sh merges them with the macOS build and signs (docs/developing.md).
+  lgx:
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-24.04, variant: linux-amd64 }
+          - { runner: ubuntu-24.04-arm, variant: linux-arm64 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            extra-substituters = https://cache.nix.logos.co/public
+            extra-trusted-public-keys = public:l4HrXgL4nw246+LBh2SOJyhz64BoGegOYLheT/iIAPU=
+      - run: scripts/build-lgx.sh all
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lgx-${{ matrix.variant }}
+          path: dist/*.lgx
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: lgx-${{ matrix.variant }}-logs
+          path: dist/pukaar-build-logs/*.log

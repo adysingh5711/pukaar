@@ -25,7 +25,8 @@ status() {
     echo "ELAPSED=$(el)"; echo "LAST=$(cat "$LASTF" 2>/dev/null)"; [ -n "${2:-}" ] && echo "$2"; } >"$STATUS.tmp"
   mv "$STATUS.tmp" "$STATUS"
 }
-mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1"; }
+# GNU stat first: on Linux `stat -f` is a filesystem query that prints "?" and still succeeds.
+mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1"; }
 heartbeat() {
   while sleep 10; do
     status running
@@ -135,7 +136,7 @@ run_module() {
   echo hash >"$STEPF"; status running
   say "== [4/4] sha256 and size =="
   sha=$(shasum -a 256 "$DEST/$lgx_name" | cut -d' ' -f1)
-  size=$(stat -f %z "$DEST/$lgx_name" 2>/dev/null || stat -c %s "$DEST/$lgx_name")
+  size=$(stat -c %s "$DEST/$lgx_name" 2>/dev/null || stat -f %z "$DEST/$lgx_name")
   say "sha256 $sha"
   say "size   $size bytes"
   kill "$HB" 2>/dev/null; HB=""

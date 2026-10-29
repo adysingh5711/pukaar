@@ -22,10 +22,12 @@ string(JSON MODULE_NAME GET ${METADATA_JSON} name)
 
 # The wallet crate pulls in pcsc-sys (keycard support). A Rust staticlib drops the link flag of
 # pcsc-sys, and the macOS link allows undefined symbols, so name the PCSC framework here.
-# Linux would need pcsclite instead (not built or shipped by us).
+# Linux links pcsclite (metadata.json adds it to the Linux build through nix.platforms).
 set(PCSC_LIBS "")
 if(APPLE)
     set(PCSC_LIBS "-Wl,-framework,PCSC")
+elseif(UNIX)
+    set(PCSC_LIBS pcsclite)
 endif()
 
 logos_module(NAME ${MODULE_NAME} LINK_LIBRARIES ${PCSC_LIBS})
