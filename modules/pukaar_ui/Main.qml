@@ -36,6 +36,7 @@ Item {
     property var inbox: []               // [{ms, text, tone}], at most 50
     property int unread: 0               // notices added since the panel was last open: the bell's badge
     property bool inboxOpen: false
+    property double inboxClosedAt: 0     // ms: a press on the bell closes the panel first, and its click must not open it again
     function addNotice(text, tone) {
         if (inbox.length && inbox[0].text === text) return      // the same banner twice in a row is one notice
         inbox = [{ ms: Date.now(), text: text, tone: tone }].concat(inbox.slice(0, 49))
@@ -2352,7 +2353,7 @@ Item {
                 NavItem {   // Notifications: the bell opens the panel; the pill counts what came in since it was last open
                     text: "Notifications"; glyph: "bell"; compact: !sidebar.open
                     count: root.unread; current: root.inboxOpen
-                    onClicked: root.inboxOpen = !root.inboxOpen
+                    onClicked: root.inboxOpen = !root.inboxOpen && Date.now() - root.inboxClosedAt > 300
                 }
                 GridLayout {   // delivery, chain and Storage: one dot each, no words. A click opens Profile, which has the details.
                     Layout.alignment: sidebar.open ? Qt.AlignLeft : Qt.AlignHCenter
@@ -2463,8 +2464,8 @@ Item {
     Popup {
         id: inboxPanel
         parent: root
-        onClosed: root.inboxOpen = false     // Escape
-        closePolicy: Popup.CloseOnEscape
+        onClosed: { root.inboxOpen = false; root.inboxClosedAt = Date.now() }     // Escape, a press outside, or Close
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         x: root.sidebarWidth + 8
         width: Math.min(400, root.width - x - 16); height: Math.min(440, root.height - 32); y: root.height - height - 16
         padding: 12
