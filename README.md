@@ -10,7 +10,7 @@ Pukaar is a [Logos Basecamp](https://github.com/logos-co/logos-basecamp) app for
 
 [![ci](https://github.com/adysingh5711/pukaar/actions/workflows/ci.yml/badge.svg)](https://github.com/adysingh5711/pukaar/actions/workflows/ci.yml)
 ![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)
-![status](https://img.shields.io/badge/status-pilot--ready%20v0.4.1-blue)
+![status](https://img.shields.io/badge/status-pilot--ready%20v0.4.2-blue)
 
 | At a glance | |
 |---|---|
@@ -20,7 +20,7 @@ Pukaar is a [Logos Basecamp](https://github.com/logos-co/logos-basecamp) app for
 | How it syncs | Peer to peer over Logos Delivery. Every member holds a full copy. Anchors on the Logos Execution Zone (LEZ) fix the history |
 | What it costs today | Nothing to run. See [What it costs](docs/install-and-run.md#what-it-costs) |
 | Runs on | Logos Basecamp 0.3.1 or higher |
-| Latest release | [v0.4.1](https://github.com/adysingh5711/pukaar/releases/tag/v0.4.1): `.lgx` packages for Logos Basecamp 0.3.1 |
+| Latest release | [v0.4.2](https://github.com/adysingh5711/pukaar/releases/tag/v0.4.2): `.lgx` packages for Logos Basecamp 0.3.1 |
 | Demo video | To be added |
 
 ## See it
@@ -88,11 +88,11 @@ The tap is still dripping, and the reporter wants to ask the steward a question.
 
 Usage steps, the full table and the limits are in [Features and roles](docs/features.md#talk-it-through-in-the-same-app).
 
-## Install (v0.4.1)
+## Install (v0.4.2)
 
-Add this source in Basecamp, Package Manager: `https://raw.githubusercontent.com/adysingh5711/pukaar/main/public/install/logos-repo.json`. You can also use the [install page](https://pukaar-logos.vercel.app/), or install by hand with the release notes. The packages need Logos Basecamp 0.3.1 on a Mac with Apple silicon.
+Add this source in Basecamp, Package Manager: `https://raw.githubusercontent.com/adysingh5711/pukaar/main/public/install/logos-repo.json`. You can also use the [install page](https://pukaar-logos.vercel.app/), or install by hand with the release notes. The packages need Logos Basecamp 0.3.1 on a Mac with Apple silicon, or on 64-bit Linux (Intel, AMD or ARM). Intel Macs and Windows are not supported.
 
-The full steps, network notes and profile tips are in [Install and run](docs/install-and-run.md#run-pukaar-in-basecamp). The release notes are in [RELEASE_NOTES_0.4.1.md](RELEASE_NOTES_0.4.1.md).
+The full steps, network notes and profile tips are in [Install and run](docs/install-and-run.md#run-pukaar-in-basecamp). The release notes are on the [v0.4.2 release page](https://github.com/adysingh5711/pukaar/releases/tag/v0.4.2).
 
 ## Go deeper
 
