@@ -25,6 +25,42 @@ Pukaar is a [Logos Basecamp](https://github.com/logos-co/logos-basecamp) app for
 
 ## See it
 
+<details open>
+<summary>Dark theme</summary>
+
+<table>
+  <tr>
+    <td align="center"><a href="public/images/01-board-dark.png"><img src="public/images/01-board-dark.png" alt="The Issue Tracker with four columns of reports, dark theme" width="280"></a><br>Issue Tracker</td>
+    <td align="center"><a href="public/images/02-why-not-closed-yet-dark.png"><img src="public/images/02-why-not-closed-yet-dark.png" alt="A new report with the three steps to closure, dark theme" width="280"></a><br>Why not closed yet</td>
+    <td align="center"><a href="public/images/03-confirm-the-fix-dark.png"><img src="public/images/03-confirm-the-fix-dark.png" alt="A claimed fix with Confirm and Reopen, dark theme" width="280"></a><br>Confirm the fix</td>
+  </tr>
+  <tr>
+    <td align="center"><a href="public/images/04-history-dark.png"><img src="public/images/04-history-dark.png" alt="History of resolved and closed issues by month, dark theme" width="280"></a><br>History</td>
+    <td align="center"><a href="public/images/05-report-a-fault-dark.png"><img src="public/images/05-report-a-fault-dark.png" alt="The report form with a list of places, dark theme" width="280"></a><br>Report</td>
+    <td align="center"><a href="public/images/06-profile-dark.png"><img src="public/images/06-profile-dark.png" alt="The Profile page with bio, experience and seven link rows, dark theme" width="280"></a><br>Profile</td>
+  </tr>
+  <tr>
+    <td align="center"><a href="public/images/07-people-dark.png"><img src="public/images/07-people-dark.png" alt="The People page with roles and approvals, dark theme" width="280"></a><br>People</td>
+    <td align="center"><a href="public/images/08-places-change-log-dark.png"><img src="public/images/08-places-change-log-dark.png" alt="The Places page with a retire step open, dark theme" width="280"></a><br>Places</td>
+    <td align="center"><a href="public/images/09-proof-dark.png"><img src="public/images/09-proof-dark.png" alt="The Integrity page with the last anchor status, dark theme" width="280"></a><br>Integrity</td>
+  </tr>
+  <tr>
+    <td align="center"><a href="public/images/10-chat-dark.png"><img src="public/images/10-chat-dark.png" alt="A private chat between two members, dark theme" width="280"></a><br>Messages</td>
+    <td align="center"><a href="public/images/11-meetings-dark.png"><img src="public/images/11-meetings-dark.png" alt="A new meeting with free and busy times, dark theme" width="280"></a><br>Meetings</td>
+    <td align="center"><a href="public/images/12-identity-backup-dark.png"><img src="public/images/12-identity-backup-dark.png" alt="Identity backup, invite and connection status on the Profile page, dark theme" width="280"></a><br>Identity backup</td>
+  </tr>
+  <tr>
+    <td align="center"><a href="public/images/13-member-profile-dark.png"><img src="public/images/13-member-profile-dark.png" alt="Another member's profile with bio and links, dark theme" width="280"></a><br>Member profile</td>
+    <td align="center"><a href="public/images/14-home-dark.png"><img src="public/images/14-home-dark.png" alt="The Home page with what waits for you, dark theme" width="280"></a><br>Home</td>
+    <td align="center"><a href="public/images/15-group-chat-dark.png"><img src="public/images/15-group-chat-dark.png" alt="A group chat with three members, dark theme" width="280"></a><br>Group chat</td>
+  </tr>
+</table>
+
+</details>
+
+<details>
+<summary>Light theme</summary>
+
 <table>
   <tr>
     <td align="center"><a href="public/images/01-board.png"><img src="public/images/01-board.png" alt="The Issue Tracker with four columns of reports" width="280"></a><br>Issue Tracker</td>
@@ -34,16 +70,31 @@ Pukaar is a [Logos Basecamp](https://github.com/logos-co/logos-basecamp) app for
   <tr>
     <td align="center"><a href="public/images/04-history.png"><img src="public/images/04-history.png" alt="History of resolved and closed issues by month" width="280"></a><br>History</td>
     <td align="center"><a href="public/images/05-report-a-fault.png"><img src="public/images/05-report-a-fault.png" alt="The report form with a list of places" width="280"></a><br>Report</td>
-    <td align="center"><a href="public/images/06-profile.png"><img src="public/images/06-profile.png" alt="The Profile page with identity backup and invite" width="280"></a><br>Profile</td>
+    <td align="center"><a href="public/images/06-profile.png"><img src="public/images/06-profile.png" alt="The Profile page with bio, experience and seven link rows" width="280"></a><br>Profile</td>
   </tr>
   <tr>
     <td align="center"><a href="public/images/07-people.png"><img src="public/images/07-people.png" alt="The People page with roles and approvals" width="280"></a><br>People</td>
-    <td align="center"><a href="public/images/08-places-change-log.png"><img src="public/images/08-places-change-log.png" alt="The Places page with its change log" width="280"></a><br>Places</td>
+    <td align="center"><a href="public/images/08-places-change-log.png"><img src="public/images/08-places-change-log.png" alt="The Places page with a retire step open" width="280"></a><br>Places</td>
     <td align="center"><a href="public/images/09-proof.png"><img src="public/images/09-proof.png" alt="The Integrity page with the last anchor status" width="280"></a><br>Integrity</td>
+  </tr>
+  <tr>
+    <td align="center"><a href="public/images/10-chat.png"><img src="public/images/10-chat.png" alt="A private chat between two members" width="280"></a><br>Messages</td>
+    <td align="center"><a href="public/images/11-meetings.png"><img src="public/images/11-meetings.png" alt="A new meeting with free and busy times" width="280"></a><br>Meetings</td>
+    <td align="center"><a href="public/images/12-identity-backup.png"><img src="public/images/12-identity-backup.png" alt="Identity backup, invite and connection status on the Profile page" width="280"></a><br>Identity backup</td>
+  </tr>
+  <tr>
+    <td align="center"><a href="public/images/13-member-profile.png"><img src="public/images/13-member-profile.png" alt="Another member's profile with bio and links" width="280"></a><br>Member profile</td>
+    <td align="center"><a href="public/images/14-home.png"><img src="public/images/14-home.png" alt="The Home page with what waits for you" width="280"></a><br>Home</td>
+    <td align="center"><a href="public/images/15-group-chat.png"><img src="public/images/15-group-chat.png" alt="A group chat with three members" width="280"></a><br>Group chat</td>
+  </tr>
+  <tr>
+    <td align="center"><a href="public/images/16-meeting-backup.png"><img src="public/images/16-meeting-backup.png" alt="Meeting backup settings with the last Storage backup" width="280"></a><br>Meeting backup</td>
   </tr>
 </table>
 
-Each screen is explained in [Screenshots](docs/screenshots.md).
+</details>
+
+Each screen has a dark version and a light version. The dark version is open and the light version is collapsed. Each screen is explained in [Screenshots](docs/screenshots.md).
 
 ## A fault's life
 
@@ -100,7 +151,7 @@ The full steps, network notes and profile tips are in [Install and run](docs/ins
 |---|---|
 | [How it works](docs/how-it-works.md) | See how events, sync, checkpoints and the chain registry fit together |
 | [Features and roles](docs/features.md) | Know every feature, every role and the chat and meeting details |
-| [Screenshots](docs/screenshots.md) | Read what each of the nine screens shows |
+| [Screenshots](docs/screenshots.md) | Read what each of the sixteen screens shows |
 | [Install and run](docs/install-and-run.md) | Install Pukaar, run several profiles, upgrade or see the cost |
 | [Security](docs/security.md) | Study the threat model, or confirm a signature or an anchor |
 | [Developing](docs/developing.md) | Run the tests, build from source or cut a release |
