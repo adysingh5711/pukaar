@@ -1,5 +1,5 @@
 {
-  description = "Pukaar: report, track and confirm fixes at your site";
+  description = "Pukaar: issue tracker, private chat and meetings for your site";
 
   nixConfig = {
     extra-substituters = [ "https://cache.nix.logos.co/public" ];

@@ -1,5 +1,5 @@
 {
-  description = "Pukaar core: civic fault reports that can't be quietly closed";
+  description = "Pukaar core: a community issue tracker where residents confirm the fix";
 
   # Pre-built delivery module from the public Logos cache (needs a trusted user, Task 0).
   nixConfig = {

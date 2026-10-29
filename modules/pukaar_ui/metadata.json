@@ -4,7 +4,7 @@
   "version": "0.4.0",
   "type": "ui_qml",
   "category": "civic",
-  "description": "Report, track and confirm fixes at your site",
+  "description": "Issue tracker, private chat and meetings for your site",
   "view": "Main.qml",
   "icon": "src/icons/pukaar.png",
   "dependencies": ["pukaar_core"],

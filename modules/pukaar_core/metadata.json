@@ -5,7 +5,7 @@
   "type": "core",
   "interface": "cdylib",
   "category": "civic",
-  "description": "Civic fault reports that can't be quietly closed",
+  "description": "Core of Pukaar, a community issue tracker where residents confirm the fix",
   "main": "pukaar_core_plugin",
   "dependencies": ["delivery_module", "storage_module", "chat_module"],
   "codegen": {

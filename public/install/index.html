@@ -4,107 +4,359 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Install Pukaar in Logos Basecamp</title>
-<meta name="description" content="Two ways to install Pukaar in Logos Basecamp: add a package source, or install the files by hand.">
+<meta name="description" content="Install Pukaar, a community issue tracker where residents confirm the fix, in Logos Basecamp. Two ways: add a package source, or install the files by hand.">
+<meta name="color-scheme" content="dark">
+<link rel="icon" type="image/svg+xml" href="../brand/pukaar-logo-color.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..700&family=DM+Sans:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
+  /* Tokens match design/06-harbor.html (Basecamp greys, orange accent). */
   :root {
-    --bg: #fafaf8; --fg: #1d1d1b; --muted: #5f5f5a; --line: #deded8;
-    --card: #ffffff; --accent: #b3261e; --accent-fg: #ffffff; --code: #efefea;
+    color-scheme: dark;
+    --page: #000000; --bg: #171717; --bg2: #141414;
+    --s1: #1c1c1c; --s2: #262626; --s3: #2f2f2f; --border: #434343;
+    --t1: #ffffff; --t2: #a4a4a4; --t3: #969696;
+    --accent: #ed7b58; --ink: #171717;
+    --st-resolved: #6fe0a8;
+    --r-panel: 20px; --r-card: 14px; --r-ctl: 10px;
+    --shadow-float: 0 12px 32px rgba(0, 0, 0, .5);
+    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+    --font-d: 'Bricolage Grotesque', system-ui, -apple-system, 'Segoe UI', 'Noto Sans', sans-serif;
+    --font-b: 'DM Sans', system-ui, -apple-system, 'Segoe UI', 'Noto Sans', sans-serif;
+    --font-m: 'DM Mono', ui-monospace, Menlo, Consolas, monospace;
   }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #151514; --fg: #ecece8; --muted: #a2a29b; --line: #34342f;
-      --card: #1d1d1b; --accent: #ff7a70; --accent-fg: #151514; --code: #262624;
-    }
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--fg);
-    font: 17px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  main { max-width: 42rem; margin: 0 auto; padding: 2.5rem 16px 4rem; }
-  h1 { font-size: 2rem; line-height: 1.2; margin: 0 0 .5rem; }
-  h2 { font-size: 1.3rem; margin: 2.5rem 0 .75rem; }
-  p, li { margin: .5rem 0; }
-  .lead { color: var(--muted); font-size: 1.1rem; }
-  section { background: var(--card); border: 1px solid var(--line);
-    border-radius: 10px; padding: 1rem 1.25rem; margin-top: 1.25rem; }
-  section h2 { margin-top: .25rem; }
-  ol, ul { padding-left: 1.4rem; }
-  code { background: var(--code); padding: .1em .35em; border-radius: 4px;
-    font: .9em ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
-  .url { display: flex; gap: .5rem; align-items: stretch; margin: .75rem 0; }
-  .url code { flex: 1; padding: .6rem .75rem; display: block; border: 1px solid var(--line); }
-  button { font: inherit; cursor: pointer; border: 0; border-radius: 6px;
-    background: var(--accent); color: var(--accent-fg); padding: 0 1rem; min-height: 44px; }
-  a { color: var(--accent); }
+  * { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--page); color: var(--t1); caret-color: var(--accent);
+    font: 400 16px/1.6 var(--font-b); -webkit-font-smoothing: antialiased; }
+  ::selection { background: color-mix(in srgb, var(--accent) 35%, var(--s1)); color: var(--t1); }
+  h1, h2, h3, p, ul, ol { margin: 0; padding: 0; }
+  ul, ol { list-style: none; }
+  a { color: var(--accent); text-underline-offset: .2em; }
+  a:hover { color: color-mix(in srgb, var(--accent) 80%, var(--t1)); }
+  :focus { outline: none; }
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .note { border-left: 3px solid var(--accent); padding-left: .75rem; color: var(--muted); }
-  footer { margin-top: 2.5rem; color: var(--muted); font-size: .9rem; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  code { font: 500 .875em var(--font-m); overflow-wrap: anywhere; }
+
+  .wrap { max-width: 64rem; margin: 0 auto; padding: 24px 16px 64px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .panel { background: var(--s1); border: 1px solid var(--border); border-radius: var(--r-card); padding: 20px 16px; }
+  .top { padding: 16px 0 12px; }
+  .brand { display: flex; align-items: center; gap: 16px; }
+  .brand img { flex: none; height: 44px; width: auto; }
+  h1 { font: 600 clamp(1.75rem, 5.5vw, 2.75rem)/1.1 var(--font-d); letter-spacing: -.02em; text-wrap: balance; }
+  h2 { font: 600 clamp(1.25rem, 3.5vw, 1.625rem)/1.2 var(--font-d); letter-spacing: -.01em; text-wrap: balance; }
+  h3 { font: 600 1.0625rem/1.35 var(--font-d); }
+  .lead { color: var(--t2); max-width: 62ch; margin-top: 16px; font-size: 1.0625rem; text-wrap: pretty; }
+  .panel > h2 { margin-bottom: 12px; }
+  .intro { color: var(--t2); max-width: 62ch; margin-bottom: 8px; text-wrap: pretty; }
+
+  /* buttons and fields */
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 0 16px;
+    border-radius: var(--r-ctl); border: 1px solid var(--border); background: var(--s3); color: var(--t1);
+    font: 500 .9375rem/1 var(--font-b); white-space: nowrap; text-decoration: none; cursor: pointer;
+    transition: background-color 150ms, border-color 150ms, color 200ms, transform 160ms var(--ease-out); }
+  .btn:hover { background: color-mix(in srgb, var(--s3) 82%, var(--t1)); color: var(--t1); }
+  .btn:active { transform: scale(.97); transition-duration: 100ms; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--ink); font-weight: 600; }
+  .btn.primary:hover { background: color-mix(in srgb, var(--accent) 88%, var(--t1)); color: var(--ink); }
+  .btn.primary.ok { background: color-mix(in srgb, var(--st-resolved) 16%, var(--s2)); border-color: transparent; color: var(--st-resolved); }
+  .ic { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+  /* needs */
+  .needs { display: grid; gap: 12px; margin-top: 4px; }
+  .needs li { position: relative; padding-left: 20px; color: var(--t2); max-width: 62ch; }
+  .needs li::before { content: ""; position: absolute; left: 4px; top: .7em; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+  .needs strong, .limits strong { color: var(--t1); font-weight: 600; }
+  .needs .btn { margin-top: 8px; }
+
+  /* way switch: plain anchor links without JS, tabs with JS */
+  .pick { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; margin: 4px 0 12px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: var(--r-card); position: relative; }
+  .pick a { position: relative; z-index: 1; display: grid; gap: 2px; align-content: center; min-height: 52px; padding: 8px 12px;
+    border-radius: 10px; text-decoration: none; color: var(--t2); text-align: center; font-weight: 500; line-height: 1.3;
+    transition: color 150ms; }
+  .pick a:hover { color: var(--t1); }
+  .pick a small { display: none; font-weight: 400; font-size: .8125rem; color: var(--t3); }
+  .pick a[aria-selected="true"] { color: var(--t1); }
+  .pick .thumb { display: none; position: absolute; top: 4px; bottom: 4px; left: 4px; width: calc(50% - 6px);
+    background: var(--s3); border: 1px solid var(--border); border-radius: 10px; pointer-events: none;
+    transition: transform 220ms var(--ease-out); }
+  .js .pick .thumb { display: block; }
+  .pick[data-i="1"] .thumb { transform: translateX(calc(100% + 4px)); }
+  .way-title { margin-bottom: 4px; }
+  .js .way-title { display: none; }
+  .way + .way { margin-top: 28px; padding-top: 28px; border-top: 1px solid var(--border); }
+  .js .way + .way { margin-top: 0; padding-top: 0; border-top: 0; }
+  .way[hidden] { display: none; }
+
+  /* steps */
+  .steps { counter-reset: s; margin-top: 8px; }
+  .step { counter-increment: s; display: grid; grid-template-columns: 32px minmax(0, 1fr); column-gap: 16px;
+    padding: 24px 0; border-top: 1px solid var(--border); }
+  .step:first-child { border-top: 0; }
+  .step::before { content: counter(s); display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%;
+    border: 1px solid var(--t3); font: 500 .875rem/1 var(--font-m); color: var(--t1); font-variant-numeric: tabular-nums; }
+  .txt { min-width: 0; max-width: 62ch; }
+  .txt > * + * { margin-top: 8px; }
+  .txt p { color: var(--t2); text-wrap: pretty; }
+  .txt p strong, .txt li strong { color: var(--t1); font-weight: 600; }
+  .txt h3 { margin-top: 4px; }
+  .note { margin-top: 12px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--r-ctl);
+    background: var(--bg); color: var(--t2); font-size: .9375rem; }
+  .note strong { color: var(--t1); }
+
+  .url { display: flex; gap: 8px; align-items: stretch; margin-top: 12px !important; }
+  .url code { flex: 1; min-width: 0; display: flex; align-items: center; padding: 10px 12px; font-size: .8125rem; line-height: 1.5;
+    background: var(--bg); border: 1px solid var(--t3); border-radius: var(--r-ctl); color: var(--t1); }
+  #copy { display: none; min-width: 7.5rem; }
+  .js #copy { display: inline-flex; }
+
+  .files { display: grid; gap: 8px; margin-top: 12px !important; }
+  .files li { display: grid; grid-template-columns: 1.5rem minmax(0, 1fr); column-gap: 4px; padding: 10px 12px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: var(--r-ctl); color: var(--t2); font-size: .9375rem; }
+  .files li::before { content: counter(f) "."; counter-increment: f; font: 500 .8125rem/1.9 var(--font-m); color: var(--t3); }
+  .files { counter-reset: f; }
+  .files a { overflow-wrap: anywhere; }
+
+  /* screenshots */
+  .step figure { grid-column: 1 / -1; margin: 16px 0 0; max-width: 560px; }
+  @media (max-width: 559px) { .url { flex-direction: column; } .step { column-gap: 12px; } }
+  .shot { position: relative; display: block; border: 1px solid var(--border); border-radius: var(--r-card); overflow: hidden;
+    background: var(--s2); cursor: zoom-in; transition: border-color 150ms; }
+  .shot img { display: block; width: 100%; height: auto; }
+  .shot .zoom { position: absolute; right: 8px; bottom: 8px; display: inline-flex; align-items: center; gap: 6px;
+    height: 28px; padding: 0 10px; border-radius: 9px; background: var(--s3); border: 1px solid var(--border);
+    color: var(--t1); font: 500 .75rem/1 var(--font-b); opacity: .92; pointer-events: none; }
+  @media (hover: hover) and (pointer: fine) { .shot:hover { border-color: var(--t3); } }
+
+  @media (min-width: 560px) {
+    .step figure { grid-column: 2; }
+    .panel { padding: 24px; border-radius: var(--r-panel); }
+    .pick a small { display: block; }
+    .pick a { min-height: 64px; }
+  }
+  @media (min-width: 900px) {
+    .wrap { padding-top: 40px; gap: 16px; }
+    .panel { padding: 28px 32px; }
+    .step.fig { grid-template-columns: 32px minmax(0, 1fr) 400px; column-gap: 24px; }
+    .step.fig figure { grid-column: 3; grid-row: 1; margin: 0; max-width: none; }
+  }
+
+  /* lightbox */
+  dialog { padding: 0; border: 1px solid var(--border); border-radius: var(--r-panel); background: var(--s1); color: var(--t1);
+    width: min(1400px, calc(100vw - 32px)); max-width: none; box-shadow: var(--shadow-float);
+    opacity: 0; transform: scale(.97);
+    transition: opacity 200ms var(--ease-out), transform 200ms var(--ease-out), overlay 200ms allow-discrete, display 200ms allow-discrete; }
+  dialog[open] { opacity: 1; transform: none; }
+  @starting-style { dialog[open] { opacity: 0; transform: scale(.97); } }
+  dialog::backdrop { background: rgb(0 0 0 / 0); transition: background-color 200ms var(--ease-out), overlay 200ms allow-discrete, display 200ms allow-discrete; }
+  dialog[open]::backdrop { background: rgb(0 0 0 / .78); }
+  @starting-style { dialog[open]::backdrop { background: rgb(0 0 0 / 0); } }
+  .lb { display: grid; gap: 12px; padding: 12px; justify-items: center; }
+  .lb-bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; width: 100%; }
+  .lb-cap { color: var(--t2); font-size: .9375rem; min-width: 0; }
+  .lb img { display: block; width: auto; max-width: 100%; max-height: calc(100vh - 150px); height: auto; border-radius: var(--r-ctl); }
+
+  footer { color: var(--t2); font-size: .9375rem; padding: 8px 0 0; }
+
+  /* scroll reveal: only when JS runs and motion is allowed */
+  .rv-on .rv .step { opacity: 0; transform: translateY(12px); }
+  .rv-on .rv .step.in { opacity: 1; transform: none; transition: opacity 280ms var(--ease-out), transform 280ms var(--ease-out); }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .pick .thumb, dialog, dialog::backdrop, .btn { transition-duration: 1ms; }
+    .btn:active { transform: none; }
+    dialog { transform: none; }
+  }
 </style>
 </head>
 <body>
-<main>
-  <h1>Install Pukaar in Logos Basecamp</h1>
-  <p class="lead">Pukaar is an app for reporting faults in your neighbourhood, such as a broken light or a blocked drain.
-    A report is only closed when the person who filed it, or two other residents, confirm the fix.</p>
-
-  <section id="source">
-    <h2>Option 1: Add a package source</h2>
-    <p>Basecamp keeps a list of sources it can install apps from. Add the Pukaar source once. Then Basecamp installs Pukaar and the modules it needs.</p>
-    <div class="url">
-      <code id="repo-url">Loading...</code>
-      <button id="copy" type="button">Copy</button>
+<div class="wrap">
+  <header class="top panel" style="padding-top:28px;padding-bottom:28px">
+    <div class="brand">
+      <img src="../brand/pukaar-logo-color.svg" width="27" height="44" alt="">
+      <h1>Install Pukaar in Logos Basecamp</h1>
     </div>
-    <ol>
-      <li>Copy the link above.</li>
-      <li>Open Basecamp, then open <strong>Package Manager</strong>.</li>
-      <li>Choose <strong>Add source</strong> (it may be called <strong>Add repository</strong>) and paste the link.</li>
-      <li>Wait for the list to refresh. Find <strong>Pukaar</strong> and choose <strong>Install</strong>.</li>
-      <li>Basecamp asks to install the modules Pukaar needs. Accept. Then do the restart step below.</li>
-    </ol>
-    <p class="note">If Basecamp warns that the package is not signed or not trusted, read the warning before you accept.</p>
-  </section>
+    <p class="lead">Pukaar is a community issue tracker for a shared site such as a camp, a building or a neighborhood.
+      Members report faults like a broken light or a blocked drain, and a report is only closed when the person who filed it, or two other residents, confirm the fix.
+      Private chat and meetings are in the same app.</p>
+  </header>
 
-  <section id="hand">
-    <h2>Option 2: Install by hand</h2>
-    <p>Use this if you cannot add a source. Download the files, then in Basecamp open <strong>Package Manager</strong> and choose <strong>Install Local Package</strong> for each file. Install them in this order. Skip any module that Basecamp already has.</p>
-    <ol>
-      <li><a href="https://github.com/logos-co/logos-modules-release/releases/download/delivery_module-v0.4.0/delivery_module-0.4.0.lgx"><code>delivery_module-0.4.0.lgx</code></a> (sends your messages)</li>
-      <li><a href="https://github.com/logos-co/logos-modules-release/releases/download/storage_module-v3.0.2/storage_module-3.0.2.lgx"><code>storage_module-3.0.2.lgx</code></a> (keeps files)</li>
-      <li><a href="https://github.com/logos-co/logos-modules-release/releases/download/chat_module-v0.3.0/chat_module-0.3.0.lgx"><code>chat_module-0.3.0.lgx</code></a> (private chats)</li>
-      <li><a id="dl-core" href="#"><code>logos-pukaar_core-module-lib.lgx</code></a> (Pukaar core)</li>
-      <li><a id="dl-ui" href="#"><code>logos-pukaar_ui-module.lgx</code></a> (the Pukaar screens)</li>
-    </ol>
-    <p>The first three come from the official Logos module catalog. The last two come from the <a id="releases" href="#">Pukaar releases page</a>, with a <code>SHA256SUMS</code> file you can use to check them.</p>
-  </section>
-
-  <section id="restart">
-    <h2>After you install: restart Basecamp fully</h2>
-    <p>Quit Basecamp completely, then start it again. Closing the window is not enough. Delivery keeps the network it was first started with, so a full restart is the only way it picks up the right one.</p>
-    <p>Then open Pukaar. To join a site, paste its site id under <strong>Join a site</strong>. To start a new site, choose <strong>Create a site</strong>.</p>
-  </section>
-
-  <section id="needs">
-    <h2>What you need</h2>
-    <ul>
-      <li><a href="https://github.com/logos-co/logos-basecamp/releases/tag/0.3.1">Logos Basecamp 0.3.1</a>.</li>
-      <li>A Mac with Apple silicon. The current packages are built for <code>darwin-arm64</code> only.</li>
-      <li>An internet connection. Messages travel over the Logos Delivery development network.</li>
+  <section class="panel" id="needs" aria-labelledby="needs-h">
+    <h2 id="needs-h">What you need</h2>
+    <ul class="needs">
+      <li><strong>Logos Basecamp 0.3.1.</strong> Download it first, then open it.
+        <br><a class="btn" href="https://github.com/logos-co/logos-basecamp/releases/tag/0.3.1">Download Basecamp 0.3.1</a></li>
+      <li><strong>A Mac with Apple silicon.</strong> The current packages are built for <code>darwin-arm64</code> only.</li>
+      <li><strong>An internet connection.</strong> Messages travel over the Logos Delivery development network.</li>
       <li>Every person at a site must run a Pukaar build that uses the same network.</li>
     </ul>
   </section>
 
-  <section id="limits">
-    <h2>Known limits</h2>
-    <ul>
+  <section class="panel" id="install" aria-labelledby="install-h">
+    <h2 id="install-h">Choose how to install</h2>
+    <p class="intro">Pick one way. Most people only need the first.</p>
+
+    <nav class="pick" id="pick" aria-label="Install ways">
+      <span class="thumb" aria-hidden="true"></span>
+      <a href="#source" id="tab-source">Add a package source<small>Recommended. Basecamp fetches every module.</small></a>
+      <a href="#hand" id="tab-hand">Install by hand<small>Download five files, install each one.</small></a>
+    </nav>
+
+    <div class="rv">
+    <section class="way" id="source" aria-labelledby="source-h">
+      <h3 class="way-title" id="source-h">Add a package source</h3>
+      <p class="intro">Basecamp keeps a list of sources it can install apps from. Add the Pukaar source once. Then Basecamp installs Pukaar and the modules it needs.</p>
+      <ol class="steps">
+        <li class="step">
+          <div class="txt">
+            <h3>Copy the Pukaar source link</h3>
+            <p>You will paste this link into Basecamp in step 5.</p>
+            <div class="url">
+              <code id="repo-url">https://raw.githubusercontent.com/adysingh5711/pukaar/main/public/install/logos-repo.json</code>
+              <button id="copy" class="btn primary" type="button"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5V3.5a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"/></svg><span>Copy</span></button>
+            </div>
+            <span class="sr" id="copy-status" role="status" aria-live="polite"></span>
+          </div>
+        </li>
+        <li class="step fig">
+          <div class="txt">
+            <h3>Open Basecamp, then Manage Packages</h3>
+            <p>Start Basecamp. On the Welcome page, choose <strong>Manage Packages</strong>.</p>
+          </div>
+          <figure><a class="shot" href="../images/shared-02-open-basecamp-home.png"><img src="../images/shared-02-open-basecamp-home.png" width="3116" height="1892" loading="lazy" decoding="async" alt="The Basecamp Welcome page, with Discover Applications and Manage Packages buttons at the top."><span class="zoom" aria-hidden="true"><svg class="ic sm" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14M7 5v4M5 7h4"/></svg>Enlarge</span><span class="sr">Open larger screenshot</span></a></figure>
+        </li>
+        <li class="step fig">
+          <div class="txt">
+            <h3>Choose Manage Repositories</h3>
+            <p>The <strong>Package Manager</strong> opens. Choose <strong>Manage Repositories</strong> at the top right of the package list.</p>
+          </div>
+          <figure><a class="shot" href="../images/source-03-manage-repositories.png"><img src="../images/source-03-manage-repositories.png" width="3116" height="1892" loading="lazy" decoding="async" alt="The Package Manager page. The Manage Repositories button, next to Install Local Package and Reload, is outlined in orange."><span class="zoom" aria-hidden="true"><svg class="ic sm" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14M7 5v4M5 7h4"/></svg>Enlarge</span><span class="sr">Open larger screenshot</span></a></figure>
+        </li>
+        <li class="step fig">
+          <div class="txt">
+            <h3>Click the Add a repository box</h3>
+            <p>Settings opens on <strong>Package Repositories</strong>. Under <strong>Add a repository</strong>, click the empty box.</p>
+          </div>
+          <figure><a class="shot" href="../images/source-04-repositories-empty-field.png"><img src="../images/source-04-repositories-empty-field.png" width="3116" height="1892" loading="lazy" decoding="async" alt="Settings, Package Repositories. The Add a repository box is empty and has the cursor in it. Only the Logos Official repository is listed."><span class="zoom" aria-hidden="true"><svg class="ic sm" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14M7 5v4M5 7h4"/></svg>Enlarge</span><span class="sr">Open larger screenshot</span></a></figure>
+        </li>
+        <li class="step fig">
+          <div class="txt">
+            <h3>Paste the link and choose Add</h3>
+            <p>Paste the link from step 1, then choose <strong>Add</strong>.</p>
+          </div>
+          <figure><a class="shot" href="../images/source-05-paste-repo-link.png"><img src="../images/source-05-paste-repo-link.png" width="3116" height="1892" loading="lazy" decoding="async" alt="The Add a repository box now holds the Pukaar link ending in logos-repo.json, and the Add button is active."><span class="zoom" aria-hidden="true"><svg class="ic sm" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14M7 5v4M5 7h4"/></svg>Enlarge</span><span class="sr">Open larger screenshot</span></a></figure>
+        </li>
+        <li class="step fig">
+          <div class="txt">
+            <h3>Check that Pukaar is listed</h3>
+            <p><strong>Pukaar</strong> now shows under <strong>Logos Official</strong>, switched on (<strong>Enabled</strong>).</p>
+          </div>
+          <figure><a class="shot" href="../images/source-06-repo-added.png"><img src="../images/source-06-repo-added.png" width="3116" height="1892" loading="lazy" decoding="async" alt="The repository list now shows two entries: Logos Official and Pukaar, both marked Enabled."><span class="zoom" aria-hidden="true"><svg class="ic sm" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14M7 5v4M5 7h4"/></svg>Enlarge</span><span class="sr">Open larger screenshot</span></a></figure>
+        </li>
+        <li class="step fig">
+          <div class="txt">
+            <h3>Open Applications</h3>
+            <p>In the left bar, choose the <strong>Applications</strong> icon, the first of the three icons at the bottom.</p>
+          </div>
+          <figure><a class="shot" href="../images/source-07-open-applications.png"><img src="../images/source-07-open-applications.png" width="3116" height="1892" loading="lazy" decoding="async" alt="The pointer rests on the first icon at the bottom of the left bar, and a label reads Applications."><span class="zoom" aria-hidden="true"><svg class="ic sm" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14M7 5v4M5 7h4"/></svg>Enlarge</span><span class="sr">Open larger screenshot</span></a></figure>
+        </li>
+        <li class="step fig">
+          <div class="txt">
+            <h3>Find Pukaar and click it</h3>
+            <p>Pukaar has its own group at the bottom of the list, marked <strong>INSTALL</strong>. If it is not there yet, wait for the list to refresh, or choose <strong>Reload</strong>.</p>
+          </div>
+          <figure><a class="shot" href="../images/source-08-find-pukaar.png"><img src="../images/source-08-find-pukaar.png" width="3116" height="1892" loading="lazy" decoding="async" alt="The Applications page. A Pukaar group at the bottom holds one green PU icon marked INSTALL."><span class="zoom" aria-hidden="true"><svg class="ic sm" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14M7 5v4M5 7h4"/></svg>Enlarge</span><span class="sr">Open larger screenshot</span></a></figure>
+        </li>
+        <li class="step fig">
+          <div class="txt">
+            <h3>Choose Install</h3>
+            <p>A window called <strong>Add Application</strong> lists the packages Pukaar needs. Choose <strong>Install</strong> and accept. Basecamp installs Pukaar and the modules it needs. Then do the restart step below.</p>
+            <p class="note"><strong>Unsigned warning.</strong> If Basecamp warns that the package is not signed or not trusted, read the warning before you accept.</p>
+          </div>
+          <figure><a class="shot" href="../images/source-09-install-pukaar.png"><img src="../images/source-09-install-pukaar.png" width="3116" height="1892" loading="lazy" decoding="async" alt="The Add Application window for Pukaar, with an orange Install button and a list of required packages below it."><span class="zoom" aria-hidden="true"><svg class="ic sm" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14M7 5v4M5 7h4"/></svg>Enlarge</span><span class="sr">Open larger screenshot</span></a></figure>
+        </li>
+      </ol>
+    </section>
+
+    <section class="way" id="hand" aria-labelledby="hand-h">
+      <h3 class="way-title" id="hand-h">Install by hand</h3>
+      <p class="intro">Use this if you cannot add a source. Download the files, then install each one from the Package Manager.</p>
+      <ol class="steps">
+        <li class="step">
+          <div class="txt">
+            <h3>Download the five files</h3>
+            <p>You will install them in this order. Skip any module that Basecamp already has.</p>
+            <ol class="files">
+              <li><span><a href="https://github.com/logos-co/logos-modules-release/releases/download/delivery_module-v0.4.0/delivery_module-0.4.0.lgx"><code>delivery_module-0.4.0.lgx</code></a> (sends your messages)</span></li>
+              <li><span><a href="https://github.com/logos-co/logos-modules-release/releases/download/storage_module-v3.0.2/storage_module-3.0.2.lgx"><code>storage_module-3.0.2.lgx</code></a> (keeps files)</span></li>
+              <li><span><a href="https://github.com/logos-co/logos-modules-release/releases/download/chat_module-v0.3.0/chat_module-0.3.0.lgx"><code>chat_module-0.3.0.lgx</code></a> (private chats)</span></li>
+              <li><span><a id="dl-core" href="https://github.com/adysingh5711/pukaar/releases/latest/download/logos-pukaar_core-module-lib.lgx"><code>logos-pukaar_core-module-lib.lgx</code></a> (Pukaar core)</span></li>
+              <li><span><a id="dl-ui" href="https://github.com/adysingh5711/pukaar/releases/latest/download/logos-pukaar_ui-module.lgx"><code>logos-pukaar_ui-module.lgx</code></a> (the Pukaar screens)</span></li>
+            </ol>
+            <p>The first three come from the official Logos module catalog. The last two come from the <a id="releases" href="https://github.com/adysingh5711/pukaar/releases/latest">Pukaar releases page</a>, with a <code>SHA256SUMS</code> file you can use to check them.</p>
+          </div>
+        </li>
+        <li class="step fig">
+          <div class="txt">
+            <h3>Open Basecamp, then Manage Packages</h3>
+            <p>Start Basecamp. On the Welcome page, choose <strong>Manage Packages</strong>.</p>
+          </div>
+          <figure><a class="shot" href="../images/shared-02-open-basecamp-home.png"><img src="../images/shared-02-open-basecamp-home.png" width="3116" height="1892" loading="lazy" decoding="async" alt="The Basecamp Welcome page, with Discover Applications and Manage Packages buttons at the top."><span class="zoom" aria-hidden="true"><svg class="ic sm" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14M7 5v4M5 7h4"/></svg>Enlarge</span><span class="sr">Open larger screenshot</span></a></figure>
+        </li>
+        <li class="step fig">
+          <div class="txt">
+            <h3>Choose Install Local Package</h3>
+            <p>In the <strong>Package Manager</strong>, choose <strong>Install Local Package</strong>, then pick the first file. Repeat for each file, in the order above. Then do the restart step below.</p>
+          </div>
+          <figure><a class="shot" href="../images/hand-03-install-local-package.png"><img src="../images/hand-03-install-local-package.png" width="3116" height="1892" loading="lazy" decoding="async" alt="The Package Manager page. The Install Local Package button sits at the top right of the package list, left of Reload and Manage Repositories."><span class="zoom" aria-hidden="true"><svg class="ic sm" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14M7 5v4M5 7h4"/></svg>Enlarge</span><span class="sr">Open larger screenshot</span></a></figure>
+        </li>
+      </ol>
+    </section>
+    </div>
+  </section>
+
+  <section class="panel" id="restart" aria-labelledby="restart-h">
+    <h2 id="restart-h">After you install: restart Basecamp fully</h2>
+    <div class="rv">
+    <ol class="steps">
+      <li class="step"><div class="txt"><h3>Quit Basecamp completely</h3>
+        <p>Closing the window is not enough.</p></div></li>
+      <li class="step"><div class="txt"><h3>Start Basecamp again</h3>
+        <p>Delivery keeps the network it was first started with, so a full restart is the only way it picks up the right one.</p></div></li>
+      <li class="step"><div class="txt"><h3>Open Pukaar</h3>
+        <p>To join a site, paste its site id under <strong>Join a site</strong>. To start a new site, choose <strong>Create a site</strong>.</p></div></li>
+    </ol>
+    </div>
+  </section>
+
+  <section class="panel" id="limits" aria-labelledby="limits-h">
+    <h2 id="limits-h">Known limits</h2>
+    <ul class="needs limits">
       <li>There is no relay for sites with no internet yet.</li>
-      <li>One Basecamp profile holds one Pukaar identity. User can access multiple sites with different site IDs.</li>
+      <li>One Basecamp profile holds one Pukaar identity. You can still join many sites, each with its own site id.</li>
       <li>The proof anchored on the Logos chain is only as lasting as the test network it uses.</li>
     </ul>
   </section>
 
   <footer>Source code and full notes: <a href="https://github.com/adysingh5711/pukaar">github.com/adysingh5711/pukaar</a></footer>
-</main>
+</div>
+
+<dialog id="lb" aria-label="Screenshot">
+  <div class="lb">
+    <div class="lb-bar">
+      <p class="lb-cap" id="lb-cap"></p>
+      <button class="btn" id="lb-close" type="button">Close</button>
+    </div>
+  </div>
+</dialog>
 
 <script>
+  document.documentElement.classList.add("js");
+
   // Set these once the files are hosted.
   // REPO_JSON_URL: the public address of logos-repo.json (what Basecamp needs).
   // RELEASES_URL:  the GitHub releases page that holds the two Pukaar .lgx files.
@@ -112,23 +364,98 @@
   const RELEASES_URL = "https://github.com/adysingh5711/pukaar/releases";
 
   const $ = (id) => document.getElementById(id);
+  const calm = matchMedia("(prefers-reduced-motion: reduce)");
   $("repo-url").textContent = REPO_JSON_URL;
   $("releases").href = RELEASES_URL + "/latest";
   $("dl-core").href = RELEASES_URL + "/latest/download/logos-pukaar_core-module-lib.lgx";
   $("dl-ui").href = RELEASES_URL + "/latest/download/logos-pukaar_ui-module.lgx";
 
+  // Copy button with a text-selection fallback.
+  let copyTimer;
   $("copy").addEventListener("click", async (e) => {
-    const b = e.currentTarget;
+    const b = e.currentTarget, label = b.querySelector("span");
+    let msg = "Copied";
     try {
       await navigator.clipboard.writeText(REPO_JSON_URL);
-      b.textContent = "Copied";
+      b.classList.add("ok");
     } catch (_) {
       // Fallback: select the text so the person can copy it by hand.
       getSelection().selectAllChildren($("repo-url"));
-      b.textContent = "Press Ctrl/Cmd+C";
+      msg = "Press Ctrl/Cmd+C";
     }
-    setTimeout(() => (b.textContent = "Copy"), 2000);
+    label.textContent = msg;
+    $("copy-status").textContent = msg;
+    clearTimeout(copyTimer);
+    copyTimer = setTimeout(() => {
+      label.textContent = "Copy";
+      b.classList.remove("ok");
+      $("copy-status").textContent = "";
+    }, 2000);
   });
+
+  // Scroll reveal. Without IntersectionObserver or with reduced motion, steps simply show.
+  let io = null;
+  if ("IntersectionObserver" in window && !calm.matches) {
+    io = new IntersectionObserver((list) => list.forEach((en) => {
+      if (en.isIntersecting) { en.target.classList.add("in"); io.unobserve(en.target); }
+    }), { rootMargin: "0px 0px -8% 0px" });
+    document.documentElement.classList.add("rv-on");
+  }
+  const watch = (root) => io && root.querySelectorAll(".step:not(.in)").forEach((s) => io.observe(s));
+
+  // Way switch: the two anchors become tabs.
+  const pick = $("pick"), tabs = [$("tab-source"), $("tab-hand")], ways = [$("source"), $("hand")];
+  pick.setAttribute("role", "tablist");
+  tabs.forEach((t, i) => {
+    t.setAttribute("role", "tab");
+    t.setAttribute("aria-controls", ways[i].id);
+    ways[i].setAttribute("role", "tabpanel");
+    ways[i].setAttribute("aria-labelledby", t.id);
+  });
+  function select(i, opts = {}) {
+    pick.dataset.i = i;
+    tabs.forEach((t, k) => {
+      t.setAttribute("aria-selected", k === i);
+      t.tabIndex = k === i ? 0 : -1;
+      ways[k].hidden = k !== i;
+    });
+    watch(ways[i]);
+    if (opts.focus) tabs[i].focus();
+    if (opts.animate && !calm.matches && ways[i].animate) {
+      ways[i].animate({ opacity: [0, 1], transform: ["translateY(6px)", "none"] },
+        { duration: 200, easing: "cubic-bezier(0.23, 1, 0.32, 1)" });
+    }
+    if (opts.hash) history.replaceState(null, "", "#" + ways[i].id);
+  }
+  tabs.forEach((t, i) => {
+    t.addEventListener("click", (e) => { e.preventDefault(); select(i, { animate: true, hash: true }); });
+    t.addEventListener("keydown", (e) => {
+      const j = { ArrowRight: 1, ArrowLeft: -1, Home: -tabs.length, End: tabs.length }[e.key];
+      if (!j) return;
+      e.preventDefault();
+      select(e.key === "Home" ? 0 : e.key === "End" ? tabs.length - 1 : (i + j + tabs.length) % tabs.length,
+        { focus: true, animate: true, hash: true });
+    });
+  });
+  select(location.hash === "#hand" ? 1 : 0);
+  watch($("restart"));
+
+  // Click a screenshot to enlarge it. Without JS the link opens the image itself.
+  const lb = $("lb");
+  document.querySelectorAll("a.shot").forEach((a) => a.addEventListener("click", (e) => {
+    if (!lb.showModal) return;
+    e.preventDefault();
+    const img = a.querySelector("img");
+    const big = new Image();
+    big.id = "lb-img"; big.src = a.href; big.alt = img.alt;
+    $("lb-img")?.remove();
+    $("lb-cap").closest(".lb").append(big);
+    $("lb-cap").textContent = img.alt;
+    lb.showModal();
+    $("lb-close").focus();
+  }));
+  $("lb-close").addEventListener("click", () => lb.close());
+  lb.addEventListener("click", (e) => { if (e.target === lb) lb.close(); });
 </script>
 </body>
 </html>

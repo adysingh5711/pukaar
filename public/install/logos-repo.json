@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "name": "pukaar",
   "displayName": "Pukaar",
-  "description": "Civic fault reports that can't be quietly closed. Pukaar for Logos Basecamp.",
+  "description": "A community issue tracker where residents confirm the fix. Pukaar for Logos Basecamp.",
   "homepage": "https://github.com/adysingh5711/pukaar",
   "indexUrl": "https://raw.githubusercontent.com/adysingh5711/pukaar/main/public/install/index.json",
   "trustedSigners": [
