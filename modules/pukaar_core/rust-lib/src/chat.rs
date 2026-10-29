@@ -422,3 +422,18 @@ pub fn tick() {
         BUSY.store(false, Ordering::Release);
     });
 }
+/// A member that restarted has a new chat address that the groups do not have. Keep them to be added again (see
+/// `ChatBook::readd`). The roster of each live group is read once for each round.
+fn readd_restarted() {
+    let p = proxy();
+    let Ok(live) = conversations(&p) else { return };
+    for c in live.iter().filter(|c| c.kind == "group" && !c.history_only) {
+        let Ok(members) = roster(&p, &c.id) else { continue };
+        let _ = chats(|node, book, _| {
+            book.readd(&c.id, &members, &node.approved_keys(), &node.me());
+            Ok(())
+        });
+    }
+}
+
+            readd_restarted();

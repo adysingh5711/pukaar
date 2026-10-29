@@ -616,6 +616,28 @@ impl ChatBook {
         !alone && now.saturating_sub(since) >= SETTLE_MS
     }
 
+    /// A member of `convo` that restarted is in its roster with an old chat address, and their newest address is not.
+    /// Keep them to be added again. Only the member of the group with the lowest key does this, so that an add is not
+    /// proposed twice. An add waits for the background step, and a member that is still pending is not asked again.
+    pub fn readd(&mut self, convo: &str, roster: &[Member], members: &[Key], me: &Key) {
+        if !self.is_group(convo) || self.my_addr().is_none_or(|a| !roster.iter().any(|m| m.address == a)) {
+            return;
+        }
+        let inn: Vec<Key> = roster
+            .iter()
+            .filter_map(|m| self.who_of(&m.address))
+            .filter(|w| members.contains(w))
+            .collect();
+        if inn.iter().any(|w| w < me) {
+            return;
+        }
+        for w in inn {
+            if self.latest(&w).is_some_and(|l| !roster.iter().any(|m| m.address == l)) {
+                self.want(convo, w);
+            }
+        }
+    }
+
     /// The groups of the chat list: one row each, also when nothing was said in it.
     fn group_rows<'a>(&'a self, convos: &'a [Convo]) -> impl Iterator<Item = (u64, Value)> + 'a {
         self.groups.iter().filter_map(move |id| {
@@ -1205,6 +1227,33 @@ mod tests {
             "a group from before a restart cannot take members"
         );
         assert_eq!(mine.waiting("g1").count(), 0);
+    }
+
+    #[test]
+    fn a_member_who_restarted_is_added_again_by_the_lowest_member_only() {
+        let lowest = [1u8, 2, 5].into_iter().min_by_key(|s| person(*s).1).unwrap();
+        let others: Vec<u8> = [1u8, 2, 5].into_iter().filter(|s| *s != lowest).collect();
+        let ((sk, me), (_, a), (_, c)) = (person(lowest), person(others[0]), person(others[1]));
+        let all = [a, c, me];
+        let mut mine = book();
+        mine.announce(&sk, &SITE, "me", NOW);
+        knows(&mut mine, others[0], "addr-a", &all);
+        knows(&mut mine, others[1], "addr-c", &all);
+        mine.start_group("g1", &[]);
+        let ours = roster(&[("me", false), ("addr-a", false), ("addr-c", false)]);
+        mine.readd("g1", &ours, &all, &me);
+        assert_eq!(mine.waiting("g1").count(), 0, "nobody restarted");
+        let (kc, _) = person(others[1]);
+        let m = addr_msg(&mut book(), &kc, "addr-c2", NOW + 1).unwrap();
+        mine.on_addr(&SITE, &m, &all);
+        mine.readd("g1", &ours, &all, &me);
+        assert_eq!(mine.waiting("g1").collect::<Vec<_>>(), [&c], "c has a new address that the group does not have");
+        mine.readd("g1", &ours, &all, &a);
+        assert_eq!(mine.waiting("g1").count(), 1, "a member that is not the lowest adds nobody (and a is not the lowest)");
+        let now_in = roster(&[("me", false), ("addr-a", false), ("addr-c2", true)]);
+        mine.invited("g1", &c);
+        mine.readd("g1", &now_in, &all, &me);
+        assert_eq!(mine.waiting("g1").count(), 0, "a pending add is not asked again");
     }
 
     #[test]
