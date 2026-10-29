@@ -370,6 +370,20 @@ fn invite_due() -> Result<usize, String> {
     failed.map_or(Ok(added), Err)
 }
 
+/// A member that restarted has a new chat address that the groups do not have. Keep them to be added again (see
+/// `ChatBook::readd`). The roster of each live group is read once for each round.
+fn readd_restarted() {
+    let p = proxy();
+    let Ok(live) = conversations(&p) else { return };
+    for c in live.iter().filter(|c| c.kind == "group" && !c.history_only) {
+        let Ok(members) = roster(&p, &c.id) else { continue };
+        let _ = chats(|node, book, _| {
+            book.readd(&c.id, &members, &node.approved_keys(), &node.me());
+            Ok(())
+        });
+    }
+}
+
 /// Send the unsent messages to the group `convo`, in order, once the members that were added have joined. What was not
 /// sent stays queued. Gives how many went out.
 fn drain_group(convo: &str) -> Result<usize, String> {
@@ -414,6 +428,7 @@ pub fn tick() {
             for who in chats(|_, book, _| Ok(book.queue_targets())).unwrap_or_default() {
                 let _ = drain(&who); // a failure leaves the message queued for the next round
             }
+            readd_restarted();
             let _ = invite_due();
             for convo in chats(|_, book, _| Ok(book.group_targets())).unwrap_or_default() {
                 let _ = drain_group(&convo);
@@ -422,18 +437,3 @@ pub fn tick() {
         BUSY.store(false, Ordering::Release);
     });
 }
-/// A member that restarted has a new chat address that the groups do not have. Keep them to be added again (see
-/// `ChatBook::readd`). The roster of each live group is read once for each round.
-fn readd_restarted() {
-    let p = proxy();
-    let Ok(live) = conversations(&p) else { return };
-    for c in live.iter().filter(|c| c.kind == "group" && !c.history_only) {
-        let Ok(members) = roster(&p, &c.id) else { continue };
-        let _ = chats(|node, book, _| {
-            book.readd(&c.id, &members, &node.approved_keys(), &node.me());
-            Ok(())
-        });
-    }
-}
-
-            readd_restarted();
