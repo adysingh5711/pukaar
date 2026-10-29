@@ -1,21 +1,21 @@
 {
   "schemaVersion": 2,
   "repositoryName": "pukaar",
-  "generatedAt": "2026-10-29T08:55:45Z",
+  "generatedAt": "2026-10-29T15:45:38Z",
   "packages": [
     {
       "name": "pukaar_core",
       "versions": [
         {
-          "releasedAt": "2026-10-29T08:55:45Z",
-          "publisherRef": "pukaar_core-v0.4.1",
-          "url": "https://github.com/adysingh5711/pukaar/releases/download/v0.4.1/logos-pukaar_core-module-lib.lgx",
+          "releasedAt": "2026-10-29T15:45:38Z",
+          "publisherRef": "pukaar_core-v0.4.2",
+          "url": "https://github.com/adysingh5711/pukaar/releases/download/v0.4.2/pukaar-core.lgx",
           "urls": [
-            "https://github.com/adysingh5711/pukaar/releases/download/v0.4.1/logos-pukaar_core-module-lib.lgx"
+            "https://github.com/adysingh5711/pukaar/releases/download/v0.4.2/pukaar-core.lgx"
           ],
-          "size": 22068795,
-          "sha256": "35852abf8a9f303c37dd397a60efa8b6e6ffd8be695cab86ba76a858a380db00",
-          "rootHash": "42fb31e40c999b8272f5afb249bdf41f69a26c34b9bb880c4a5f1e8017b8765a",
+          "size": 67590033,
+          "sha256": "a8bf8813b4c99e5bae2fb91549a7d5ae903dca13793eb4923afe78132a59d5dc",
+          "rootHash": "86477ed04650341cce0d439992e84c60b3cb38fedcd50a31dffed2f20c318c44",
           "manifest": {
             "author": "",
             "category": "civic",
@@ -27,25 +27,29 @@
             "description": "Core of Pukaar, a community issue tracker where residents confirm the fix",
             "display_name": "Pukaar Core",
             "hashes": {
-              "assets": "961caca88fda4da340a12cc991351e4a25db174938fe002ed4e5fb9fad26f61a",
-              "root": "42fb31e40c999b8272f5afb249bdf41f69a26c34b9bb880c4a5f1e8017b8765a",
-              "variants": "857a0a6122bd6ce2100ecaa88a91470a00a4a70635c5d18112dda4fe6774acc8",
-              "variants/darwin-arm64": "6ad1701f8f4d8a45deca3889dab06ec5e14927840a7cad5a9f3306d041872b1d"
+              "assets": "999835f48b124fe8af7f1e815b7ea27de2c9165e754ce26a524d7a29c9c64ba6",
+              "root": "86477ed04650341cce0d439992e84c60b3cb38fedcd50a31dffed2f20c318c44",
+              "variants": "e3b8b17a40a93a0bcd83459db45244381553692bfde288eb861d4809198c3eb2",
+              "variants/darwin-arm64": "109b0251671d74f8fc64d9f65a01f3a49d06256d9fbe62364f723981afb77785",
+              "variants/linux-amd64": "0a83ec78269f83afd0876b4ad5c2e27ddd150ec0bfeb55ea9780a7a9ced5bc46",
+              "variants/linux-arm64": "e0cfef84fb4ecdaad2970dafa655b50eff6650ee39fb542f1faf3b673d899782"
             },
             "icon": "",
             "main": {
-              "darwin-arm64": "pukaar_core_plugin.dylib"
+              "darwin-arm64": "pukaar_core_plugin.dylib",
+              "linux-amd64": "pukaar_core_plugin.so",
+              "linux-arm64": "pukaar_core_plugin.so"
             },
             "manifestVersion": "0.6.0",
             "name": "pukaar_core",
             "type": "core",
-            "version": "0.4.1"
+            "version": "0.4.2"
           },
           "signature": {
             "algorithm": "ed25519",
             "did": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IlpfZkxKcnVWR3UyYnBiR0VNMlhMTElmY2FzdTFycVkycHJZM1Z0cklRR28ifQ",
             "linkedDids": [],
-            "signature": "gnr2mt48JYHGXh4AmAGN+NA9oYTnw8pnL53Jp3xkhjNVybptctUGDFczWJyaqrob3Ht+OXeAZwspgPhUFeM2BQ==",
+            "signature": "YOicMqwjL4SA5Oon9vhvruvBf24MqShy2uQD/840ysCyul9rLtfoQzTRX+0IyYKoVFAh8sorWQx9NGGoyhN2BA==",
             "signer": {},
             "version": 1
           }
@@ -56,15 +60,15 @@
       "name": "pukaar_ui",
       "versions": [
         {
-          "releasedAt": "2026-10-29T08:55:45Z",
-          "publisherRef": "pukaar_ui-v0.4.1",
-          "url": "https://github.com/adysingh5711/pukaar/releases/download/v0.4.1/logos-pukaar_ui-module.lgx",
+          "releasedAt": "2026-10-29T15:45:38Z",
+          "publisherRef": "pukaar_ui-v0.4.2",
+          "url": "https://github.com/adysingh5711/pukaar/releases/download/v0.4.2/pukaar-ui.lgx",
           "urls": [
-            "https://github.com/adysingh5711/pukaar/releases/download/v0.4.1/logos-pukaar_ui-module.lgx"
+            "https://github.com/adysingh5711/pukaar/releases/download/v0.4.2/pukaar-ui.lgx"
           ],
-          "size": 130601,
-          "sha256": "eaae68abe70a39bdfcbdba3fea25b56ba8f596c6598c06d6e97a5dc6e93c1b45",
-          "rootHash": "d6138eb5ec439270c4c29048048aa3a789dba2fcb19c1363acff6296d8765bbd",
+          "size": 365413,
+          "sha256": "38bf1a1c896397748672100c118af36b2e35e5dc5d3983e426cc2b6b9e62533c",
+          "rootHash": "4683971202d9a287630e1e5e7da1cb1a683c01da647a9bd65fbf3f3b113be926",
           "manifest": {
             "author": "",
             "category": "civic",
@@ -74,24 +78,26 @@
             "description": "Issue tracker, private chat and meetings for your site",
             "display_name": "Pukaar",
             "hashes": {
-              "assets": "b7b299e56597669f7784834009da238ddf9ed051d86b74758f609632e386834e",
-              "root": "d6138eb5ec439270c4c29048048aa3a789dba2fcb19c1363acff6296d8765bbd",
-              "variants": "ce94b2e79059226a011124d5bc8f34c8349f6b4698c014ea06fbfe44303e7cbf",
-              "variants/darwin-arm64": "71845b46c3be9bcfee4217a6f46ce2b6cf570c4502afa95cbb98d0a596ac958b"
+              "assets": "b4e68f879e8f4734e43bec7098af10349b6241e6a5419a1402daefa35af1bf1a",
+              "root": "4683971202d9a287630e1e5e7da1cb1a683c01da647a9bd65fbf3f3b113be926",
+              "variants": "6815d4783120125bdbaaa4811ee81657c0454e01c626e205d4357752218d17b7",
+              "variants/darwin-arm64": "577deb779508e9fd55bd3772209dc0756a96a321e67dbafd64e079c92fd450d5",
+              "variants/linux-amd64": "577deb779508e9fd55bd3772209dc0756a96a321e67dbafd64e079c92fd450d5",
+              "variants/linux-arm64": "577deb779508e9fd55bd3772209dc0756a96a321e67dbafd64e079c92fd450d5"
             },
             "icon": "assets/icon.png",
             "main": {},
             "manifestVersion": "0.6.0",
             "name": "pukaar_ui",
             "type": "ui_qml",
-            "version": "0.4.1",
+            "version": "0.4.2",
             "view": "Main.qml"
           },
           "signature": {
             "algorithm": "ed25519",
             "did": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IlpfZkxKcnVWR3UyYnBiR0VNMlhMTElmY2FzdTFycVkycHJZM1Z0cklRR28ifQ",
             "linkedDids": [],
-            "signature": "rUiOpW7dn3iDZZYvFtU3swPrCKmsn1QUdoUUZ3q4D684kazoOLmNEJSiet3huomtvPpbW0kwCH3ldwfNEALCCA==",
+            "signature": "8qBJI2ZYwRXnHgLwPV91gE/BohxavagEjrBna6g3Bx3SIrzl9avzm4mw6nwwYkujTOOJDsQP0oxPH4t6tN91AQ==",
             "signer": {},
             "version": 1
           }
