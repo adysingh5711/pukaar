@@ -176,57 +176,66 @@ Item {
     readonly property int columnsWidth: 4 * 160 + 3 * 12
     readonly property bool narrow: width - sidebarWidth < columnsWidth + 8 + 400 + 2 * 16
 
-    // ---- design tokens: the only place a colour or the stage->colour map is spelled out ----
-    // Two sets (design/proposal/NOTES.md section 1): light = Primer, dark = Logos neutrals with
-    // Primer's stage hues. Everything reads root.t, which follows the system colour scheme live.
-    // Names match the mockup's CSS variables; the sb*/tip* roles are for the sidebar (step 5).
-    // QML spells alpha first (#AARRGGBB): CSS #54aeff99 is "#9954aeff" here.
+    // ---- design tokens (design/06-harbor.html): the only place a colour or a size is spelled out ----
+    // Dark = the Logos design system Basecamp uses (DarkTheme.qml / ColorPalette.qml: gray900 page, gray875 panels,
+    // gray850 cards, gray340 controls, gray300 border, orange300 #ED7B58 accent) with Harbor's stage hues. The design
+    // system has no light theme, so light is the same roles on white, with an accent dark enough to read as text.
+    // root.t = the colours (follows the system scheme live); root.radii, gaps, sizes and motion are the same in both.
     readonly property bool dark: Application.styleHints.colorScheme === Qt.Dark
-    readonly property var lightTokens: ({
-        fg: "#1f2328", muted: "#59636e", ph: "#6e7781", disabled: "#818b98",
-        page: "#ffffff", well: "#f6f8fa", card: "#ffffff", field: "#ffffff", hover: "#eff2f5", btn: "#f6f8fa", btnOff: "#f6f8fa",
-        bd: "#d1d9e0", ctlBd: "#818b98", btnBd: "#d1d9e0",
-        accent: "#0969da", accentBg: "#ddf4ff", accentBd: "#9954aeff", focus: "#0969da",
-        primary: "#0969da", primaryHover: "#0860ca", onPrimary: "#ffffff",
-        danger: "#d1242f", dangerBg: "#ffebe9", dangerBd: "#99ff8182",
-        warn: "#9a6700", warnBg: "#fff8c5", warnBd: "#66d4a72c",
-        okDot: "#1a7f37", connDot: "#9a6700",
-        reported: { fg: "#bc4c00", bg: "#fff1e5", bd: "#99fb8f44", edge: "#bc4c00" },
-        progress: { fg: "#0969da", bg: "#ddf4ff", bd: "#9954aeff", edge: "#0969da" },
-        awaiting: { fg: "#8250df", bg: "#fbefff", bd: "#99c297ff", edge: "#8250df" },
-        resolved: { fg: "#1a7f37", bg: "#dafbe1", bd: "#994ac26b", edge: "#1a7f37" },
-        closed: { fg: "#59636e", bg: "#eff1f3", bd: "#d1d9e0", edge: "#818b98" },
-        sb: "#f6f8fa", sbCard: "#ffffff", sbHover: "#eaeef2", sbFg: "#1f2328", sbMuted: "#59636e", sbIcon: "#59636e",
-        sbEdge: "#d1d9e0", sbLine: "#d1d9e0", sbCtl: "#818b98", sbActBg: "#c8e6ff", sbActFg: "#0550ae", sbActIcon: "#0550ae",
-        sbAv: "#dde3ea", sbOk: "#1a7f37", sbConn: "#9a6700", sbOff: "#d1242f", sbDanger: "#d1242f",
-        tipBg: "#25292e", tipFg: "#ffffff", tipBd: "#25292e",
-        homeA: "#2e14b8a6", homeB: "#2938bdf8", homeC: "#244f5fbf"     // Home's drifting light: teal, sky, indigo-slate (alpha baked in)
+    // A colour at alpha a / a tint of hex laid over `over` (Harbor's color-mix: 16% for chips and washes).
+    function fade(hex, a) { var c = Qt.color(hex); return Qt.rgba(c.r, c.g, c.b, a) }
+    function wash(hex, over, a) { return Qt.tint(over, fade(hex, a === undefined ? 0.16 : a)) }
+    // Every token of one scheme from its base roles. Names keep the older ones (fg, muted, page, well, card, hover, bd ...)
+    // and map them to Harbor: fg t1, muted t2, ph t3, well s1 (panel), card s2, hover and btn s3 (control fill), bd border.
+    function tokensOf(c) {
+        var s2 = Qt.color(c.s2), s1 = Qt.color(c.s1)
+        var tone = function (hex) { var bg = wash(hex, s2); return { fg: hex, bg: bg, bd: bg, edge: hex } }
+        var danger = wash(c.danger, s2)
+        var warn = wash(c.reported, s2)
+        var accent = wash(c.accent, s2)
+        return {
+            fg: c.t1, muted: c.t2, ph: c.t3, disabled: c.t3,
+            page: c.bg, page2: c.bg2, well: c.s1, card: c.s2, field: c.bg, hover: c.s3, hoverSoft: fade(c.s3, 0.6), btn: c.s3,
+            bd: c.border, ctlBd: c.t3, btnBd: c.border,
+            accent: c.accent, accentBg: accent, accentBd: accent, focus: c.accent,
+            primary: c.fill, primaryHover: Qt.tint(Qt.color(c.fill), fade("#ffffff", 0.12)), primaryOff: wash(c.accent, s1), onPrimary: c.ink, ink: c.ink,
+            danger: c.danger, dangerBg: danger, dangerBd: danger, dangerHover: wash(c.danger, s1, 0.24),
+            warn: c.reported, warnBg: warn, warnBd: warn,
+            okDot: c.resolved, connDot: c.reported,
+            reported: tone(c.reported), progress: tone(c.progress), awaiting: tone(c.awaiting), resolved: tone(c.resolved), closed: tone(c.closed),
+            tipBg: c.s3, tipFg: c.t1, tipBd: c.border,
+            shadow: c.shadow, scrim: c.scrim
+        }
+    }
+    readonly property var lightTokens: tokensOf({
+        bg: "#f1f1f1", bg2: "#ebebeb", s1: "#fafafa", s2: "#ffffff", s3: "#ececec", border: "#d6d6d6",
+        t1: "#171717", t2: "#5a5a5a", t3: "#737373", accent: "#b2401c", fill: "#ed7b58", ink: "#171717",
+        reported: "#8a6400", progress: "#0a5fb8", awaiting: "#6a3fd0", resolved: "#16794a", closed: "#566174", danger: "#c4283c",
+        shadow: "#2e000000", scrim: "#4d000000"
     })
-    readonly property var darkTokens: ({
-        fg: "#ffffff", muted: "#a4a4a4", ph: "#8c92a0", disabled: "#7a7a7a",
-        page: "#171717", well: "#1c1c1c", card: "#232323", field: "#262626", hover: "#2b2b2b", btn: "#2b2b2b", btnOff: "#1f1f1f",
-        bd: "#434343", ctlBd: "#808080", btnBd: "#4d4d4d",
-        accent: "#6aa8f0", accentBg: "#1f2d3d", accentBd: "#4a90e2", focus: "#6aa8f0",
-        primary: "#2563c9", primaryHover: "#2f6fd0", onPrimary: "#ffffff",
-        danger: "#ff8a82", dangerBg: "#2e1f1f", dangerBd: "#fb3748",
-        warn: "#febc2e", warnBg: "#2e2914", warnBd: "#bb8009",
-        okDot: "#49f563", connDot: "#febc2e",
-        reported: { fg: "#ff9a2e", bg: "#3b2814", bd: "#ff8800", edge: "#ff8800" },
-        progress: { fg: "#6aa8f0", bg: "#1f2d3d", bd: "#4a90e2", edge: "#4a90e2" },
-        awaiting: { fg: "#b794f6", bg: "#2f2840", bd: "#a07bea", edge: "#a07bea" },
-        resolved: { fg: "#6ccc93", bg: "#22362b", bd: "#6ccc93", edge: "#6ccc93" },
-        closed: { fg: "#b5b5b5", bg: "#2f2f2f", bd: "#808080", edge: "#808080" },
-        sb: "#141414", sbCard: "#1c1c1c", sbHover: "#262626", sbFg: "#ebebeb", sbMuted: "#a4a4a4", sbIcon: "#a4a4a4",
-        sbEdge: "#2c2c2c", sbLine: "#343434", sbCtl: "#808080", sbActBg: "#243b55", sbActFg: "#ffffff", sbActIcon: "#6aa8f0",
-        sbAv: "#2b303b", sbOk: "#49f563", sbConn: "#febc2e", sbOff: "#ff736a", sbDanger: "#ff8a82",
-        tipBg: "#3a3a3a", tipFg: "#ffffff", tipBd: "#808080",
-        homeA: "#2e2dd4bf", homeB: "#3338bdf8", homeC: "#38818cf8"
+    readonly property var darkTokens: tokensOf({
+        bg: "#171717", bg2: "#141414", s1: "#1c1c1c", s2: "#262626", s3: "#2f2f2f", border: "#434343",
+        t1: "#ffffff", t2: "#a4a4a4", t3: "#969696", accent: "#ed7b58", fill: "#ed7b58", ink: "#171717",
+        reported: "#f0cf65", progress: "#6cb8ff", awaiting: "#b9a2ff", resolved: "#6fe0a8", closed: "#98a4bd", danger: "#ff7a8a",
+        shadow: "#80000000", scrim: "#66000000"
     })
     readonly property var t: dark ? darkTokens : lightTokens
+    // Corner radii: panel = a floating panel, card = a card or row, ctl = a button or field, chip = a status chip,
+    // tag = a role tag, box = a checkbox.
+    readonly property var radii: ({ panel: 20, card: 14, ctl: 10, chip: 9, tag: 7, box: 6 })
+    // Spacing: inset = the gap round a floating panel and the window edge, gutter = between panels, pad = a card's padding,
+    // nav = between sidebar items, sidebar = its open and rail widths, navItem = one sidebar row's height.
+    readonly property var gaps: ({ inset: 12, gutter: 12, pad: 14, row: 8, nav: 2, sidebar: 220, rail: 56, navItem: 40 })
+    // Type sizes: a mockup pixel size scaled with the system font (baseSize = the mockup's 14 px body).
+    function px(n) { return baseSize * n / 14 }
+    readonly property var sizes: ({ cap: px(12), small: px(13), body: px(14), lead: px(15), h3: px(16), title: px(18), h2: px(20),
+                                    brand: px(22), key: px(26), h1: px(28), hero: px(40) })
+    // Motion: 120 to 220 ms, ease-out, hover and press colour only (see the Eased components).
+    readonly property var motion: ({ fast: 120, base: 160, slow: 220, ease: Easing.OutCubic })
     // Every control reads these roles. Set once on the root, so nothing falls back to the
     // system palette (a dark OS would otherwise give light-on-light or dark-on-dark controls).
     // Same value in the disabled and inactive groups: disabled controls use the `disabled` /
-    // `btnOff` tokens (ink() below), never opacity, so their contrast is checked like the rest.
+    // `well` fill (ink() below), never opacity, so their contrast is checked like the rest.
     palette {
         window: root.t.page; windowText: root.t.fg
         base: root.t.field; alternateBase: root.t.well; text: root.t.fg
@@ -501,10 +510,8 @@ Item {
     // Profile's own extra row: the balance of the network account. Not in connRows, because the sidebar shows one dot for each of those.
     readonly property var balanceRow: ({ name: "Balance", site: false, tone: ({ unknown: "conn", short: "off", low: "conn", ok: "ok" })[balanceState],
         state: balance === null ? "Not read yet" : lez(balance) + " LEZ", detail: balance === null ? "The balance shows after the first read of the chain." : balanceLine.replace(/^Balance: [^ ]+ LEZ\.\s*/, "") || "Enough for the next writes." })
-    // A status dot colour: the sidebar's tokens, or the page's.
-    function toneColor(tone, side) {
-        return (side ? { ok: t.sbOk, conn: t.sbConn, off: t.sbOff, idle: t.sbCtl } : { ok: t.okDot, conn: t.connDot, off: t.danger, idle: t.ctlBd })[tone]
-    }
+    // A status dot colour.
+    function toneColor(tone) { return ({ ok: t.okDot, conn: t.connDot, off: t.danger, idle: t.ctlBd })[tone] }
     // The newest queued write, in one line, for the Profile status card.
     readonly property string latestWrite: {
         var w = writes.length ? writes[writes.length - 1] : null
@@ -844,7 +851,7 @@ Item {
         }
         background: Frame {
             ring: fb.visualFocus
-            fill: !fb.enabled ? root.t.btnOff : fb.solid ? (fb.hovered || fb.down ? root.t.primaryHover : root.t.primary)
+            fill: !fb.enabled ? root.t.well : fb.solid ? (fb.hovered || fb.down ? root.t.primaryHover : root.t.primary)
                   : fb.down ? Qt.darker(root.t.btn, 1.12) : fb.hovered ? root.t.hover : root.t.btn
             edge: !fb.enabled ? root.t.bd : fb.solid ? root.t.primary : root.t.btnBd
         }
@@ -937,8 +944,8 @@ Item {
         property int count: 0
         property bool dot: false      // something new, no number (unread messages)
         readonly property string waiting: count > 0 ? ", " + count + " waiting" : dot ? ", unread" : ""
-        readonly property color ink: current ? root.t.sbActFg : root.t.sbFg
-        readonly property color iconInk: current ? root.t.sbActIcon : root.t.sbIcon
+        readonly property color ink: current ? root.t.fg : root.t.fg
+        readonly property color iconInk: current ? root.t.accent : root.t.muted
         Layout.fillWidth: true
         implicitHeight: Math.max(44, contentItem.implicitHeight + topPadding + bottomPadding)
         leftPadding: compact ? 6 : 12; rightPadding: leftPadding; topPadding: 6; bottomPadding: 6
@@ -949,7 +956,7 @@ Item {
         SideTip { text: nav.text + nav.waiting; visible: nav.compact && (nav.hovered || nav.visualFocus) }
         background: Rectangle {
             radius: 8
-            color: nav.current ? root.t.sbActBg : nav.hovered ? root.t.sbHover : "transparent"
+            color: nav.current ? root.t.hover : nav.hovered ? root.t.hover : "transparent"
             border.width: nav.visualFocus ? 2 : 0; border.color: root.t.focus
             Rectangle {   // the count pill: right of the label, or the rail icon's top-right corner
                 visible: nav.count > 0
@@ -1181,7 +1188,7 @@ Item {
         id: strip
         readonly property var a: root.lastAnchor
         readonly property string state: root.anchorState
-        readonly property color tone: state === "mismatch" ? root.t.sbOff : state === "" ? root.t.sbOk : root.t.sbConn
+        readonly property color tone: state === "mismatch" ? root.t.danger : state === "" ? root.t.okDot : root.t.connDot
         readonly property string head: !a || state === "never" ? "Not anchored yet" : state === "mismatch" ? "Anchor mismatch"
             : state === "stale" ? "Anchor " + root.dur(root.hoursSince(a.ts)) + " old" : "Anchored " + root.age(a.ts)
         readonly property string detail: (a && state === "mismatch" ? "the record does not match the last anchor"
@@ -2315,73 +2322,18 @@ Item {
     Timer { interval: 20000; running: root.inSite && root.approved && root.page !== "messages"; repeat: true; triggeredOnStart: true; onTriggered: root.poll("chat_threads", [], root.applyChat) }
 
     Rectangle { anchors.fill: parent; color: root.t.page }     // the page never shows the host's window colour
-    // Home's one authored moment: three soft lights drift behind the page, too slowly to watch. They sit under the content,
-    // fade out before the lower half (lists stay on a plain surface), and pause off Home or while the app is in the background.
-    Item {
-        id: backdrop
-        readonly property bool live: visible && Application.state === Qt.ApplicationActive
-        property color fade: root.t.page
-        visible: root.inSite && root.page === "home"
-        anchors.fill: parent; anchors.leftMargin: root.sidebarWidth
-        clip: true
-        Repeater {
-            // tint, diameter (share of the width), x from/to and y from/to (shares of width and height, top left), seconds per leg (x, y)
-            model: [[root.t.homeA, 0.62, -0.12, 0.22, -0.30, -0.05, 31, 24],
-                    [root.t.homeB, 0.55, 0.62, 0.38, -0.25, 0.02, 38, 27],
-                    [root.t.homeC, 0.70, 0.18, 0.50, -0.05, -0.32, 26, 40]]
-            delegate: Shape {
-                id: blob
-                required property var modelData
-                readonly property real d: backdrop.width * modelData[1]
-                property color tint: modelData[0]
-                property real u                  // 0..1 along each path, from 0
-                property real v
-                x: backdrop.width * (modelData[2] + (modelData[3] - modelData[2]) * u)
-                y: backdrop.height * (modelData[4] + (modelData[5] - modelData[4]) * v)
-                width: d; height: d
-                ShapePath {
-                    strokeColor: "transparent"
-                    fillGradient: RadialGradient {
-                        centerX: blob.d / 2; centerY: blob.d / 2; centerRadius: blob.d / 2; focalX: centerX; focalY: centerY
-                        GradientStop { position: 0; color: blob.tint }
-                        GradientStop { position: 0.45; color: Qt.rgba(blob.tint.r, blob.tint.g, blob.tint.b, blob.tint.a * 0.6) }
-                        GradientStop { position: 1; color: Qt.rgba(blob.tint.r, blob.tint.g, blob.tint.b, 0) }
-                    }
-                    PathSvg { path: root.circ(blob.d / 2, blob.d / 2, blob.d / 2) }
-                }
-                SequentialAnimation on u {
-                    loops: Animation.Infinite; paused: !backdrop.live
-                    NumberAnimation { to: 1; duration: blob.modelData[6] * 1000; easing.type: Easing.InOutSine }
-                    NumberAnimation { to: 0; duration: blob.modelData[6] * 1000; easing.type: Easing.InOutSine }
-                }
-                SequentialAnimation on v {
-                    loops: Animation.Infinite; paused: !backdrop.live
-                    NumberAnimation { to: 1; duration: blob.modelData[7] * 1000; easing.type: Easing.InOutSine }
-                    NumberAnimation { to: 0; duration: blob.modelData[7] * 1000; easing.type: Easing.InOutSine }
-                }
-            }
-        }
-        Rectangle {   // the fade: plain page from just past the middle down
-            anchors.fill: parent
-            gradient: Gradient {
-                GradientStop { position: 0.35; color: Qt.rgba(backdrop.fade.r, backdrop.fade.g, backdrop.fade.b, 0) }
-                GradientStop { position: 0.8; color: backdrop.fade }
-            }
-        }
-    }
-
     // ---------- sidebar: replaces the old header and tab bar ----------
     Rectangle {
         id: sidebar
         z: 5
         width: root.sidebarOpen ? 216 : 80; height: parent.height
-        color: root.t.sb
+        color: root.t.well
         readonly property bool open: root.sidebarOpen
         // the toggle sits on the site-name line: card top + border and padding + half the first line
         readonly property real nameY: siteCard.parent.y + siteCard.y + (open ? 11 : 9) + siteTitle.contentHeight / siteTitle.lineCount / 2
-        readonly property color on: root.t.sbFg
+        readonly property color on: root.t.fg
         readonly property string fp: root.me.fingerprint || ""
-        Rectangle { anchors.right: parent.right; width: 1; height: parent.height; color: root.t.sbEdge }
+        Rectangle { anchors.right: parent.right; width: 1; height: parent.height; color: root.t.bd }
         Rectangle {   // the overlay's shadow
             visible: root.overlay && root.overlayOpen
             x: parent.width; width: 14; height: parent.height
@@ -2408,7 +2360,7 @@ Item {
                 Layout.preferredWidth: sidebar.open ? -1 : 40
                 Layout.alignment: Qt.AlignHCenter
                 implicitHeight: cardCol.implicitHeight + (sidebar.open ? 22 : 18)
-                radius: 8; color: root.t.sbCard; border.color: root.t.sbLine
+                radius: 8; color: root.t.card; border.color: root.t.bd
                 ColumnLayout {
                     id: cardCol
                     anchors { fill: parent; leftMargin: sidebar.open ? 12 : 1; rightMargin: sidebar.open ? 12 : 1; topMargin: sidebar.open ? 11 : 9; bottomMargin: sidebar.open ? 11 : 9 }
@@ -2442,7 +2394,7 @@ Item {
                 }
             }
             Item { Layout.fillHeight: true }
-            Rectangle { Layout.fillWidth: true; height: 1; color: root.t.sbLine }   // foot
+            Rectangle { Layout.fillWidth: true; height: 1; color: root.t.bd }   // foot
             ColumnLayout {
                 Layout.fillWidth: true; Layout.topMargin: -4
                 spacing: 12
@@ -2475,11 +2427,11 @@ Item {
                             onClicked: if (root.inSite) root.openPage("profile")
                             background: Rectangle {
                                 radius: 6
-                                color: dot.hovered ? root.t.sbHover : "transparent"
+                                color: dot.hovered ? root.t.hover : "transparent"
                                 border.width: dot.visualFocus ? 2 : 0; border.color: root.t.focus
                             }
                             contentItem: Item {
-                                Rectangle { anchors.centerIn: parent; width: 12; height: 12; radius: 6; color: root.toneColor(dot.modelData.tone, true) }
+                                Rectangle { anchors.centerIn: parent; width: 12; height: 12; radius: 6; color: root.toneColor(dot.modelData.tone) }
                             }
                         }
                     }
@@ -2497,51 +2449,51 @@ Item {
                     onClicked: root.openPage("profile")
                     background: Rectangle {
                         radius: 8
-                        color: root.page === "profile" ? root.t.sbActBg : you.hovered ? root.t.sbHover : "transparent"
+                        color: root.page === "profile" ? root.t.hover : you.hovered ? root.t.hover : "transparent"
                         border.width: you.visualFocus ? 2 : 0; border.color: root.t.focus
                     }
                     contentItem: GridLayout {
                         columns: sidebar.open ? 3 : 1; columnSpacing: 10; rowSpacing: 4
                         Rectangle {
                             Layout.alignment: Qt.AlignHCenter | Qt.AlignTop
-                            implicitWidth: 32; implicitHeight: 32; radius: 16; color: root.t.sbAv
+                            implicitWidth: 32; implicitHeight: 32; radius: 16; color: root.t.hover
                             Label {
                                 anchors.centerIn: parent; visible: !!root.me.name
                                 text: root.initials(root.me.name)
-                                color: root.t.sbFg; font.pointSize: root.smallSize; font.bold: true
+                                color: root.t.fg; font.pointSize: root.smallSize; font.bold: true
                             }
-                            Icon { anchors.centerIn: parent; visible: !root.me.name; name: "user"; size: 18; color: root.t.sbFg }
+                            Icon { anchors.centerIn: parent; visible: !root.me.name; name: "user"; size: 18; color: root.t.fg }
                         }
                         ColumnLayout {
                             Layout.fillWidth: true; Layout.preferredWidth: 0; Layout.minimumWidth: 0   // the rail sets the width: a long fingerprint or role must wrap, not widen the column
                             Layout.maximumWidth: Infinity   // not the children's: they cap at this column's width, which would pin it at 0 in the rail
                             spacing: 2
                             readonly property int align: sidebar.open ? Qt.AlignLeft : Qt.AlignHCenter
-                            Label { visible: sidebar.open; text: "you:"; color: root.t.sbMuted; font.pointSize: root.smallSize }
+                            Label { visible: sidebar.open; text: "you:"; color: root.t.muted; font.pointSize: root.smallSize }
                             Label {
                                 visible: sidebar.open; Layout.fillWidth: true
-                                text: root.me.name || "pseudonym"; color: root.t.sbFg; wrapMode: Text.WrapAnywhere
+                                text: root.me.name || "pseudonym"; color: root.t.fg; wrapMode: Text.WrapAnywhere
                                 font.pointSize: root.smallSize; font.weight: Font.DemiBold
                             }
                             Label {
                                 Layout.alignment: parent.align; Layout.maximumWidth: parent.width; wrapMode: Text.WrapAnywhere
-                                text: sidebar.fp; color: root.t.sbFg; font.pointSize: root.smallSize; font.family: "monospace"
+                                text: sidebar.fp; color: root.t.fg; font.pointSize: root.smallSize; font.family: "monospace"
                             }
                             Rectangle {   // role chip; a key with no role yet is "pending", or "removed" after a revoke
                                 readonly property bool pending: !root.me.role
                                 Layout.alignment: parent.align; Layout.maximumWidth: parent.width
                                 implicitWidth: roleText.implicitWidth + (sidebar.open ? 16 : 12); implicitHeight: roleText.implicitHeight
-                                radius: 12; color: "transparent"; border.color: pending ? root.t.sbDanger : root.t.sbCtl
+                                radius: 12; color: "transparent"; border.color: pending ? root.t.danger : root.t.ctlBd
                                 Label {
                                     id: roleText
                                     width: parent.width; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap
                                     lineHeight: 20; lineHeightMode: Text.FixedHeight
                                     text: sidebar.open && root.unapproved ? "pending: read your fingerprint at the kiosk" : root.roleName
-                                    color: parent.pending ? root.t.sbDanger : root.t.sbFg; font.pointSize: root.smallSize
+                                    color: parent.pending ? root.t.danger : root.t.fg; font.pointSize: root.smallSize
                                 }
                             }
                         }
-                        Icon { visible: sidebar.open; Layout.alignment: Qt.AlignVCenter; name: "chev"; size: 14; color: root.t.sbIcon }
+                        Icon { visible: sidebar.open; Layout.alignment: Qt.AlignVCenter; name: "chev"; size: 14; color: root.t.muted }
                     }
                 }
             }
@@ -2615,8 +2567,8 @@ Item {
         SideTip { text: toggle.Accessible.name; visible: toggle.hovered || toggle.visualFocus }
         background: Rectangle { radius: 18; color: "transparent"; border.width: toggle.visualFocus ? 2 : 0; border.color: root.t.focus }
         contentItem: Rectangle {
-            radius: 14; color: toggle.hovered ? root.t.sbHover : root.t.page; border.color: root.t.sbCtl
-            Icon { anchors.centerIn: parent; name: sidebar.open ? "chevl" : "chev"; size: 16; color: root.t.sbFg }
+            radius: 14; color: toggle.hovered ? root.t.hover : root.t.page; border.color: root.t.ctlBd
+            Icon { anchors.centerIn: parent; name: sidebar.open ? "chevl" : "chev"; size: 16; color: root.t.fg }
         }
     }
 
@@ -4085,7 +4037,7 @@ Item {
                                         spacing: 12
                                         Rectangle {
                                             Layout.alignment: Qt.AlignTop; Layout.topMargin: 5
-                                            implicitWidth: 12; implicitHeight: 12; radius: 6; color: root.toneColor(crow.modelData.tone, false)
+                                            implicitWidth: 12; implicitHeight: 12; radius: 6; color: root.toneColor(crow.modelData.tone)
                                         }
                                         ColumnLayout {
                                             Layout.fillWidth: true
@@ -5021,7 +4973,7 @@ Item {
                                     readonly property bool isUnread: modelData.unread === true && !highlighted
                                     Accessible.name: (modelData.group ? "Group " : "Chat with ") + title + (isUnread ? ", unread" : "") + ". " + modelData.preview
                                     onClicked: root.openChat(modelData.key)
-                                    background: Rectangle { color: chatRow.highlighted ? root.t.sbActBg : chatRow.hovered ? root.t.hover : "transparent" }
+                                    background: Rectangle { color: chatRow.highlighted ? root.t.hover : chatRow.hovered ? root.t.hover : "transparent" }
                                     contentItem: ColumnLayout {
                                         spacing: 2
                                         RowLayout {
