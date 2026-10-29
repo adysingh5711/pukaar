@@ -4950,6 +4950,13 @@ Item {
                             root.call("chat_threads", [], function (c) { root.applyChat(c); root.openChat(r.convo) })
                         })
                     }
+                    // a group that is read-only after our restart: a new group with the same name and members takes its place
+                    function startAgain() {
+                        root.run("chat_group_again", [root.chatWith], function (r) {
+                            root.notice = "The group is started again. The other members are added as soon as their chat address is known, and join within a minute or two."
+                            root.call("chat_threads", [], function (c) { root.applyChat(c); root.openChat(r.convo) })
+                        })
+                    }
                     function addMembers() {
                         var convo = root.chatWith
                         root.run("chat_group_add", [convo, Object.keys(addPick.picked).join(",")], function () {
@@ -5251,13 +5258,6 @@ Item {
                                         text: "Send"; kind: "primary"
                                         allowed: draft.text.trim() !== "" && !chatPage.readOnly
                                         Accessible.name: "Send the message to " + chatPage.currentName
-                    // a group that is read-only after our restart: a new group with the same name and members takes its place
-                    function startAgain() {
-                        root.run("chat_group_again", [root.chatWith], function (r) {
-                            root.notice = "The group is started again. The other members are added as soon as their chat address is known, and join within a minute or two."
-                            root.call("chat_threads", [], function (c) { root.applyChat(c); root.openChat(r.convo) })
-                        })
-                    }
                                         onClicked: chatPage.send()
                                     }
                                 }
