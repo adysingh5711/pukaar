@@ -105,6 +105,15 @@ Item {
     property string viewKey: ""          // the member whose page is open
     property var viewed: null            // member_profile of viewKey, or {error} once the core refused
     readonly property var socialLabels: ["website", "github", "x", "linkedin", "other"]   // the labels the core allows
+    readonly property var socialMetaMap: ({
+        website: { icon: "website", title: "Website", filled: false },
+        github: { icon: "github", title: "GitHub", filled: true },
+        x: { icon: "socialX", title: "X", filled: true },
+        linkedin: { icon: "linkedin", title: "LinkedIn", filled: true },
+        other: { icon: "link", title: "Other", filled: false }
+    })
+    function socialMeta(label) { return socialMetaMap[label] || socialMetaMap.other }
+    function socialUrl(address) { return "https://" + String(address).replace(/^https?:\/\//i, "") }
     function applyViewed(v) { if (v && v.key === viewKey) viewed = v; else if (typeof v === "string") viewed = { error: v } }
     function showMember(key) { viewKey = key; viewed = null; call("member_profile", [key], applyViewed); openPage("member") }
     function meetTime(r) { return when(r.start_ms / 1000, "ddd d MMM HH:mm") + " to " + when(r.end_ms / 1000, "HH:mm") }
@@ -758,6 +767,7 @@ Item {
         user: "M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2M8 7a4 4 0 1 0 8 0a4 4 0 1 0 -8 0",
         copy: "M10 8h10a2 2 0 0 1 2 2v10a2 2 0 0 1 -2 2h-10a2 2 0 0 1 -2 -2v-10a2 2 0 0 1 2 -2zM4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2",
         dup: "M15 12L15 18M12 15L18 15M10 8h10a2 2 0 0 1 2 2v10a2 2 0 0 1 -2 2h-10a2 2 0 0 1 -2 -2v-10a2 2 0 0 1 2 -2zM4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2",
+        panel: "M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2H5a2 2 0 0 1 -2-2V6a2 2 0 0 1 2-2zM9 4v16",
         chev: "M9 18l6-6-6-6",
         chevl: "M15 18l-6-6 6-6",
         chevd: "M6 9l6 6 6-6",
@@ -782,6 +792,11 @@ Item {
         eye: "M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0M9 12a3 3 0 1 0 6 0a3 3 0 1 0 -6 0",
         update: "M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8M21 3v5h-5M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16M8 16H3v5",
         search: "M21 21l-4.34-4.34M3 11a8 8 0 1 0 16 0a8 8 0 1 0 -16 0",
+        github: "M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12",
+        linkedin: "M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.108-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.144 0-2.063-.926-2.063-2.065 0-1.138.92-2.063 2.063-2.063 1.14 0 2.064.925 2.064 2.063 0 1.138-.925 2.063-2.064 2.063zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 .792.774.792 1.729v20.542C.792 23.227 1.584 24 2.533 24h20.451C22.225 24 24 23.271 24 22.271V1.729C24 .774 23.433 0 22.447 0h-.222z",
+        socialX: "M18.901 1.153h3.68l-8.04 9.19L24 22.846h-7.406l-5.8-7.584-6.638 7.584H.474l8.6-9.83L0 1.154h7.594l5.243 6.932",
+        website: "M12 2a10 10 0 1 0 0 20a10 10 0 1 0 0-20M12 2a14.5 14.5 0 0 0 0 20a14.5 14.5 0 0 0 0-20M2 12h20",
+        link: "M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71",
         shield: "M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z",
         hist: "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8M3 3v5h5M12 7v5l4 2",
         prog: "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0"
@@ -793,6 +808,7 @@ Item {
         property string name
         property real size: 16
         property color color: root.t.fg
+        property bool filled: false
         implicitWidth: size; implicitHeight: size
         Accessible.ignored: true
         Shape {
@@ -800,7 +816,7 @@ Item {
             scale: icon.size / 24; transformOrigin: Item.TopLeft
             preferredRendererType: Shape.CurveRenderer
             ShapePath {
-                strokeColor: icon.color; strokeWidth: 2; fillColor: "transparent"
+                strokeColor: icon.filled ? "transparent" : icon.color; strokeWidth: 2; fillColor: icon.filled ? icon.color : "transparent"
                 capStyle: ShapePath.RoundCap; joinStyle: ShapePath.RoundJoin
                 PathSvg { path: root.icons[icon.name] || "" }
             }
@@ -858,6 +874,7 @@ Item {
         id: fb
         property string kind: "default"
         property string iconName: ""       // optional leading icon, drawn in the label colour
+        property bool iconFilled: false
         property bool quiet: false         // Harbor's .ra: a row action, text only until hovered (danger kind: red text)
         readonly property bool solid: kind === "primary" && enabled
         readonly property bool hot: hovered || down
@@ -878,7 +895,7 @@ Item {
             leftPadding: fb.iconName === "" ? 0 : fb.text === "" ? 16 : 22
             color: fb.ink
             Icon {
-                visible: fb.iconName !== ""; name: fb.iconName; size: 16; color: fb.ink
+                visible: fb.iconName !== ""; name: fb.iconName; size: 16; color: fb.ink; filled: fb.iconFilled
                 x: (parent.width - parent.leftPadding - parent.contentWidth) / 2; anchors.verticalCenter: parent.verticalCenter
             }
         }
@@ -2523,37 +2540,57 @@ Item {
                 }
             }
             Item { Layout.fillHeight: true }
-            GridLayout {   // delivery, chain and Storage: one dot each, no words. A click opens Profile, which has the details.
+            GridLayout {   // the footer mirrors the reference: status dots beside the collapse control when open, above it in the rail.
                 Layout.alignment: sidebar.open ? Qt.AlignLeft : Qt.AlignHCenter
                 Layout.leftMargin: sidebar.open ? 4 : 0; Layout.bottomMargin: 14
-                columns: sidebar.open ? 3 : 1; columnSpacing: 2; rowSpacing: 2
-                Repeater {
-                    model: root.connRows.filter(function (e) { return !e.site || root.inSite })
-                    delegate: AbstractButton {
-                        id: dot
-                        required property var modelData
-                        implicitWidth: 24; implicitHeight: 24
-                        hoverEnabled: true
-                        focusPolicy: Qt.StrongFocus
-                        objectName: "statusDot-" + modelData.name
-                        Accessible.name: modelData.name + ": " + modelData.state + ". See Profile for details"
-                        HoverHandler { cursorShape: Qt.PointingHandCursor }
-                        SideTip {
-                            objectName: "statusTip-" + dot.modelData.name
-                            x: (dot.width - width) / 2; y: -height - 6; margins: 4     // above the dot: a tip on the right would hide the next dot
-                            text: root.inSite ? "See Profile for details" : dot.modelData.name + ": " + dot.modelData.state.toLowerCase()
-                            visible: dot.hovered || dot.visualFocus
+                columns: sidebar.open ? 2 : 1; columnSpacing: 8; rowSpacing: 2
+                GridLayout {
+                    Layout.row: sidebar.open ? 0 : 1; Layout.column: 0
+                    columns: sidebar.open ? 3 : 1; columnSpacing: 2; rowSpacing: 2
+                    Repeater {
+                        model: root.connRows.filter(function (e) { return !e.site || root.inSite })
+                        delegate: AbstractButton {
+                            id: dot
+                            required property var modelData
+                            implicitWidth: 24; implicitHeight: 24
+                            hoverEnabled: true
+                            focusPolicy: Qt.StrongFocus
+                            objectName: "statusDot-" + modelData.name
+                            Accessible.name: modelData.name + ": " + modelData.state + ". See Profile for details"
+                            HoverHandler { cursorShape: Qt.PointingHandCursor }
+                            SideTip {
+                                objectName: "statusTip-" + dot.modelData.name
+                                x: (dot.width - width) / 2; y: -height - 6; margins: 4     // above the dot: a tip on the right would hide the next dot
+                                text: root.inSite ? "See Profile for details" : dot.modelData.name + ": " + dot.modelData.state.toLowerCase()
+                                visible: dot.hovered || dot.visualFocus
+                            }
+                            onClicked: if (root.inSite) root.openPage("profile")
+                            background: Rectangle {
+                                radius: root.radii.tag
+                                color: dot.hovered ? root.t.hover : "transparent"
+                                border.width: dot.visualFocus ? 2 : 0; border.color: root.t.focus
+                                Behavior on color { EasedColor {} }
+                            }
+                            contentItem: Item {
+                                Rectangle { anchors.centerIn: parent; width: 8; height: 8; radius: 4; color: root.toneColor(dot.modelData.tone) }
+                            }
                         }
-                        onClicked: if (root.inSite) root.openPage("profile")
-                        background: Rectangle {
-                            radius: root.radii.tag
-                            color: dot.hovered ? root.t.hover : "transparent"
-                            border.width: dot.visualFocus ? 2 : 0; border.color: root.t.focus
-                            Behavior on color { EasedColor {} }
-                        }
-                        contentItem: Item {
-                            Rectangle { anchors.centerIn: parent; width: 8; height: 8; radius: 4; color: root.toneColor(dot.modelData.tone) }
-                        }
+                    }
+                }
+                Button {   // the collapse toggle follows the reference layout in the sidebar footer
+                    id: toggle
+                    Layout.row: 0; Layout.column: sidebar.open ? 1 : 0
+                    Layout.alignment: sidebar.open ? Qt.AlignVCenter : Qt.AlignHCenter
+                    implicitWidth: 36; implicitHeight: 36; padding: 4
+                    hoverEnabled: true
+                    Accessible.name: sidebar.open ? "Collapse sidebar" : "Expand sidebar"
+                    onClicked: root.toggleSidebar()
+                    SideTip { text: toggle.Accessible.name; visible: toggle.hovered || toggle.visualFocus }
+                    background: Rectangle { radius: 18; color: "transparent"; border.width: toggle.visualFocus ? 2 : 0; border.color: root.t.focus }
+                    contentItem: Rectangle {
+                        radius: 14; color: toggle.hovered ? root.t.hover : root.t.card; border.color: root.t.bd
+                        Behavior on color { EasedColor {} }
+                        Icon { anchors.centerIn: parent; name: "panel"; size: 14; color: root.t.fg }
                     }
                 }
             }
@@ -2698,23 +2735,6 @@ Item {
         }
     }
     Shortcut { sequence: "Escape"; enabled: root.overlayOpen; onActivated: root.overlayOpen = false }
-    Button {   // the collapse toggle: a 28 px knob in a 36 px hit area, on the sidebar's right edge beside the logo
-        id: toggle
-        z: 20
-        x: sidebar.x + sidebar.width - 17; y: sidebar.y + 17
-        width: 36; height: 36; padding: 4
-        hoverEnabled: true
-        Accessible.name: sidebar.open ? "Collapse sidebar" : "Expand sidebar"
-        onClicked: root.toggleSidebar()
-        SideTip { text: toggle.Accessible.name; visible: toggle.hovered || toggle.visualFocus }
-        background: Rectangle { radius: 18; color: "transparent"; border.width: toggle.visualFocus ? 2 : 0; border.color: root.t.focus }
-        contentItem: Rectangle {
-            radius: 14; color: toggle.hovered ? root.t.hover : root.t.card; border.color: root.t.bd
-            Behavior on color { EasedColor {} }
-            Icon { anchors.centerIn: parent; name: sidebar.open ? "chevl" : "chev"; size: 14; color: root.t.fg }
-        }
-    }
-
     ColumnLayout {   // the pages, in the space right of the sidebar panel
         anchors.fill: parent
         anchors.margins: root.gaps.inset
@@ -4189,7 +4209,15 @@ Item {
                     property bool saved: false           // the last save went through: say where it is shown
                     readonly property var myReports: root.issues.filter(function (i) { return i.reporter === root.me.key })
                     readonly property int mineOpen: myReports.filter(function (i) { return !root.isTerminal(i.status) }).length
-                    PageHead { title: "You"; lede: root.esc(root.me.name || "pseudonym") + " · " + root.roleName }
+                    RowLayout {
+                        Layout.fillWidth: true; Layout.bottomMargin: 8; spacing: 18
+                        Avatar { Layout.alignment: Qt.AlignTop; size: 88; name: root.me.name || ""; ident: root.me.fingerprint || "" }
+                        ColumnLayout {
+                            Layout.fillWidth: true; Layout.alignment: Qt.AlignVCenter; spacing: 4
+                            Label { Layout.fillWidth: true; text: "You"; font.pointSize: root.sizes.h1; font.weight: Font.DemiBold }
+                            Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: root.esc(root.me.name || "pseudonym") + " · " + root.roleName; color: root.t.muted; font.pointSize: root.sizes.small }
+                        }
+                    }
                     Flash {
                         visible: root.isSuper && root.superCount === 1
                         Accessible.role: Accessible.AlertMessage
@@ -4201,40 +4229,6 @@ Item {
                     }
                     Panel {   // Harbor's .set: one floating panel, a section per topic (title and help left, controls right)
                         pad: 0; spacing: 0
-                        SetSection {
-                            title: "Connection status"
-                            ColumnLayout {
-                                Layout.fillWidth: true; spacing: 0
-                                Repeater {
-                                    model: root.connRows.concat([root.balanceRow])
-                                    delegate: ColumnLayout {
-                                        id: crow
-                                        required property var modelData
-                                        required property int index
-                                        Layout.fillWidth: true
-                                        spacing: 0
-                                        Accessible.role: Accessible.StaticText
-                                        Accessible.name: modelData.name + ": " + modelData.state + ". " + modelData.detail
-                                        Rule { visible: crow.index > 0 }
-                                        GridLayout {   // Harbor's .srow: name, a dot and the state, then what it means
-                                            Layout.fillWidth: true; Layout.topMargin: 10; Layout.bottomMargin: 10
-                                            columns: 3; columnSpacing: 12
-                                            Label { Layout.preferredWidth: 130; Layout.alignment: Qt.AlignTop; text: crow.modelData.name; textFormat: Text.PlainText; font.weight: Font.DemiBold }
-                                            RowLayout {
-                                                Layout.preferredWidth: 110; Layout.alignment: Qt.AlignTop; spacing: 8
-                                                Rectangle { implicitWidth: 8; implicitHeight: 8; radius: 4; color: root.toneColor(crow.modelData.tone) }
-                                                Label {
-                                                    Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText; text: crow.modelData.state; font.pointSize: root.sizes.small
-                                                    color: crow.modelData.tone === "idle" ? root.t.muted : crow.modelData.tone === "off" ? root.t.danger : root.t.fg
-                                                }
-                                            }
-                                            Help { Layout.fillWidth: true; Layout.minimumWidth: 160; Layout.preferredWidth: 1; text: crow.modelData.detail }
-                                        }
-                                    }
-                                }
-                            }
-                            Help { text: root.latestWrite }
-                        }
                         SetSection {
                             title: "Your code"
                             help: root.unapproved ? "Read it aloud at the kiosk." : "Read it aloud when an admin asks."
@@ -4298,12 +4292,22 @@ Item {
                                         property alias label: socialLabel
                                         property alias address: socialAddress
                                         Layout.fillWidth: true; spacing: 8
-                                        FramedCombo {
-                                            id: socialLabel
-                                            Layout.preferredWidth: 130
-                                            model: root.socialLabels; Accessible.name: "Type of link " + (socialRow.index + 1)
-                                            currentIndex: socialRow.kept ? Math.max(0, root.socialLabels.indexOf(socialRow.kept[0])) : 0
-                                            onActivated: profilePage.saved = false
+                                        Item {
+                                            Layout.preferredWidth: 130; implicitHeight: socialLabel.implicitHeight
+                                            FramedCombo {
+                                                id: socialLabel
+                                                anchors.fill: parent
+                                                leftPadding: 34
+                                                model: root.socialLabels; Accessible.name: "Type of link " + (socialRow.index + 1)
+                                                currentIndex: socialRow.kept ? Math.max(0, root.socialLabels.indexOf(socialRow.kept[0])) : 0
+                                                onActivated: profilePage.saved = false
+                                            }
+                                            Icon {
+                                                anchors { left: parent.left; leftMargin: 10; verticalCenter: parent.verticalCenter }
+                                                name: root.socialMeta(socialLabel.currentText).icon
+                                                filled: root.socialMeta(socialLabel.currentText).filled
+                                                size: 16; color: root.t.muted
+                                            }
                                         }
                                         FramedField {
                                             id: socialAddress
@@ -4391,6 +4395,40 @@ Item {
                                 Label { text: profilePage.mineOpen + " open · " + (profilePage.myReports.length - profilePage.mineOpen) + " closed" }
                                 LinkButton { text: "Show in the Issue Tracker  ›"; onClicked: { root.onlyMine = true; root.openPage("board") } }
                             }
+                        }
+                        SetSection {
+                            title: "Connection status"
+                            ColumnLayout {
+                                Layout.fillWidth: true; spacing: 0
+                                Repeater {
+                                    model: root.connRows.concat([root.balanceRow])
+                                    delegate: ColumnLayout {
+                                        id: crow
+                                        required property var modelData
+                                        required property int index
+                                        Layout.fillWidth: true
+                                        spacing: 0
+                                        Accessible.role: Accessible.StaticText
+                                        Accessible.name: modelData.name + ": " + modelData.state + ". " + modelData.detail
+                                        Rule { visible: crow.index > 0 }
+                                        GridLayout {   // Harbor's .srow: name, a dot and the state, then what it means
+                                            Layout.fillWidth: true; Layout.topMargin: 10; Layout.bottomMargin: 10
+                                            columns: 3; columnSpacing: 12
+                                            Label { Layout.preferredWidth: 130; Layout.alignment: Qt.AlignTop; text: crow.modelData.name; textFormat: Text.PlainText; font.weight: Font.DemiBold }
+                                            RowLayout {
+                                                Layout.preferredWidth: 110; Layout.alignment: Qt.AlignTop; spacing: 8
+                                                Rectangle { implicitWidth: 8; implicitHeight: 8; radius: 4; color: root.toneColor(crow.modelData.tone) }
+                                                Label {
+                                                    Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText; text: crow.modelData.state; font.pointSize: root.sizes.small
+                                                    color: crow.modelData.tone === "idle" ? root.t.muted : crow.modelData.tone === "off" ? root.t.danger : root.t.fg
+                                                }
+                                            }
+                                            Help { Layout.fillWidth: true; Layout.minimumWidth: 160; Layout.preferredWidth: 1; text: crow.modelData.detail }
+                                        }
+                                    }
+                                }
+                            }
+                            Help { text: root.latestWrite }
                         }
                         SetSection {
                             title: "Leave this site"
@@ -4629,7 +4667,7 @@ Item {
                     property string slotsError: ""   // why the times did not load, "" when they did
                     property var clashes: ({})       // meet_check of the pick for each chosen person, by key
                     property string customError: ""  // why a typed length or the chosen time was refused, "" when fine
-                    property var days: []            // the next 30 local days of the date box: [{ms (midnight), label}]
+                    property bool customLengthMode: false
                     property string leadError: ""    // the same for the reminder
                     readonly property var others: root.approved ? root.members.filter(function (m) { return m.key !== root.me.key }) : []   // who we can plan with
                     readonly property var all: root.meets.meetings || []
@@ -4648,8 +4686,6 @@ Item {
                         })
                         return out
                     }
-                    readonly property var hours: range(24, 1)
-                    readonly property var minutes: range(12, 5)
                     // Free or busy at the chosen time, for you and for each chosen person (the core's meet_check and meet_slots).
                     readonly property string youLine: !pick ? "" : !ours ? "You: checking…"
                         : !youBusy ? "You: free" : "You: busy (clashes with " + ours.mine.map(function (x) { return root.who(x.with, x.name) + " from " + hm(x) }).join(", ") + ")"
@@ -4672,12 +4708,6 @@ Item {
                         if (i >= 0) root.meetGuests = guests.filter(function (g) { return g.key !== m.key })
                         else if (guests.length < maxGuests) root.meetGuests = guests.concat([m])
                     }
-                    // n two-digit labels "00", "05" … stepping by `step`.
-                    function range(n, step) {
-                        var out = []
-                        for (var i = 0; i < n; i++) out.push((i * step < 10 ? "0" : "") + i * step)
-                        return out
-                    }
                     function hm(r) { return root.when(r.start_ms / 1000, "HH:mm") + " to " + root.when(r.end_ms / 1000, "HH:mm") }
                     // The whole number in a typed text when it is from lo to hi, else -1.
                     function whole(text, lo, hi) {
@@ -4685,10 +4715,11 @@ Item {
                         return n >= lo && n <= hi ? n : -1
                     }
                     function setLen(n) { customError = ""; lenMin = n; applyTime() }
+                    function setPresetLen(n) { customLengthMode = false; setLen(n) }
                     function customLength(text) {
                         var n = whole(text, 5, 480)
                         if (n < 0) customError = "Type a whole number of minutes for the length, 5 to 480."
-                        else setLen(n)
+                        else { customLengthMode = true; setLen(n) }
                     }
                     // A pick from the date and time boxes: the proposal carries this start and end itself.
                     function choose(slot) { pick = slot; clashes = ({}); check(slot) }
@@ -4700,22 +4731,23 @@ Item {
                             })
                         })
                     }
-                    // The boxes start at the next full hour. A change of date, time or length picks at once (a light
+                    // The fields start at the next full hour. A change of date, time or length picks at once (a light
                     // delay, so a few changes together make one check).
                     function resetTime() {
-                        var n = new Date(), day = new Date(n.getFullYear(), n.getMonth(), n.getDate()), first = new Date(n.getFullYear(), n.getMonth(), n.getDate(), n.getHours() + 1), list = []
-                        for (var i = 0; i < 30; i++) {
-                            var d = new Date(day.getFullYear(), day.getMonth(), day.getDate() + i)
-                            list.push({ ms: d.getTime(), label: i === 0 ? "Today" : i === 1 ? "Tomorrow" : root.when(d.getTime() / 1000, "ddd d MMM") })
-                        }
-                        days = list
-                        dayBox.currentIndex = Math.round((new Date(first.getFullYear(), first.getMonth(), first.getDate()) - day) / 86400000)
-                        hourBox.currentIndex = first.getHours(); minBox.currentIndex = 0
+                        var n = new Date(), first = new Date(n.getFullYear(), n.getMonth(), n.getDate(), n.getHours() + 1)
+                        dateField.text = Qt.formatDate(first, "yyyy-MM-dd")
+                        timeField.text = Qt.formatTime(first, "HH:mm")
                         applyTime()
                     }
-                    function applyTime() { if (guests.length && days.length) timeTimer.restart() }
+                    function applyTime() { if (guests.length && dateField.text !== "" && timeField.text !== "") timeTimer.restart() }
                     function pickTime() {
-                        var d = new Date(days[dayBox.currentIndex].ms), s = new Date(d.getFullYear(), d.getMonth(), d.getDate(), hourBox.currentIndex, minBox.currentIndex * 5)
+                        var dm = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateField.text.trim()), tm = /^(\d{2}):(\d{2})$/.exec(timeField.text.trim())
+                        if (!dm || !tm) { customError = "Use a date like 2026-11-03 and a time like 17:30."; pick = null; clashes = ({}); return }
+                        var y = Number(dm[1]), mo = Number(dm[2]), day = Number(dm[3]), h = Number(tm[1]), min = Number(tm[2])
+                        var s = new Date(y, mo - 1, day, h, min)
+                        if (s.getFullYear() !== y || s.getMonth() !== mo - 1 || s.getDate() !== day || s.getHours() !== h || s.getMinutes() !== min) {
+                            customError = "That date or time is not valid."; pick = null; clashes = ({}); return
+                        }
                         if (s.getTime() < Date.now()) { customError = "That time has already passed. Pick a later time."; pick = null; clashes = ({}); return }
                         customError = ""
                         choose({ start_ms: s.getTime(), end_ms: s.getTime() + lenMin * 60000 })
@@ -4739,8 +4771,8 @@ Item {
                     onGuestsChanged: {
                         views = ({}); clashes = ({}); slotsError = ""
                         load()
-                        if (!guests.length) { pick = null; days = []; customError = ""; descField.text = "" }
-                        else if (!days.length) resetTime()
+                        if (!guests.length) { pick = null; customError = ""; descField.text = "" }
+                        else if (dateField.text === "" || timeField.text === "") resetTime()
                         else if (pick) check(pick)
                     }
                     Timer { id: timeTimer; interval: 150; onTriggered: meetPage.pickTime() }
@@ -4748,11 +4780,17 @@ Item {
                     Timer { interval: 20000; running: meetPage.guests.length > 0 && root.page === "meet"; repeat: true; onTriggered: { meetPage.load(); if (meetPage.pick) meetPage.check(meetPage.pick) } }
                     PageHead {
                         title: "Meetings"
-                        lede: "Plan a meeting with one or more members, up to 8: choose who below, or use 1:1 meeting in People. Times show in your local time."
+                        lede: "Plan a meeting with one or more members, up to 8. Times show in your local time."
                     }
-                    Heading { visible: meetPage.requests.length > 0; text: "Requests" }
+                    GridLayout {
+                        id: meetGrid
+                        Layout.fillWidth: true
+                        columns: root.compactRows ? 1 : 2
+                        columnSpacing: root.gaps.gutter; rowSpacing: root.gaps.gutter
+                        Heading { visible: meetPage.requests.length > 0; text: "Requests"; Layout.row: root.compactRows ? -1 : 0; Layout.column: 0 }
                     Frame {
                         visible: meetPage.requests.length > 0
+                        Layout.row: root.compactRows ? -1 : 1; Layout.column: 0
                         Layout.fillWidth: true; implicitHeight: reqs.implicitHeight; fill: root.t.well; edge: root.t.bd; radius: root.radii.card; clip: true
                         ColumnLayout {
                             id: reqs
@@ -4767,13 +4805,15 @@ Item {
                             }
                         }
                     }
-                    Heading { text: "Who" }
+                    Heading { text: "Who"; Layout.row: root.compactRows ? -1 : 0; Layout.column: root.compactRows ? 0 : 1 }
                     Label {
                         visible: meetPage.others.length === 0
+                        Layout.row: root.compactRows ? -1 : 1; Layout.column: root.compactRows ? 0 : 1
                         Layout.fillWidth: true; wrapMode: Text.Wrap; color: root.t.muted
                         text: root.approved ? "No other members yet." : "You can plan a meeting once you have a role."
                     }
                     Flow {
+                        Layout.row: root.compactRows ? -1 : 1; Layout.column: root.compactRows ? 0 : 1
                         Layout.fillWidth: true; spacing: 8
                         Repeater {
                             model: meetPage.others
@@ -4789,59 +4829,59 @@ Item {
                         }
                     }
                     Help {
+                        Layout.row: root.compactRows ? -1 : 2; Layout.column: root.compactRows ? 0 : 1
                         visible: meetPage.others.length > 0
                         text: meetPage.guests.length >= meetPage.maxGuests ? "Up to " + meetPage.maxGuests + " people. Choose a name again to remove it."
                             : "Choose one or more people (up to " + meetPage.maxGuests + "). Choose a name again to remove it."
                     }
-                    Heading { visible: meetPage.guests.length > 0; text: "New meeting with " + meetPage.guestNames }
+                    Heading { visible: meetPage.guests.length > 0; text: "New meeting with " + meetPage.guestNames; Layout.row: root.compactRows ? -1 : 3; Layout.column: root.compactRows ? 0 : 1 }
                     ColumnLayout {
                         visible: meetPage.guests.length > 0
+                        Layout.row: root.compactRows ? -1 : 4; Layout.column: root.compactRows ? 0 : 1
                         Layout.fillWidth: true; spacing: 8
                         RowLayout {
                             spacing: 12
                             Label { text: "Length" }
                             Segmented {
-                                name: "Length of the meeting"; options: ["30 min", "60 min", "90 min"]
-                                current: [30, 60, 90].indexOf(meetPage.lenMin)
-                                onPicked: function (i) { meetPage.setLen([30, 60, 90][i]) }
+                                name: "Length of the meeting"; options: ["15 min", "30 min", "60 min", "Other"]
+                                current: meetPage.customLengthMode ? 3 : [15, 30, 60].indexOf(meetPage.lenMin)
+                                onPicked: function (i) { if (i === 3) { meetPage.customLengthMode = true; lenField.forceActiveFocus() } else meetPage.setPresetLen([15, 30, 60][i]) }
                             }
                             IconLink { iconName: "x"; Accessible.name: "Close the guest list"; onClicked: root.meetGuests = [] }
                         }
                         RowLayout {
                             spacing: 8
-                            Label { text: "Other length" }
+                            Label { visible: meetPage.customLengthMode; text: "Other length" }
                             FramedField {
                                 id: lenField
+                                visible: meetPage.customLengthMode
                                 Layout.preferredWidth: 72; maximumLength: 3; placeholderText: "45"
                                 inputMethodHints: Qt.ImhDigitsOnly
                                 validator: RegularExpressionValidator { regularExpression: /[0-9]*/ }
                                 Accessible.name: "Meeting length in minutes"
-                                onTextEdited: lenTimer.restart()
+                                onTextEdited: { meetPage.customLengthMode = true; lenTimer.restart() }
                             }
-                            Label { text: "minutes, 5 to 480"; color: root.t.muted; font.pointSize: root.smallSize }
+                            Label { visible: meetPage.customLengthMode; text: "minutes, 5 to 480"; color: root.t.muted; font.pointSize: root.smallSize }
                         }
                         Flow {
                             Layout.fillWidth: true; spacing: 8
-                            Label { height: dayBox.height; verticalAlignment: Text.AlignVCenter; text: "Date" }
-                            FramedCombo {
-                                id: dayBox
-                                width: 150; model: meetPage.days.map(function (d) { return d.label })
-                                Accessible.name: "Meeting date, in your local time"
-                                onActivated: meetPage.applyTime()
+                            Label { height: dateField.height; verticalAlignment: Text.AlignVCenter; text: "Date" }
+                            FramedField {
+                                id: dateField
+                                Layout.preferredWidth: 132; placeholderText: "YYYY-MM-DD"
+                                inputMethodHints: Qt.ImhDigitsOnly
+                                validator: RegularExpressionValidator { regularExpression: /\d{0,4}(-\d{0,2}(-\d{0,2})?)?/ }
+                                Accessible.name: "Meeting date, YYYY-MM-DD, in your local time"
+                                onTextEdited: meetPage.applyTime()
                             }
-                            Label { height: dayBox.height; verticalAlignment: Text.AlignVCenter; text: "Time" }
-                            FramedCombo {
-                                id: hourBox
-                                width: 84; model: meetPage.hours
-                                Accessible.name: "Start hour, 24 hours, in your local time"
-                                onActivated: meetPage.applyTime()
-                            }
-                            Label { height: dayBox.height; verticalAlignment: Text.AlignVCenter; text: ":" }
-                            FramedCombo {
-                                id: minBox
-                                width: 84; model: meetPage.minutes
-                                Accessible.name: "Start minute, in your local time"
-                                onActivated: meetPage.applyTime()
+                            Label { height: dateField.height; verticalAlignment: Text.AlignVCenter; text: "Time" }
+                            FramedField {
+                                id: timeField
+                                Layout.preferredWidth: 76; placeholderText: "HH:mm"
+                                inputMethodHints: Qt.ImhDigitsOnly
+                                validator: RegularExpressionValidator { regularExpression: /\d{0,2}(:\d{0,2})?/ }
+                                Accessible.name: "Meeting time, HH:mm, in your local time"
+                                onTextEdited: meetPage.applyTime()
                             }
                         }
                         Flash { visible: meetPage.customError !== ""; err: true; text: meetPage.customError }
@@ -4891,10 +4931,11 @@ Item {
                                                 function () { meetPage.pick = null; meetPage.clashes = ({}); root.meetGuests = [] })
                         }
                     }
-                    Heading { text: "Upcoming" }
-                    Blank { visible: meetPage.upcoming.length === 0; icon: "bell"; title: "No meetings planned"; text: "Choose who above, or use 1:1 meeting in People." }
+                    Heading { text: "Upcoming"; Layout.row: root.compactRows ? -1 : 2; Layout.column: 0 }
+                    Blank { visible: meetPage.upcoming.length === 0; icon: "bell"; title: "No meetings planned"; text: "Choose who above, or use 1:1 meeting in People."; Layout.row: root.compactRows ? -1 : 3; Layout.column: 0 }
                     Frame {
                         visible: meetPage.upcoming.length > 0
+                        Layout.row: root.compactRows ? -1 : 4; Layout.column: 0
                         Layout.fillWidth: true; implicitHeight: ups.implicitHeight; fill: root.t.well; edge: root.t.bd; radius: root.radii.card; clip: true
                         ColumnLayout {
                             id: ups
@@ -4914,9 +4955,10 @@ Item {
                             }
                         }
                     }
-                    Heading { visible: meetPage.history.length > 0; text: "History" }
+                    Heading { visible: meetPage.history.length > 0; text: "History"; Layout.row: root.compactRows ? -1 : 5; Layout.column: 0 }
                     Frame {
                         visible: meetPage.history.length > 0
+                        Layout.row: root.compactRows ? -1 : 6; Layout.column: 0
                         Layout.fillWidth: true; implicitHeight: hists.implicitHeight; fill: root.t.well; edge: root.t.bd; radius: root.radii.card; clip: true
                         ColumnLayout {
                             id: hists
@@ -4924,13 +4966,15 @@ Item {
                             Repeater { model: meetPage.history; delegate: MeetRow {} }
                         }
                     }
-                    Heading { text: "Settings" }
+                    Heading { text: "Settings"; Layout.row: root.compactRows ? -1 : 5; Layout.column: root.compactRows ? 0 : 1 }
                     FramedCheck {
+                        Layout.row: root.compactRows ? -1 : 6; Layout.column: root.compactRows ? 0 : 1
                         text: "Share my free and busy times with the site (times only, never titles)"
                         Binding on checked { value: root.meets.share !== false }
                         onToggled: root.run("meet_prefs", [checked ? 1 : 0, root.meets.lead_min])
                     }
                     RowLayout {
+                        Layout.row: root.compactRows ? -1 : 7; Layout.column: root.compactRows ? 0 : 1
                         spacing: 12
                         Label { text: "Remind me" }
                         Segmented {
@@ -4941,6 +4985,7 @@ Item {
                         Label { text: root.meets.lead_min === 0 ? "No reminder shows." : "before. The reminder shows only while this app is open."; color: root.t.muted; font.pointSize: root.smallSize }
                     }
                     RowLayout {
+                        Layout.row: root.compactRows ? -1 : 8; Layout.column: root.compactRows ? 0 : 1
                         spacing: 8
                         Label { text: "Other reminder" }
                         FramedField {
@@ -4954,8 +4999,9 @@ Item {
                         Label { text: "minutes before, 0 to 1440 (0 = none)"; color: root.t.muted; font.pointSize: root.smallSize }
                         ActionButton { id: useLead; text: "Set"; onClicked: meetPage.setLead(meetPage.whole(leadField.text, 0, 1440)) }
                     }
-                    Flash { visible: meetPage.leadError !== ""; err: true; text: meetPage.leadError }
+                    Flash { visible: meetPage.leadError !== ""; err: true; text: meetPage.leadError; Layout.row: root.compactRows ? -1 : 9; Layout.column: root.compactRows ? 0 : 1 }
                     CollapsibleSection {   // closed until the member opens it
+                        Layout.row: root.compactRows ? -1 : 10; Layout.column: root.compactRows ? 0 : 1
                         title: "Backup settings"
                         panel: true; pad: 20
                         aside: meetPage.backup.job ? "working…" : meetPage.backup.error ? "needs attention" : ""
@@ -4986,6 +5032,7 @@ Item {
                             onSubmitted: root.run("meet_restore", [restoreCid.text])
                         }
                     }
+                    }
                 }
 
                 // Member (a row of People opens it): the profile of one member of this site. A steward has a name
@@ -5000,6 +5047,24 @@ Item {
                     readonly property string person: ok ? root.who(v.key, v.name) : ""
                     readonly property var links: ok && v.socials ? v.socials : []
                     readonly property bool empty: ok && !v.bio && !v.experience && links.length === 0
+                    property int linkIndex: -1
+                    property int copiedLinkIndex: -1
+                    onVChanged: { linkIndex = -1; copiedLinkIndex = -1; copiedLinkTimer.stop() }
+                    Timer {
+                        id: copiedLinkTimer
+                        interval: 1400
+                        onTriggered: memberPage.copiedLinkIndex = -1
+                    }
+                    function toggleLink(index) {
+                        linkIndex = linkIndex === index ? -1 : index
+                        copiedLinkIndex = -1
+                        copiedLinkTimer.stop()
+                    }
+                    function copyLink(index) {
+                        root.copyText(root.socialUrl(memberPage.links[index][1]))
+                        copiedLinkIndex = index
+                        copiedLinkTimer.restart()
+                    }
                     LinkButton { text: "‹  Back to People"; Accessible.name: "Back to People"; onClicked: root.openPage("people") }
                     Help { visible: !memberPage.v; text: "Loading this member…" }
                     Help { visible: !!memberPage.v && !!memberPage.v.error; color: root.t.danger; text: memberPage.v ? String(memberPage.v.error || "") : "" }
@@ -5033,15 +5098,47 @@ Item {
                             Help { visible: memberPage.ok && memberPage.v.pointer === "announced"; text: "This profile has a newer edit. The chain record updates at the next admin batch." }
                             Heading { visible: memberPage.full && memberPage.links.length > 0; Layout.topMargin: 6; text: "Links" }
                             Flow {   // Harbor's .socs: one pill per link; a click asks first, in a line of its own
+                                id: linkFlow
                                 visible: memberPage.full && memberPage.links.length > 0
                                 Layout.fillWidth: true; spacing: 8
                                 Repeater {
                                     model: memberPage.links
-                                    delegate: ConfirmButton {
+                                    delegate: ColumnLayout {
+                                        id: linkCell
                                         required property var modelData
-                                        kind: "ghost"; text: modelData[0] + " · " + modelData[1]; name: "Open the " + modelData[0] + " link"; confirmText: "Open link"
-                                        effect: "This opens https://" + modelData[1] + " in your browser. Open only links that you trust."
-                                        onConfirmed: Qt.openUrlExternally("https://" + modelData[1])
+                                        required property int index
+                                        readonly property var meta: root.socialMeta(modelData[0])
+                                        readonly property bool selected: memberPage.linkIndex === index
+                                        width: selected ? linkFlow.width : linkChip.implicitWidth
+                                        spacing: 6
+                                        FramedButton {
+                                            id: linkChip
+                                            kind: "ghost"
+                                            text: linkCell.meta.title + " · " + linkCell.modelData[1]
+                                            iconName: linkCell.meta.icon; iconFilled: linkCell.meta.filled
+                                            Accessible.name: linkCell.meta.title + ": " + linkCell.modelData[1]
+                                            onClicked: memberPage.toggleLink(linkCell.index)
+                                        }
+                                        Help {
+                                            visible: linkCell.selected
+                                            text: "This opens " + root.socialUrl(linkCell.modelData[1]) + " in your browser. Open only links that you trust."
+                                        }
+                                        RowLayout {
+                                            visible: linkCell.selected
+                                            spacing: 8
+                                            ActionButton {
+                                                text: "Open link"; kind: "primary"
+                                                Accessible.name: "Open " + linkCell.meta.title + " link"
+                                                onClicked: Qt.openUrlExternally(root.socialUrl(linkCell.modelData[1]))
+                                            }
+                                            FramedButton {
+                                                text: memberPage.copiedLinkIndex === linkCell.index ? "Copied URL" : "Copy URL"
+                                                iconName: "copy"
+                                                Accessible.name: text + " for " + linkCell.meta.title
+                                                onClicked: memberPage.copyLink(linkCell.index)
+                                            }
+                                            FramedButton { text: "Cancel"; onClicked: memberPage.toggleLink(-1) }
+                                        }
                                     }
                                 }
                             }
