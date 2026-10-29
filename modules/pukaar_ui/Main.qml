@@ -104,15 +104,21 @@ Item {
     // ---- another member's profile (member_profile): a row of People opens it ----
     property string viewKey: ""          // the member whose page is open
     property var viewed: null            // member_profile of viewKey, or {error} once the core refused
-    readonly property var socialLabels: ["website", "github", "x", "linkedin", "other"]   // the labels the core allows
     readonly property var socialMetaMap: ({
         website: { icon: "website", title: "Website", filled: false },
         github: { icon: "github", title: "GitHub", filled: true },
         x: { icon: "socialX", title: "X", filled: true },
         linkedin: { icon: "linkedin", title: "LinkedIn", filled: true },
+        telegram: { icon: "telegram", title: "Telegram", filled: true },
+        working: { icon: "hammer", title: "Currently working on", filled: false },
         other: { icon: "link", title: "Other", filled: false }
     })
     function socialMeta(label) { return socialMetaMap[label] || socialMetaMap.other }
+    // The link types a member can pick, in the order of the dropdown and of the default rows.
+    readonly property var socialTypes: ["github", "x", "linkedin", "telegram", "website", "working", "other"].map(function (k) {
+        var m = socialMetaMap[k]
+        return { label: k, title: m.title, icon: m.icon, filled: m.filled }
+    })
     function socialUrl(address) { return "https://" + String(address).replace(/^https?:\/\//i, "") }
     function applyViewed(v) { if (v && v.key === viewKey) viewed = v; else if (typeof v === "string") viewed = { error: v } }
     function showMember(key) { viewKey = key; viewed = null; call("member_profile", [key], applyViewed); openPage("member") }
@@ -793,6 +799,8 @@ Item {
         search: "M21 21l-4.34-4.34M3 11a8 8 0 1 0 16 0a8 8 0 1 0 -16 0",
         github: "M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12",
         linkedin: "M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.108-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.144 0-2.063-.926-2.063-2.065 0-1.138.92-2.063 2.063-2.063 1.14 0 2.064.925 2.064 2.063 0 1.138-.925 2.063-2.064 2.063zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 .792.774.792 1.729v20.542C.792 23.227 1.584 24 2.533 24h20.451C22.225 24 24 23.271 24 22.271V1.729C24 .774 23.433 0 22.447 0h-.222z",
+        telegram: "M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z",
+        hammer: "m15 12-8.373 8.373a1 1 0 1 1-3-3L12 9M18 15l4-4M21.5 11.5l-1.914-1.914A2 2 0 0 1 19 8.172V7l-2.26-2.26a6 6 0 0 0-4.202-1.756L9 2.96l.92.82A6.18 6.18 0 0 1 12 8.4V10l2 2h1.172a2 2 0 0 1 1.414.586L18.5 14.5",
         socialX: "M18.901 1.153h3.68l-8.04 9.19L24 22.846h-7.406l-5.8-7.584-6.638 7.584H.474l8.6-9.83L0 1.154h7.594l5.243 6.932",
         website: "M12 2a10 10 0 1 0 0 20a10 10 0 1 0 0-20M12 2a14.5 14.5 0 0 0 0 20a14.5 14.5 0 0 0 0-20M2 12h20",
         link: "M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71",
@@ -910,6 +918,18 @@ Item {
         background: Frame { ring: combo.visualFocus; off: !combo.enabled }
         contentItem: Label { text: combo.displayText; color: root.ink(combo.enabled); elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }
         indicator: Icon { x: combo.width - width - 10; y: (combo.height - height) / 2; name: "chevd"; size: 14; color: combo.enabled ? root.t.muted : root.t.disabled }
+        property string iconRole: ""          // model role naming an icon (and `filled` its style): shown before each option
+        // The popup, on the control tokens: the same frame as the combo, so it follows light and dark with the rest.
+        popup: Popup {
+            y: combo.height + 2; width: combo.width; padding: 4
+            implicitHeight: Math.min(contentItem.implicitHeight + 2 * padding, 280)
+            contentItem: ListView {
+                clip: true; implicitHeight: contentHeight
+                model: combo.popup.visible ? combo.delegateModel : null
+                currentIndex: combo.highlightedIndex
+            }
+            background: Frame { fill: root.t.field; edge: root.t.ctlBd }
+        }
         // The style's own row paints its highlight from palette roles that are not meant for it
         // (invisible text on some palettes); this one reads the tokens.
         delegate: ItemDelegate {
@@ -919,8 +939,20 @@ Item {
             width: ListView.view.width
             text: model[combo.textRole]
             highlighted: combo.highlightedIndex === index
-            background: Rectangle { color: option.highlighted ? root.t.hover : root.t.field }
-            contentItem: Label { text: option.text; verticalAlignment: Text.AlignVCenter; font.bold: combo.currentIndex === option.index }
+            background: Rectangle { radius: root.radii.box; color: option.highlighted ? root.t.hover : root.t.field }
+            contentItem: RowLayout {
+                spacing: 8
+                Icon {
+                    visible: combo.iconRole !== ""
+                    name: combo.iconRole !== "" ? option.model[combo.iconRole] : ""; filled: !!option.model.filled
+                    size: 16; color: root.t.muted
+                }
+                Label {
+                    Layout.fillWidth: true
+                    text: option.text; color: root.t.fg; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter
+                    font.bold: combo.currentIndex === option.index
+                }
+            }
         }
     }
     component FramedCheck: CheckBox {
@@ -4246,9 +4278,19 @@ Item {
                         var out = []
                         for (var i = 0; i < socialRows.count; i++) {
                             var r = socialRows.itemAt(i)
-                            if (r.address.text.trim() !== "") out.push([r.label.currentText, r.address.text])
+                            if (r.address.text.trim() !== "") out.push([r.label.currentValue, r.address.text])
                         }
                         return JSON.stringify(out)
+                    }
+                    // The type a row starts on: its saved one, else the first type that no earlier row uses (then "other").
+                    function typeAt(row) {
+                        var used = [], type = ""
+                        for (var i = 0; i <= row; i++) {
+                            type = profilePage.mySocials[i] ? profilePage.mySocials[i][0]
+                                 : (root.socialTypes.find(function (s) { return used.indexOf(s.label) < 0 && s.label !== "other" }) || { label: "other" }).label
+                            used.push(type)
+                        }
+                        return type
                     }
                     property bool saved: false           // the last save went through: say where it is shown
                     readonly property var myReports: root.issues.filter(function (i) { return i.reporter === root.me.key })
@@ -4337,19 +4379,20 @@ Item {
                                         property alias address: socialAddress
                                         Layout.fillWidth: true; spacing: 8
                                         Item {
-                                            Layout.preferredWidth: 130; implicitHeight: socialLabel.implicitHeight
+                                            Layout.preferredWidth: 210; implicitHeight: socialLabel.implicitHeight
                                             FramedCombo {
                                                 id: socialLabel
                                                 anchors.fill: parent
                                                 leftPadding: 34
-                                                model: root.socialLabels; Accessible.name: "Type of link " + (socialRow.index + 1)
-                                                currentIndex: socialRow.kept ? Math.max(0, root.socialLabels.indexOf(socialRow.kept[0])) : 0
+                                                model: root.socialTypes; textRole: "title"; valueRole: "label"; iconRole: "icon"
+                                                Accessible.name: "Type of link " + (socialRow.index + 1)
+                                                currentIndex: { var i = indexOfValue(profilePage.typeAt(socialRow.index)); return i < 0 ? count - 1 : i }   // an unknown saved type shows as Other (last)
                                                 onActivated: profilePage.saved = false
                                             }
                                             Icon {
                                                 anchors { left: parent.left; leftMargin: 10; verticalCenter: parent.verticalCenter }
-                                                name: root.socialMeta(socialLabel.currentText).icon
-                                                filled: root.socialMeta(socialLabel.currentText).filled
+                                                name: root.socialMeta(socialLabel.currentValue).icon
+                                                filled: root.socialMeta(socialLabel.currentValue).filled
                                                 size: 16; color: root.t.muted
                                             }
                                         }
