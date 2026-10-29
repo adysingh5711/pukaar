@@ -136,8 +136,25 @@ Item {
     }
     Timer { interval: 15000; running: root.inSite && root.approved; repeat: true; triggeredOnStart: true; onTriggered: root.checkReminders() }
     // ---- shell (design/proposal/NOTES.md section 3) ----
-    readonly property var pages: ["board", "report", "people", "places", "proof", "profile", "history", "meet", "member", "messages"]   // the StackLayout's children, in order
-    property string page: "board"
+    readonly property var pages: ["home", "board", "report", "people", "places", "proof", "profile", "history", "meet", "member", "messages"]   // the StackLayout's children, in order
+    property string page: "home"
+    // Meeting requests that wait for our answer: the sidebar's Meetings pill and a Home row.
+    readonly property int meetAsks: (meets.meetings || []).filter(function (m) { return m.status === "proposed" && m.my_answer === "pending" }).length
+    // The site's pages in sidebar order; Home lists the rest with `about`, its one line on each. "board" is the
+    // Issue Tracker (the id is older than the name). A pending key cannot report, meet or message.
+    readonly property var sections: [
+        { label: "Home", icon: "home", page: "home" },
+        { label: "Issue Tracker", icon: "board", page: "board", about: "Follow every open report from reported to fixed." },
+        { label: "Report", icon: "report", page: "report", about: "Say what is broken and where. A steward picks it up." },
+        { label: "History", icon: "hist", page: "history", about: "Every resolved and closed issue, and how each one ended." },
+        { label: "People", icon: "members", page: "people", count: isAdmin ? pending.length : 0,   // the admin's waiting count
+          about: plural(members.length, "member") + " and their roles." },
+        { label: "Messages", icon: "cmt", page: "messages", dot: chat.unread === true && page !== "messages",
+          about: "Private chats with one member or a small group." },
+        { label: "Meetings", icon: "bell", page: "meet", count: meetAsks, about: "Find a time to meet one member, or up to eight." },
+        { label: "Places", icon: "pin", page: "places",
+          about: "The " + plural(locations.length, "place") + " in this site, in " + plural(groupsOf(locations).length, "group") + "." }
+    ].filter(function (e) { return approved || ["report", "meet", "messages"].indexOf(e.page) < 0 })
     // The sidebar is expanded (216 px) from 1100 px of window, an 80 px icon rail below; the user's
     // toggle ("expanded" / "collapsed", "" = never pressed) wins at every width and is remembered.
     // Below 930 px the rail never grows (four 160 px columns would not fit): Expand opens the
@@ -182,7 +199,8 @@ Item {
         sb: "#f6f8fa", sbCard: "#ffffff", sbHover: "#eaeef2", sbFg: "#1f2328", sbMuted: "#59636e", sbIcon: "#59636e",
         sbEdge: "#d1d9e0", sbLine: "#d1d9e0", sbCtl: "#818b98", sbActBg: "#c8e6ff", sbActFg: "#0550ae", sbActIcon: "#0550ae",
         sbAv: "#dde3ea", sbOk: "#1a7f37", sbConn: "#9a6700", sbOff: "#d1242f", sbDanger: "#d1242f",
-        tipBg: "#25292e", tipFg: "#ffffff", tipBd: "#25292e"
+        tipBg: "#25292e", tipFg: "#ffffff", tipBd: "#25292e",
+        homeA: "#2e14b8a6", homeB: "#2938bdf8", homeC: "#244f5fbf"     // Home's drifting light: teal, sky, indigo-slate (alpha baked in)
     })
     readonly property var darkTokens: ({
         fg: "#ffffff", muted: "#a4a4a4", ph: "#8c92a0", disabled: "#7a7a7a",
@@ -201,7 +219,8 @@ Item {
         sb: "#141414", sbCard: "#1c1c1c", sbHover: "#262626", sbFg: "#ebebeb", sbMuted: "#a4a4a4", sbIcon: "#a4a4a4",
         sbEdge: "#2c2c2c", sbLine: "#343434", sbCtl: "#808080", sbActBg: "#243b55", sbActFg: "#ffffff", sbActIcon: "#6aa8f0",
         sbAv: "#2b303b", sbOk: "#49f563", sbConn: "#febc2e", sbOff: "#ff736a", sbDanger: "#ff8a82",
-        tipBg: "#3a3a3a", tipFg: "#ffffff", tipBd: "#808080"
+        tipBg: "#3a3a3a", tipFg: "#ffffff", tipBd: "#808080",
+        homeA: "#2e2dd4bf", homeB: "#3338bdf8", homeC: "#38818cf8"
     })
     readonly property var t: dark ? darkTokens : lightTokens
     // Every control reads these roles. Set once on the root, so nothing falls back to the
@@ -322,7 +341,7 @@ Item {
     // Drop this device's copy of the site (the key stays); back to the first-run screen.
     function leave() {
         run("leave_site", [], function () {
-            closeIssue(); page = "board"; chatWith = ""; checkpoint = null; issues = []; setInfo(noInfo); chain = noChain; seen = ({})
+            closeIssue(); page = "home"; chatWith = ""; checkpoint = null; issues = []; setInfo(noInfo); chain = noChain; seen = ({})
         })
     }
     // Poll steps in order; the site-bound ones only once my_identity says we are in a site.
@@ -511,6 +530,7 @@ Item {
     // place() without its code, which the card sets apart; "Other" shows its landmark bare.
     function placeName(i) { return i.location === "other" ? (i.landmark || "") : place(i).substr(i.location.length + 1) }
     function plural(n, word) { return n + " " + word + (n === 1 ? "" : "s") }
+    function andList(a) { return a.length > 1 ? a.slice(0, -1).join(", ") + " and " + a[a.length - 1] : a[0] || "" }   // "a, b and c"
     // The conflicts count Integrity shows (History's strip too, once there are any): conflicts are the forks the core found.
     readonly property string conflicts: info.forks > 0 ? plural(info.forks, "conflict") : "no conflicts"
     // The newest anchor (site_info last_anchor, null = never). The app never reads LEZ: the tx is what
@@ -602,7 +622,7 @@ Item {
             acts[w[1]].push(w[0])
         })
         return reasons.map(function (r) {
-            var a = acts[r], names = a.length > 1 ? a.slice(0, -1).join(", ") + " and " + a[a.length - 1] : a[0]
+            var a = acts[r], names = andList(a)
             return r === "note" ? names + (a.length > 1 ? " need" : " needs") + " a note first." : names + ", because " + r + "."
         })
     }
@@ -645,7 +665,7 @@ Item {
         }
     }
     function offBoardText(i) {
-        return closedVerb(i) + " " + plural(Math.floor((Date.now() / 1000 - closedAt(i)) / 86400), "day") + " ago, so it is off the board, which shows the last "
+        return closedVerb(i) + " " + plural(Math.floor((Date.now() / 1000 - closedAt(i)) / 86400), "day") + " ago, so it is no longer in the Issue Tracker, which shows the last "
              + windowDays(i.status) + " days. Nothing is deleted."
     }
     // Timeline kinds in words: [label, noun when rejected, icon, label when a resident other than the
@@ -721,7 +741,8 @@ Item {
              + "h" + (2 * r - w) + a + -r + " " + -r + "v" + (2 * r - h) + a + r + " " + -r + "z"
     }
     readonly property var icons: ({
-        board: "M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2zM8 7v7M12 7v4M16 7v9",
+        home: "M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
+        board:"M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2zM8 7v7M12 7v4M16 7v9",
         report: "M11 6a13 13 0 0 0 8.4-2.8A1 1 0 0 1 21 4v12a1 1 0 0 1-1.6.8A13 13 0 0 0 11 14H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2zM6 14a12 12 0 0 0 2.4 7.2 2 2 0 0 0 3.2-2.4A8 8 0 0 1 10 14M8 6v8",
         mega: "M11 6a13 13 0 0 0 8.4-2.8A1 1 0 0 1 21 4v12a1 1 0 0 1-1.6.8A13 13 0 0 0 11 14H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2zM6 14a12 12 0 0 0 2.4 7.2 2 2 0 0 0 3.2-2.4A8 8 0 0 1 10 14M8 6v8",
         members: "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M16 3.128a4 4 0 0 1 0 7.744M22 21v-2a4 4 0 0 0-3-3.87M5 7a4 4 0 1 0 8 0a4 4 0 1 0 -8 0",
@@ -1044,6 +1065,33 @@ Item {
         Keys.onEnterPressed: clicked()
         contentItem: Icon { name: ib.iconName; size: 16; color: ib.hovered || ib.down ? root.t.fg : root.t.muted }
         background: Rectangle { radius: 4; color: ib.hovered ? root.t.hover : "transparent"; border.width: ib.visualFocus ? 2 : 0; border.color: root.t.focus }
+    }
+    // A Home row that opens a page: an icon, a bold line, a muted line under it and a chevron. The whole row is one button.
+    component HomeRow: AbstractButton {
+        id: row
+        property string glyph
+        property string detail
+        Layout.fillWidth: true
+        padding: 10
+        hoverEnabled: true
+        focusPolicy: Qt.StrongFocus
+        Accessible.role: Accessible.Button
+        Accessible.name: text + (detail ? ". " + detail : "")
+        HoverHandler { cursorShape: Qt.PointingHandCursor }
+        Keys.onReturnPressed: clicked()
+        Keys.onEnterPressed: clicked()
+        background: Rectangle { radius: 8; color: row.hovered ? root.t.hover : "transparent"; border.width: row.visualFocus ? 2 : 0; border.color: root.t.focus }
+        contentItem: RowLayout {
+            spacing: 12
+            Icon { Layout.alignment: Qt.AlignTop; Layout.topMargin: 1; name: row.glyph; size: 20; color: row.hovered ? root.t.accent : root.t.muted }
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 2
+                Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: row.text; font.weight: Font.DemiBold }
+                Label { visible: row.detail !== ""; Layout.fillWidth: true; wrapMode: Text.Wrap; text: row.detail; color: root.t.muted; font.pointSize: root.smallSize }
+            }
+            Icon { name: "chev"; size: 16; color: root.t.muted }
+        }
     }
     // A place code that opens that place in History. A button of its own, so a click on it never
     // reaches the card it sits in.
@@ -2267,6 +2315,60 @@ Item {
     Timer { interval: 20000; running: root.inSite && root.approved && root.page !== "messages"; repeat: true; triggeredOnStart: true; onTriggered: root.poll("chat_threads", [], root.applyChat) }
 
     Rectangle { anchors.fill: parent; color: root.t.page }     // the page never shows the host's window colour
+    // Home's one authored moment: three soft lights drift behind the page, too slowly to watch. They sit under the content,
+    // fade out before the lower half (lists stay on a plain surface), and pause off Home or while the app is in the background.
+    Item {
+        id: backdrop
+        readonly property bool live: visible && Application.state === Qt.ApplicationActive
+        property color fade: root.t.page
+        visible: root.inSite && root.page === "home"
+        anchors.fill: parent; anchors.leftMargin: root.sidebarWidth
+        clip: true
+        Repeater {
+            // tint, diameter (share of the width), x from/to and y from/to (shares of width and height, top left), seconds per leg (x, y)
+            model: [[root.t.homeA, 0.62, -0.12, 0.22, -0.30, -0.05, 31, 24],
+                    [root.t.homeB, 0.55, 0.62, 0.38, -0.25, 0.02, 38, 27],
+                    [root.t.homeC, 0.70, 0.18, 0.50, -0.05, -0.32, 26, 40]]
+            delegate: Shape {
+                id: blob
+                required property var modelData
+                readonly property real d: backdrop.width * modelData[1]
+                property color tint: modelData[0]
+                property real u                  // 0..1 along each path, from 0
+                property real v
+                x: backdrop.width * (modelData[2] + (modelData[3] - modelData[2]) * u)
+                y: backdrop.height * (modelData[4] + (modelData[5] - modelData[4]) * v)
+                width: d; height: d
+                ShapePath {
+                    strokeColor: "transparent"
+                    fillGradient: RadialGradient {
+                        centerX: blob.d / 2; centerY: blob.d / 2; centerRadius: blob.d / 2; focalX: centerX; focalY: centerY
+                        GradientStop { position: 0; color: blob.tint }
+                        GradientStop { position: 0.45; color: Qt.rgba(blob.tint.r, blob.tint.g, blob.tint.b, blob.tint.a * 0.6) }
+                        GradientStop { position: 1; color: Qt.rgba(blob.tint.r, blob.tint.g, blob.tint.b, 0) }
+                    }
+                    PathSvg { path: root.circ(blob.d / 2, blob.d / 2, blob.d / 2) }
+                }
+                SequentialAnimation on u {
+                    loops: Animation.Infinite; paused: !backdrop.live
+                    NumberAnimation { to: 1; duration: blob.modelData[6] * 1000; easing.type: Easing.InOutSine }
+                    NumberAnimation { to: 0; duration: blob.modelData[6] * 1000; easing.type: Easing.InOutSine }
+                }
+                SequentialAnimation on v {
+                    loops: Animation.Infinite; paused: !backdrop.live
+                    NumberAnimation { to: 1; duration: blob.modelData[7] * 1000; easing.type: Easing.InOutSine }
+                    NumberAnimation { to: 0; duration: blob.modelData[7] * 1000; easing.type: Easing.InOutSine }
+                }
+            }
+        }
+        Rectangle {   // the fade: plain page from just past the middle down
+            anchors.fill: parent
+            gradient: Gradient {
+                GradientStop { position: 0.35; color: Qt.rgba(backdrop.fade.r, backdrop.fade.g, backdrop.fade.b, 0) }
+                GradientStop { position: 0.8; color: backdrop.fade }
+            }
+        }
+    }
 
     // ---------- sidebar: replaces the old header and tab bar ----------
     Rectangle {
@@ -2329,15 +2431,7 @@ Item {
                 Layout.fillWidth: true
                 spacing: 4
                 Repeater {
-                    model: [
-                        { label: "Board", icon: "board", page: "board" },
-                        { label: "Report", icon: "report", page: "report" },
-                        { label: "History", icon: "hist", page: "history" },
-                        { label: "People", icon: "members", page: "people", count: root.isAdmin ? root.pending.length : 0 },   // the admin's waiting count
-                        { label: "Messages", icon: "cmt", page: "messages", dot: root.chat.unread === true && root.page !== "messages" },
-                        { label: "Meetings", icon: "bell", page: "meet", count: root.meets.meetings.filter(function (m) { return m.status === "proposed" && m.my_answer === "pending" }).length },   // requests that wait for us
-                        { label: "Places", icon: "pin", page: "places" }
-                    ].filter(function (e) { return root.approved || ["report", "meet", "messages"].indexOf(e.page) < 0 })   // a pending key cannot report, meet or message
+                    model: root.sections
                     delegate: NavItem {
                         required property var modelData
                         text: modelData.label; glyph: modelData.icon
@@ -2638,7 +2732,7 @@ Item {
             visible: root.removed
             err: true
             text: root.removed ? "Your role was removed by " + root.who(root.me.revoked.by, root.me.revoked.by_name) + " on " + root.when(root.me.revoked.ts, "d MMM")
-                                 + ": " + root.me.revoked.reason + " You can still read the board, and your past reports stay. To take part again, ask the admin to grant you a role." : ""
+                                 + ": " + root.me.revoked.reason + " You can still read the Issue Tracker, and your past reports stay. To take part again, ask the admin to grant you a role." : ""
             buttonText: "Ask to join again"
             buttonEffect: "This sends a new request to the admin."
             onActivated: root.run("join_again", [])
@@ -2792,7 +2886,7 @@ Item {
                     title: "Service rules (optional)"
                     RuleField { id: ruleAck; label: "Acknowledge within (hours)"; text: "12"; hint: "After this, an unacknowledged report is flagged red." }
                     RuleField { id: ruleFix; label: "Fix within (hours, after acknowledging)"; text: "48"; hint: "After this, the issue shows as overdue." }
-                    RuleField { id: ruleMax; label: "Open reports per person (max)"; text: "10"; hint: "Stops one person flooding the board; more can be filed once some are resolved." }
+                    RuleField { id: ruleMax; label: "Open reports per person (max)"; text: "10"; hint: "Stops one person flooding the Issue Tracker; more can be filed once some are resolved." }
                 }
                 CollapsibleSection {
                     id: advanced
@@ -2910,6 +3004,200 @@ Item {
                 currentIndex: root.pages.indexOf(root.page)
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+
+                // Home (opens first): what Pukaar is for, said once, then this site in its own numbers: what is open, what
+                // waits for you, how a report moves here, and every page with one line on what it is for.
+                TabPage {
+                    id: homePage
+                    maxWidth: 880
+                    readonly property string site: root.info.name || "this site"
+                    // The four live stages (Closed is left out): open work, and fixes still in the Issue Tracker. Every issue
+                    // counts here, whatever "Only my reports" says.
+                    readonly property var stageWords: ({ reported: "reported", progress: "in progress", awaiting: "awaiting confirmation",
+                                                         resolved: "fixed in the last 14 days" })
+                    readonly property var tally: {
+                        var c = { reported: 0, progress: 0, awaiting: 0, resolved: 0 }
+                        root.issues.forEach(function (i) {
+                            var g = root.stageGroup[i.status]
+                            if (c[g] !== undefined && (g !== "resolved" || root.onBoard(i))) c[g]++
+                        })
+                        return c
+                    }
+                    readonly property var stages: Object.keys(stageWords).filter(function (g) { return homePage.tally[g] > 0 })
+                    readonly property int open: tally.reported + tally.progress + tally.awaiting
+                    readonly property string today: (open ? root.plural(open, "issue") + (open === 1 ? " is" : " are") + " open" : "No issue is open")
+                        + (tally.resolved ? ", " + tally.resolved + (tally.resolved === 1 ? " was" : " were") + " fixed in the last 14 days."
+                                          : ", and nothing was fixed in the last 14 days.")
+                    // What waits for this viewer, one row each, only when there is some (late issues: for the staff, who can act on them).
+                    // `mine` sets the Issue Tracker's switch.
+                    readonly property var needs: [
+                        { n: (root.chat.threads || []).filter(function (c) { return c.unread === true }).length, page: "messages", glyph: "cmt",
+                          to: "Messages", one: "chat with unread messages", many: "chats with unread messages" },
+                        { n: root.meetAsks, page: "meet", glyph: "bell", to: "Meetings",
+                          one: "meeting request waits for your answer", many: "meeting requests wait for your answer" },
+                        { n: !root.staff ? 0 : root.issues.filter(function (i) { return !root.isTerminal(i.status) && (i.ack_overdue || i.fix_overdue) }).length,
+                          page: "board", mine: false, glyph: "warn", to: "Issue Tracker", one: "issue is past its target time", many: "issues are past their target time" },
+                        { n: root.issues.filter(function (i) { return i.reporter === root.me.key && !root.isTerminal(i.status) }).length,
+                          page: "board", mine: true, glyph: "rep", to: "Issue Tracker", one: "of your reports is still open", many: "of your reports are still open" },
+                        { n: root.isAdmin ? root.pending.length : 0, page: "people", glyph: "members", to: "People",
+                          one: "person waits for approval", many: "people wait for approval" }
+                    ].filter(function (r) { return r.n > 0 })
+
+                    ColumnLayout {   // greeting, the site's name, what Pukaar is for, who you are here, the two ways in
+                        id: hero
+                        Layout.fillWidth: true; Layout.topMargin: 24
+                        spacing: 6
+                        opacity: 0
+                        transform: Translate { id: rise; y: 12 }
+                        // One entrance, the first time Home shows after the app opens. Nothing else on the page moves.
+                        readonly property bool live: root.inSite && root.page === "home"
+                        property bool entered: false
+                        function enter() { if (live && !entered) { entered = true; rising.start() } }
+                        onLiveChanged: enter()
+                        Component.onCompleted: enter()
+                        ParallelAnimation {
+                            id: rising
+                            NumberAnimation { target: hero; property: "opacity"; to: 1; duration: 450; easing.type: Easing.OutCubic }
+                            NumberAnimation { target: rise; property: "y"; to: 0; duration: 450; easing.type: Easing.OutCubic }
+                        }
+                        Label {
+                            readonly property int hour: new Date(root.now * 1000).getHours()
+                            Layout.fillWidth: true; wrapMode: Text.Wrap
+                            text: (hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening") + (root.me.name ? ", " + root.me.name : "") + "."
+                            color: root.t.muted; font.pointSize: root.baseSize * 15 / 14
+                        }
+                        Label {
+                            Layout.fillWidth: true; wrapMode: Text.Wrap
+                            text: root.info.name || "Waiting for site data…"
+                            font.pointSize: root.baseSize * 34 / 14; font.weight: Font.DemiBold
+                        }
+                        Label {
+                            Layout.fillWidth: true; Layout.topMargin: 4; wrapMode: Text.Wrap
+                            text: "Report what is broken, follow it until it is fixed, and keep the record honest."
+                            font.pointSize: root.baseSize * 16 / 14
+                        }
+                        Label {
+                            Layout.fillWidth: true; wrapMode: Text.Wrap; color: root.t.muted
+                            text: root.approved ? "You are " + (/^[AEIOU]/.test(root.roleName) ? "an " : "a ") + root.roleName.toLowerCase() + " here."
+                                : root.removed ? "Your role here was removed. You can still read the record."
+                                : root.awaitingApproval ? "Waiting for approval. Once an admin approves you, you can report, meet and send messages."
+                                : "You do not have a role here yet."
+                        }
+                        Flow {
+                            Layout.fillWidth: true; Layout.topMargin: 10
+                            spacing: 8
+                            FramedButton { visible: root.approved; kind: "primary"; text: "Report an issue"; onClicked: root.openPage("report") }
+                            FramedButton { text: "Open Issue Tracker"; onClicked: root.openPage("board") }
+                        }
+                    }
+
+                    Heading { Layout.topMargin: 36; text: "The site today" }
+                    Note { text: root.issues.length ? homePage.today : "No reports yet. When someone reports a fault, it shows here and in the Issue Tracker." }
+                    Item {   // one bar in the stage colours, as long as the counts are big; the legend under it says the numbers
+                        id: stageBar
+                        visible: homePage.stages.length > 0
+                        Layout.fillWidth: true; Layout.topMargin: 4
+                        implicitHeight: 10
+                        Accessible.ignored: true
+                        readonly property int total: homePage.open + homePage.tally.resolved
+                        Row {
+                            spacing: 2
+                            Repeater {
+                                model: homePage.stages
+                                delegate: Rectangle {
+                                    required property string modelData
+                                    width: (stageBar.width - 2 * (homePage.stages.length - 1)) * homePage.tally[modelData] / stageBar.total
+                                    height: 10; radius: 3; color: root.t[modelData].edge
+                                }
+                            }
+                        }
+                    }
+                    Flow {   // the legend: each count opens the Issue Tracker
+                        Layout.fillWidth: true; Layout.topMargin: 2
+                        spacing: 18
+                        Repeater {
+                            model: homePage.stages
+                            delegate: AbstractButton {
+                                id: key
+                                required property string modelData
+                                readonly property string words: homePage.tally[modelData] + " " + homePage.stageWords[modelData]
+                                padding: 2
+                                hoverEnabled: true
+                                focusPolicy: Qt.StrongFocus
+                                Accessible.role: Accessible.Link
+                                Accessible.name: words + ". Open the Issue Tracker"
+                                HoverHandler { cursorShape: Qt.PointingHandCursor }
+                                Keys.onReturnPressed: clicked()
+                                Keys.onEnterPressed: clicked()
+                                onClicked: { root.onlyMine = false; root.openPage("board") }
+                                contentItem: Row {
+                                    spacing: 6
+                                    Rectangle { anchors.verticalCenter: parent.verticalCenter; width: 8; height: 8; radius: 4; color: root.t[key.modelData].edge }
+                                    Label { text: key.words; color: key.hovered ? root.t.accent : root.t.fg; font.pointSize: root.smallSize }
+                                }
+                                background: Rectangle { radius: 4; color: "transparent"; border.width: key.visualFocus ? 2 : 0; border.color: root.t.focus }
+                            }
+                        }
+                    }
+
+                    Heading { Layout.topMargin: 28; text: "Needs you" }
+                    Note { visible: homePage.needs.length === 0; text: "Nothing waits for you."; color: root.t.muted }
+                    Repeater {
+                        model: homePage.needs
+                        delegate: HomeRow {
+                            required property var modelData
+                            glyph: modelData.glyph; detail: modelData.to
+                            text: modelData.n + " " + (modelData.n === 1 ? modelData.one : modelData.many)
+                            onClicked: { if (modelData.mine !== undefined) root.onlyMine = modelData.mine; root.openPage(modelData.page) }
+                        }
+                    }
+
+                    // The core's rule (logic/src/reducer.rs) in this site's own hours; a line shows only when the site has that value.
+                    Heading { Layout.topMargin: 28; text: "How reports move here" }
+                    Step { n: 1; title: "Someone reports a fault"; Help { text: "A member says what is broken, and where." } }
+                    Step {
+                        n: 2; title: "A steward acknowledges it"
+                        Help { visible: root.info.sla_ack_h !== undefined; text: "Within " + root.info.sla_ack_h + " h of the report." }
+                    }
+                    Step {
+                        n: 3; title: "A steward fixes it"
+                        Help { text: (root.info.sla_fix_h !== undefined ? "Within " + root.info.sla_fix_h + " h of the report, and says" : "And says") + " what was done." }
+                    }
+                    Step { n: 4; title: "The fix is confirmed"; Help { text: "The reporter confirms it, or two other residents do. Until then it stays open." } }
+                    Help {
+                        visible: root.info.max_open_per_author !== undefined; Layout.topMargin: 8
+                        text: "Each person can have " + root.info.max_open_per_author + " open reports at a time."
+                    }
+
+                    Heading { Layout.topMargin: 28; Layout.fillWidth: true; wrapMode: Text.Wrap; text: "Everything in " + homePage.site }
+                    GridLayout {
+                        Layout.fillWidth: true
+                        columns: root.compactRows ? 1 : 2; columnSpacing: 16; rowSpacing: 0
+                        Repeater {
+                            model: root.sections.filter(function (e) { return e.page !== "home" })
+                            delegate: HomeRow {
+                                required property var modelData
+                                Layout.preferredWidth: 1   // two equal columns
+                                glyph: modelData.icon; text: modelData.label; detail: modelData.about
+                                onClicked: root.openPage(modelData.page)
+                            }
+                        }
+                    }
+
+                    Rectangle { Layout.fillWidth: true; Layout.topMargin: 32; implicitHeight: 1; color: root.t.bd }
+                    Help { visible: root.categories.length > 0; text: "Kinds of fault reported here: " + root.andList(root.categories) + "." }
+                    RowLayout {   // the record's state in words, and the page that explains it
+                        Layout.fillWidth: true; Layout.bottomMargin: 24
+                        spacing: 12
+                        Help {
+                            color: root.anchorState === "mismatch" ? root.t.danger : root.t.muted
+                            text: root.anchorState === "mismatch" ? "The record does not match its last anchor."
+                                : root.lastAnchor ? "The record was last anchored " + root.age(root.lastAnchor.ts) + "."
+                                : "The record has not been anchored yet."
+                        }
+                        LinkButton { text: "Integrity  ›"; Accessible.name: "Open Integrity"; onClicked: root.openPage("proof") }
+                    }
+                }
 
                 // Board (the brief's three stages); finished issues by the view rule above
                 ColumnLayout {
@@ -3069,7 +3357,7 @@ Item {
                     readonly property string missing: reportText.text.trim() === "" ? "Describe the problem in one line."
                         : pick === "" ? "Pick where it is."
                         : pick === "other" && landmark.text.trim() === "" ? "Describe the place." : ""
-                    PageHead { title: "What's wrong?"; lede: "A line or two is enough. A steward will see it on the board." }
+                    PageHead { title: "What's wrong?"; lede: "A line or two is enough. A steward will see it in the Issue Tracker." }
                     FormRow {
                         label: "Category"
                         FramedCombo { id: category; Accessible.name: "What is wrong (category)"; model: root.categories; Layout.fillWidth: true; Layout.maximumWidth: 372 }
@@ -3954,7 +4242,7 @@ Item {
                         visible: root.approved
                         spacing: 12
                         Label { text: profilePage.mineOpen + " open · " + (profilePage.myReports.length - profilePage.mineOpen) + " closed" }
-                        LinkButton { text: "Show on the Board  ›"; onClicked: { root.onlyMine = true; root.openPage("board") } }
+                        LinkButton { text: "Show in the Issue Tracker  ›"; onClicked: { root.onlyMine = true; root.openPage("board") } }
                     }
                     Heading { text: "Leave this site" }
                     Help { text: "Removes this device's copy of the site. Your key stays." }
@@ -4007,7 +4295,7 @@ Item {
                     // "Resolved 4 Oct · Confirmed: works (Asha) · reported by you · still on the board" (for screen readers)
                     function meta(i) {
                         return root.closedVerb(i) + " " + root.when(root.closedAt(i), "d MMM") + (closingNote(i) ? " · " + closingNote(i) : "")
-                             + (i.reporter === root.me.key ? " · reported by you" : "") + (root.onBoard(i) ? " · still on the board" : "")
+                             + (i.reporter === root.me.key ? " · reported by you" : "") + (root.onBoard(i) ? " · still in the Issue Tracker" : "")
                     }
                     // the place view: "14 fixed, 2 reopened, 1 won't fix, 2 duplicates since 22 May. Open now: 1, on the board."
                     readonly property string placeSummary: {
@@ -4019,13 +4307,13 @@ Item {
                         if (n("Duplicate")) parts.push(root.plural(n("Duplicate"), "duplicate"))
                         var open = count(at, function (i) { return !root.isTerminal(i.status) })
                         return parts.join(", ") + (at.length ? " since " + root.when(Math.min.apply(null, at.map(function (i) { return i.reported_ts })), "d MMM") : "")
-                             + ". Open now: " + open + (open ? ", on the board." : ".")
+                             + ". Open now: " + open + (open ? ", in the Issue Tracker." : ".")
                     }
                     IntegrityStrip {}
                     PageHead {
                         title: "History"
                         lede: hist.place ? "Everything reported at one place. <b>Nothing is deleted.</b>"
-                            : "Every resolved and closed issue, " + (hist.oldestFirst ? "oldest" : "newest") + " first. The board shows resolved issues for 14 days and closed ones for 30; "
+                            : "Every resolved and closed issue, " + (hist.oldestFirst ? "oldest" : "newest") + " first. The Issue Tracker shows resolved issues for 14 days and closed ones for 30; "
                               + "after that they are only here. <b>Nothing is deleted</b>, and any of them can be reopened."
                     }
                     RowLayout {
@@ -5020,10 +5308,10 @@ Item {
                     root.run("act", [i.id, "reopen", reopenReason.text, "", 0], function () {
                         reopenReason.text = ""
                         if (i.reporter !== root.me.key) {
-                            root.notice = "Your reopen of " + code + " is recorded. It goes back on the board once a second resident, or the reporter, reopens it too."
+                            root.notice = "Your reopen of " + code + " is recorded. It goes back to the Issue Tracker once a second resident, or the reporter, reopens it too."
                             return
                         }
-                        root.notice = code + " is back on the board, in Reported. It carries its whole history and shows Reopened " + (i.reopen_count + 1) + "×."
+                        root.notice = code + " is back in the Issue Tracker, in Reported. It carries its whole history and shows Reopened " + (i.reopen_count + 1) + "×."
                         root.openPage("board")
                     })
                 }
@@ -5036,7 +5324,7 @@ Item {
                         Item { visible: !root.narrow; Layout.fillWidth: true }
                         FramedButton {   // wide: an icon-only ×; narrow: back to the page underneath ("Close" reads like an outcome)
                             id: paneBack
-                            readonly property string pageName: root.page === "history" ? "History" : "Board"
+                            readonly property string pageName: root.page === "history" ? "History" : "Issue Tracker"
                             text: root.narrow ? "Back" : ""; iconName: root.narrow ? "chevl" : "x"
                             Accessible.name: root.narrow ? "Back to " + pageName : "Close panel"
                             onClicked: root.closeIssue()
@@ -5251,7 +5539,7 @@ Item {
                             id: naCol
                             x: 12; y: 10; width: parent.width - 24
                             spacing: 2
-                            Label { visible: detail.finished; width: naCol.width; wrapMode: Text.Wrap; text: "A comment does not bring it back to the board."; font.pointSize: root.smallSize; font.weight: Font.DemiBold }
+                            Label { visible: detail.finished; width: naCol.width; wrapMode: Text.Wrap; text: "A comment does not bring it back to the Issue Tracker."; font.pointSize: root.smallSize; font.weight: Font.DemiBold }
                             Label {
                                 visible: detail.finished; width: naCol.width; wrapMode: Text.Wrap; bottomPadding: na.lines.length > 0 ? 6 : 0
                                 text: "It is added to the record, and the issue stays where it is. To bring it back, reopen it."; font.pointSize: root.smallSize; color: root.t.muted
