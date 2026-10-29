@@ -391,6 +391,7 @@ fn status_has_the_shape_of_chain_status() {
     }
     assert_eq!((w0["kind"].as_str(), w0["state"].as_str()), (Some("set_role"), Some("waiting")));
     assert_eq!(w0["accounts"], serde_json::json!([crate::chain::b58(&acct(2))]), "the row of the member is found by its account");
+    assert_eq!(w0["changes"], serde_json::json!([{ "account": crate::chain::b58(&acct(2)), "what": "Role changed to Steward" }]), "Send changes can list what goes out");
     let _ = PROGRAM;
     // The balance of our account comes from the cached read (null before the first one), in lepta.
     assert_eq!(s["balance_lepta"].as_u64(), Some(100_000_000));

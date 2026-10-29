@@ -398,6 +398,17 @@ Item {
     readonly property int waitingCount: (chain.waiting || 0) + (chain.refresh_waiting || 0)
     // A batch is on its way: some of its writes have left the waiting state and are not done.
     readonly property bool batchBusy: writes.some(function (w) { return batchKinds.indexOf(w.kind) >= 0 && liveStates.indexOf(w.state) >= 0 && w.state !== "waiting" })
+    // What Send changes will send, one row each: {account, what}. The held writes, then the profile refreshes that wait.
+    readonly property var waitingChanges: {
+        var out = []
+        writes.forEach(function (w) { if (w.state === "waiting") (w.changes || []).forEach(function (c) { out.push(c) }) })
+        return out.concat(chain.refresh_changes || [])
+    }
+    // The name of a member, a joiner or a removed member by account (base58).
+    function nameOfAccount(a) {
+        var m = members.concat(pending, revoked).filter(function (x) { return x.account === a })[0]
+        return m ? who(m.key, m.name) : String(a).substr(0, 8) + "…"
+    }
     // The newest write about this member (base58 account), or null.
     function writeFor(account) {
         var l = writes.filter(function (w) { return !!account && (w.accounts || []).indexOf(account) >= 0 })
@@ -3152,22 +3163,53 @@ Item {
                         id: batchBar
                         visible: root.isAdmin && (root.waitingCount > 0 || root.batchBusy)
                         Layout.fillWidth: true
-                        implicitHeight: batchRow.implicitHeight + 24
+                        property bool showChanges: false
+                        implicitHeight: batchCol.implicitHeight + 24
                         radius: 8; color: root.t.accentBg; border.color: root.t.accentBd
-                        RowLayout {
-                            id: batchRow
+                        ColumnLayout {
+                            id: batchCol
                             anchors { fill: parent; margins: 12 }
-                            spacing: 12
-                            Label {
-                                Layout.fillWidth: true; wrapMode: Text.Wrap
-                                text: root.batchBusy ? "A batch is on its way to the chain. This takes a minute or two."
-                                    : root.plural(root.waitingCount, "change") + (root.waitingCount === 1 ? " waits" : " wait") + " to be sent. Each shows as pending until you send it."
+                            spacing: 8
+                            RowLayout {
+                                id: batchRow
+                                Layout.fillWidth: true
+                                spacing: 12
+                                ColumnLayout {
+                                    Layout.fillWidth: true; spacing: 2
+                                    Label {
+                                        Layout.fillWidth: true; wrapMode: Text.Wrap
+                                        text: root.batchBusy ? "A batch is on its way to the chain. This takes a minute or two."
+                                            : root.plural(root.waitingCount, "change") + (root.waitingCount === 1 ? " waits" : " wait") + " to be sent. Each shows as pending until you send it."
+                                    }
+                                    LinkButton {
+                                        visible: root.waitingChanges.length > 0
+                                        text: batchBar.showChanges ? "Hide the changes" : "Show the changes"
+                                        Accessible.name: batchBar.showChanges ? "Hide the changes that wait to be sent" : "Show the changes that wait to be sent"
+                                        onClicked: batchBar.showChanges = !batchBar.showChanges
+                                    }
+                                }
+                                ActionButton {
+                                    kind: "primary"
+                                    text: root.batchBusy ? "Sending…" : "Send " + root.plural(root.waitingCount, "change")
+                                    allowed: root.waitingCount > 0 && !root.batchBusy
+                                    onClicked: root.run("send_batch", [])
+                                }
                             }
-                            ActionButton {
-                                kind: "primary"
-                                text: root.batchBusy ? "Sending…" : "Send " + root.plural(root.waitingCount, "change")
-                                allowed: root.waitingCount > 0 && !root.batchBusy
-                                onClicked: root.run("send_batch", [])
+                            ColumnLayout {   // what goes out, and who signs it: every held change is yours, made on this device
+                                visible: batchBar.showChanges && root.waitingChanges.length > 0
+                                Layout.fillWidth: true; spacing: 4
+                                Label {
+                                    Layout.fillWidth: true; wrapMode: Text.Wrap; font.pointSize: root.smallSize; color: root.t.muted
+                                    text: "Sent by you" + (root.me.name ? ", " + root.me.name : "") + ", " + root.roleName + ". You sign them all when you press Send."
+                                }
+                                Repeater {
+                                    model: root.waitingChanges
+                                    delegate: Label {
+                                        required property var modelData
+                                        Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText; color: root.t.fg
+                                        text: root.nameOfAccount(modelData.account) + ": " + modelData.what
+                                    }
+                                }
                             }
                         }
                     }

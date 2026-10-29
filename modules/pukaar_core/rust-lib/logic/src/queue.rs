@@ -208,6 +208,25 @@ impl Intent {
         }
     }
 
+    /// What the write changes, one row for each member: `(account in base58, what in words)`. For the Send changes list.
+    fn changes(&self) -> Vec<(String, String)> {
+        use Intent::*;
+        let role = |c: u8| format!("{:?}", writes::role_from_code(c));
+        match self {
+            Approve { items, .. } => items
+                .iter()
+                .filter_map(|i| Some((crate::chain::b58(&body_of(&i.request)?.user_account), format!("Approved as {}", role(i.role)))))
+                .collect(),
+            SetRole { items } => items.iter().map(|(u, r)| (crate::chain::b58(u), format!("Role changed to {}", role(*r)))).collect(),
+            Revoke { items } => items
+                .iter()
+                .map(|i| (crate::chain::b58(&i.user), if i.reason.is_empty() { "Removed from the site".into() } else { format!("Removed: {}", i.reason) }))
+                .collect(),
+            SetProfile { items } => items.iter().map(|i| (crate::chain::b58(&i.user), "Profile refreshed".into())).collect(),
+            _ => vec![],
+        }
+    }
+
     /// The accounts whose Member record the chain read must include.
     fn users(&self) -> Vec<AccountId> {
         use Intent::*;
@@ -614,6 +633,8 @@ impl Queue {
                     "waited_s": (e.state == St::Preparing).then(|| now_ms.saturating_sub(e.since_ms) / 1000),
                     // The members that the write is about (base58), so the UI can mark their rows.
                     "accounts": e.intent.users().iter().map(crate::chain::b58).collect::<Vec<_>>(),
+                    // What the write does for each of them, for the Send changes list.
+                    "changes": e.intent.changes().into_iter().map(|(account, what)| serde_json::json!({ "account": account, "what": what })).collect::<Vec<_>>(),
                 })
             })
             .collect();

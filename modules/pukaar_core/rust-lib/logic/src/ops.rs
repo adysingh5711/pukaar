@@ -562,7 +562,10 @@ pub fn remember_known(node: &Node, q: &Queue) {
 /// `chain_status`. `reason` is plain text, not an error: why we hold no site key, or null.
 pub fn status(node: &Node, q: &Queue, now_ms: u64) -> Value {
     let mut v = q.status_json(&node.store.site, now_ms);
-    v["refresh_waiting"] = refresh_items(node, q).len().into();
+    let refresh = refresh_items(node, q);
+    v["refresh_waiting"] = refresh.len().into();
+    // The profile refreshes that wait: they are no queue entries yet, so they are listed here.
+    v["refresh_changes"] = refresh.iter().map(|i| json!({ "account": b58(&i.user), "what": "Profile refreshed" })).collect::<Vec<_>>().into();
     // The native balance of our account (lepta, null until the first read) and the two limits of the guard.
     v["balance_lepta"] = node.chain.as_ref().and_then(|c| c.lock().unwrap().balance).map(|b| b as u64).into();
     v["floor_lepta"] = (rpc::FLOOR_LEPTA as u64).into();
