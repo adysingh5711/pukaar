@@ -1,0 +1,20 @@
+# Pukaar
+
+> Pukaar is a community issue tracker where residents confirm the fix. It is a Logos Basecamp app for a shared site such as a camp, a building or a neighborhood. A steward claims a fix, and the reporter or two other residents confirm it. Nothing is deleted, and there is no server to run. Private chat and meetings for up to eight people are built in.
+
+Current version: 0.4.2. It needs Logos Basecamp 0.3.1 or higher on a Mac with Apple silicon or on 64-bit Linux. Intel Macs and Windows are not supported. A site pays nothing to run it today. License: MIT or Apache-2.0.
+
+## Install
+
+- [Install page](https://pukaar-logos.vercel.app/): two ways to install, with screenshots, and answers to common questions
+- [Install and run](https://github.com/adysingh5711/pukaar/blob/main/docs/install-and-run.md): full steps, network notes, profiles, upgrade and cost
+- [Release v0.4.2](https://github.com/adysingh5711/pukaar/releases/tag/v0.4.2): the package files and checksums
+
+## Docs
+
+- [README](https://github.com/adysingh5711/pukaar#readme): overview, roles and screenshots
+- [Features and roles](https://github.com/adysingh5711/pukaar/blob/main/docs/features.md): every feature, every role, chat and meetings
+- [How it works](https://github.com/adysingh5711/pukaar/blob/main/docs/how-it-works.md): events, sync, checkpoints and the chain registry
+- [Security](https://github.com/adysingh5711/pukaar/blob/main/docs/security.md): threat model and how to check a signature or an anchor
+- [Screenshots](https://github.com/adysingh5711/pukaar/blob/main/docs/screenshots.md): what each screen shows
+- [Roadmap](https://github.com/adysingh5711/pukaar/blob/main/docs/roadmap.md): what shipped and what comes next
