@@ -4473,6 +4473,7 @@ Item {
                             AccountBox {}
                         }
                         SetSection {
+                            objectName: "identityBackup"
                             title: "Back up this identity"
                             help: "Your identity is a key on this device. A backup lets you continue as the same person after a reinstall."
                             Flash {
@@ -4648,7 +4649,7 @@ Item {
                             spacing: 12
                             FormRow {
                                 label: "Search"; compact: true
-                                FramedField { id: search; Layout.fillWidth: true; placeholderText: "e.g. tap, नल, or a place code"; Accessible.name: "Search History" }
+                                FramedField { id: search; Layout.fillWidth: true; placeholderText: "e.g. tap, drain, or a place code"; Accessible.name: "Search History" }
                             }
                             FormRow {
                                 label: "Place"; compact: true
@@ -5123,6 +5124,7 @@ Item {
                                 Flash { visible: meetPage.leadError !== ""; err: true; text: meetPage.leadError }
                             }
                             CollapsibleSection {   // closed until the member opens it
+                                objectName: "meetBackup"
                                 title: "Backup settings"
                                 panel: true; pad: 20
                         aside: meetPage.backup.job ? "working…" : meetPage.backup.error ? "needs attention" : ""
@@ -5231,10 +5233,11 @@ Item {
                                         required property int index
                                         readonly property var meta: root.socialMeta(modelData[0])
                                         readonly property bool selected: memberPage.linkIndex === index
-                                        width: selected ? linkFlow.width : linkChip.implicitWidth
+                                        width: selected ? linkFlow.width : Math.min(linkChip.implicitWidth, linkFlow.width)
                                         spacing: 6
                                         FramedButton {
                                             id: linkChip
+                                            Layout.maximumWidth: linkFlow.width   // a long link wraps inside the card, not past its edge
                                             kind: "ghost"
                                             text: linkCell.meta.title + " · " + linkCell.modelData[1]
                                             iconName: linkCell.meta.icon; iconFilled: linkCell.meta.filled
@@ -5547,7 +5550,7 @@ Item {
                                             Layout.fillWidth: true; spacing: 10
                                             Label {   // in a chat with a person, the name opens their profile
                                                 id: chatTitle
-                                                Layout.fillWidth: true; Layout.maximumWidth: implicitWidth
+                                                Layout.fillWidth: true; Layout.maximumWidth: Math.ceil(implicitWidth)   // ceil: a fractional width rounded down elided the last letter
                                                 elide: Text.ElideRight; textFormat: Text.PlainText; font.weight: Font.DemiBold; font.pointSize: root.sizes.title; text: chatPage.currentName
                                                 color: !root.chatGroup && titleHover.hovered ? root.t.accent : root.t.fg
                                                 font.underline: !root.chatGroup && titleHover.hovered
