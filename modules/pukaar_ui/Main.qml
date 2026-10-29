@@ -1029,6 +1029,19 @@ Item {
 
     // One issue card on the board.
     component IssueCard: ItemDelegate {
+    // An icon with no label (copy, close). `Accessible.name` is what a screen reader says, so always set it.
+    component IconLink: AbstractButton {
+        id: ib
+        property string iconName
+        padding: 4
+        hoverEnabled: true
+        focusPolicy: Qt.StrongFocus
+        HoverHandler { cursorShape: Qt.PointingHandCursor }
+        Keys.onReturnPressed: clicked()
+        Keys.onEnterPressed: clicked()
+        contentItem: Icon { name: ib.iconName; size: 16; color: ib.hovered || ib.down ? root.t.fg : root.t.muted }
+        background: Rectangle { radius: 4; color: ib.hovered ? root.t.hover : "transparent"; border.width: ib.visualFocus ? 2 : 0; border.color: root.t.focus }
+    }
         id: card
         required property var issue
         property string placeText: root.place(issue)
@@ -1670,8 +1683,8 @@ Item {
         Timer { running: gate.shown && gate.expire > 0; interval: gate.expire; onTriggered: gate.spent = true }
     }
 
-    // `when`, `delay` and `expire` are Settled's. `log` keeps what it said in the Notifications panel. A caller that
-    // sets `visible` itself skips all of this.
+    // `when`, `delay` and `expire` are Settled's. `log` keeps what it said in the Notifications panel and, unless
+    // `inline` is set, shows it there only, not on the page. A caller that sets `visible` itself skips all of this.
     component Flash: Rectangle {
         id: flash
         property bool when: true
@@ -1680,7 +1693,7 @@ Item {
         property bool log: false
         readonly property string said: (lead ? lead + " " : "") + text
         function keep() { if (log && gate.shown) root.addNotice(said, tone) }
-        visible: gate.shown
+        visible: gate.shown && inline
         onShownChanged: keep()
         onSaidChanged: keep()
         readonly property bool shown: gate.shown
@@ -1689,6 +1702,7 @@ Item {
         property string lead               // a bold red first sentence
         property bool err: false
         property string tone: err ? "err" : "info"
+        property bool inline: !log         // false: the banner lives in the Notifications panel only
         readonly property var ink: ({ info: [root.t.accentBg, root.t.accentBd, root.t.accent], err: [root.t.dangerBg, root.t.dangerBd, root.t.danger],
                                       warn: [root.t.warnBg, root.t.warnBd, root.t.warn], plain: [root.t.well, root.t.bd, root.t.muted] })[tone]
         property bool bold: false          // the whole text bold (red in an error)
@@ -1713,7 +1727,7 @@ Item {
                 font.bold: flash.bold; color: flash.err && flash.bold ? root.t.danger : root.t.fg
                 text: (flash.lead ? "<b><font color='" + flash.ink[2] + "'>" + root.esc(flash.lead) + "</font></b> " : "") + root.esc(flash.text)
             }
-            LinkButton { Layout.alignment: Qt.AlignTop; text: "Copy"; Accessible.name: "Copy this message"; onClicked: root.copyText(flash.said) }
+            IconLink { Layout.alignment: Qt.AlignTop; iconName: "copy"; Accessible.name: "Copy this message"; onClicked: root.copyText(flash.said) }
             ConfirmButton {
                 visible: flash.buttonText !== "" || flash.buttonIcon !== ""
                 Layout.alignment: Qt.AlignTop
@@ -2450,7 +2464,7 @@ Item {
                 spacing: 12
                 Label { Layout.fillWidth: true; text: "Notifications"; font.weight: Font.DemiBold; font.pointSize: root.baseSize * 16 / 14; color: root.t.fg }
                 LinkButton { visible: root.inbox.length > 0; text: "Clear all"; onClicked: root.inbox = [] }
-                LinkButton { text: "Close"; onClicked: root.inboxOpen = false }
+                IconLink { iconName: "x"; Accessible.name: "Close the notifications"; onClicked: root.inboxOpen = false }
             }
             Help { when: root.inbox.length === 0; text: "Nothing here. Notices that go away by themselves are kept here." }
             ListView {
@@ -2471,10 +2485,10 @@ Item {
                         Label { text: root.when(item.modelData.ms / 1000, "HH:mm"); color: root.t.muted; font.pointSize: root.smallSize }
                         Note { text: item.modelData.text; color: root.t.fg }
                     }
-                    LinkButton { Layout.alignment: Qt.AlignTop; text: "Copy"; Accessible.name: "Copy this notice"; onClicked: root.copyText(item.modelData.text) }
-                    LinkButton {
+                    IconLink { Layout.alignment: Qt.AlignTop; iconName: "copy"; Accessible.name: "Copy this notice"; onClicked: root.copyText(item.modelData.text) }
+                    IconLink {
                         Layout.alignment: Qt.AlignTop
-                        text: "Dismiss"; Accessible.name: "Dismiss this notice"
+                        iconName: "x"; Accessible.name: "Dismiss this notice"
                         onClicked: root.inbox = root.inbox.filter(function (n, i) { return i !== item.index })
                     }
                 }
@@ -2520,7 +2534,7 @@ Item {
             onActivated: root.notice = ""
         }
         Flash {   // forks: someone signed two versions of their log (the threat model says: flag it)
-            when: root.inSite && root.info.forks > 0; log: true
+            when: root.inSite && root.info.forks > 0; log: true; inline: true     // a threat flag: it stays on the page too
             err: true; bold: true; icon: "shield"
             text: "Integrity warning: " + root.info.forks + " conflicting history pair(s) found. Someone signed two versions of their log, so devices may show different boards."
         }
@@ -2595,6 +2609,7 @@ Item {
                                : "Status: " + root.stateText[modelData.state] + "."
                 buttonText: site && rejected ? "Start again" : ""
                 buttonIcon: site && rejected ? "" : "x"; buttonName: site && rejected ? "Start again" : "Close this message"
+                inline: site && rejected                    // "Start again" has no button in the panel
                 onActivated: site && rejected ? root.leave() : root.dismiss(modelData.id)
             }
         }
@@ -4301,7 +4316,7 @@ Item {
                                 current: [30, 60, 90].indexOf(meetPage.lenMin)
                                 onPicked: function (i) { meetPage.setLen([30, 60, 90][i]) }
                             }
-                            LinkButton { text: "Close"; onClicked: root.meetGuests = [] }
+                            IconLink { iconName: "x"; Accessible.name: "Close the guest list"; onClicked: root.meetGuests = [] }
                         }
                         RowLayout {
                             spacing: 8
