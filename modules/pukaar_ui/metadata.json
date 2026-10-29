@@ -1,7 +1,7 @@
 {
   "name": "pukaar_ui",
   "display_name": "Pukaar",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "type": "ui_qml",
   "category": "civic",
   "description": "Issue tracker, private chat and meetings for your site",
