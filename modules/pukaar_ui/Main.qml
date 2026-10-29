@@ -1106,13 +1106,29 @@ Item {
             Behavior on color { EasedColor {} }
         }
     }
-    // A Home row that opens a page: an icon, a bold line, a muted line under it and a chevron. The whole row is one button.
+    // Harbor's .lane-ic: a rounded tile with an icon, tinted by `tint` (a wash over the panel colour).
+    component IconTile: Rectangle {
+        id: tile
+        property string glyph
+        property color tint: root.t.accent
+        property int size: 34
+        property real strength: 0.16
+        implicitWidth: size; implicitHeight: size; radius: root.radii.ctl
+        color: root.wash(tint, root.t.well, strength)
+        Icon { anchors.centerIn: parent; name: tile.glyph; size: tile.size < 32 ? 16 : 18; color: tile.tint }
+    }
+    // A Home row that opens a page (the whole row is one button). `flat` is Harbor's .nrow: one 56 px line, the target page
+    // muted on the right with a chevron. Otherwise Harbor's `.all a`: icon tile, a bold line and a muted line under it.
     component HomeRow: AbstractButton {
         id: row
         property string glyph
         property string detail
+        property color tint: root.t.accent
+        property bool flat: false
         Layout.fillWidth: true
-        padding: 10
+        Layout.leftMargin: -12; Layout.rightMargin: -12
+        implicitHeight: flat ? 56 : implicitContentHeight + topPadding + bottomPadding
+        padding: 12
         hoverEnabled: true
         focusPolicy: Qt.StrongFocus
         Accessible.role: Accessible.Button
@@ -1120,17 +1136,22 @@ Item {
         HoverHandler { cursorShape: Qt.PointingHandCursor }
         Keys.onReturnPressed: clicked()
         Keys.onEnterPressed: clicked()
-        background: Rectangle { radius: 8; color: row.hovered ? root.t.hover : "transparent"; border.width: row.visualFocus ? 2 : 0; border.color: root.t.focus }
+        background: Rectangle {
+            radius: root.radii.card; color: row.hovered ? root.t.card : "transparent"
+            border.width: row.visualFocus ? 2 : 0; border.color: root.t.focus
+            Behavior on color { EasedColor {} }
+        }
         contentItem: RowLayout {
-            spacing: 12
-            Icon { Layout.alignment: Qt.AlignTop; Layout.topMargin: 1; name: row.glyph; size: 20; color: row.hovered ? root.t.accent : root.t.muted }
+            spacing: 14
+            IconTile { Layout.alignment: row.flat ? Qt.AlignVCenter : Qt.AlignTop; glyph: row.glyph; tint: row.tint; strength: row.flat ? 0.16 : 0.12 }
             ColumnLayout {
-                Layout.fillWidth: true
-                spacing: 2
-                Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: row.text; font.weight: Font.DemiBold }
-                Label { visible: row.detail !== ""; Layout.fillWidth: true; wrapMode: Text.Wrap; text: row.detail; color: root.t.muted; font.pointSize: root.smallSize }
+                Layout.fillWidth: true; Layout.alignment: Qt.AlignVCenter
+                spacing: 1
+                Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: row.text; font.weight: row.flat ? Font.Medium : Font.DemiBold; font.pointSize: row.flat ? root.sizes.lead : root.sizes.body }
+                Label { visible: !row.flat && row.detail !== ""; Layout.fillWidth: true; wrapMode: Text.Wrap; text: row.detail; color: root.t.muted; font.pointSize: root.sizes.small }
             }
-            Icon { name: "chev"; size: 16; color: root.t.muted }
+            Label { visible: row.flat && row.detail !== ""; text: row.detail; color: root.t.muted; font.pointSize: root.sizes.small }
+            Icon { visible: row.flat; name: "chev"; size: 16; color: root.t.muted }
         }
     }
     // A place code that opens that place in History. A button of its own, so a click on it never
@@ -1282,7 +1303,7 @@ Item {
         width: ListView.view.width
         topPadding: 9; bottomPadding: 9; leftPadding: 16; rightPadding: 16
         background: Rectangle {
-            color: row.current ? root.t.accentBg : row.hovered ? root.t.hover : row.issue.location_retired ? root.t.well : root.t.card
+            color: row.current ? root.t.accentBg : row.hovered ? root.t.card : root.t.well
             border.width: row.visualFocus ? 2 : 0; border.color: root.t.focus
             Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: root.t.bd }
             Rectangle { visible: row.current; width: 5; height: parent.height; color: row.stage.edge }
@@ -1574,6 +1595,7 @@ Item {
         id: page
         property int maxWidth: 760
         default property alias content: column.data
+        property alias gap: column.spacing
         contentWidth: availableWidth
         clip: true
         ColumnLayout { id: column; x: (page.availableWidth - width) / 2; width: Math.min(page.availableWidth, page.maxWidth); spacing: 8 }
@@ -1735,6 +1757,8 @@ Item {
         font.weight: Font.DemiBold
         font.pointSize: root.sizes.h3
     }
+    // Harbor's .hsec h2: a Home section's title (20 px) with the section gap above it.
+    component HomeHead: Heading { Layout.topMargin: 36; font.pointSize: root.sizes.h2 }
 
     // A box the reader opens on demand: a 52 px header (chevron, title, a muted aside such as a count)
     // that is one button (Space or Enter toggles it), then a bordered body. `inner` is the flat version
@@ -1980,12 +2004,13 @@ Item {
         }
     }
 
-    // Home's "how it works" strip: four numbered cards, two per row when the content is under 700 px.
+    // The first-run "how it works" strip: four numbered cards (s2, no outline), two per row when the content is under 700 px.
     component HowItWorks: GridLayout {
         columns: root.width - root.sidebarWidth < 700 ? 2 : 4
-        columnSpacing: 10; rowSpacing: 10
+        columnSpacing: root.gaps.gutter; rowSpacing: root.gaps.gutter
         Layout.fillWidth: true
-        Layout.bottomMargin: 12
+        Layout.bottomMargin: 4
+        uniformCellWidths: true
         Accessible.name: "How it works"
         Repeater {
             model: [
@@ -1997,45 +2022,51 @@ Item {
             delegate: Rectangle {
                 id: step
                 required property var modelData
-                Layout.fillWidth: true; Layout.fillHeight: true; Layout.preferredWidth: 1
-                implicitHeight: stepCol.implicitHeight + 26
-                radius: 8; color: root.t.card; border.color: root.t.bd
+                Layout.fillWidth: true; Layout.fillHeight: true
+                implicitHeight: stepCol.implicitHeight + 2 * root.gaps.pad
+                radius: root.radii.card; color: root.t.card
                 ColumnLayout {
                     id: stepCol
-                    anchors { fill: parent; margins: 13 }
+                    anchors { fill: parent; margins: root.gaps.pad }
                     spacing: 2
                     Rectangle {
-                        Layout.bottomMargin: 4
-                        implicitWidth: 26; implicitHeight: 26; radius: 13; color: root.t.accentBg; border.color: root.t.accentBd
-                        Label { anchors.centerIn: parent; text: step.modelData.n; color: root.t.accent; font.pointSize: root.smallSize; font.bold: true }
+                        Layout.bottomMargin: 6
+                        implicitWidth: 28; implicitHeight: 28; radius: 14; color: root.t.accentBg
+                        Label { anchors.centerIn: parent; text: step.modelData.n; color: root.t.accent; font.pointSize: root.sizes.small; font.weight: Font.DemiBold }
                     }
-                    Label { Layout.fillWidth: true; text: step.modelData.title; wrapMode: Text.Wrap; font.pointSize: root.baseSize * 15 / 14; font.weight: Font.DemiBold }
-                    Label { Layout.fillWidth: true; text: step.modelData.text; wrapMode: Text.Wrap; color: root.t.muted; font.pointSize: root.smallSize }
+                    Label { Layout.fillWidth: true; text: step.modelData.title; wrapMode: Text.Wrap; font.pointSize: root.sizes.lead; font.weight: Font.DemiBold }
+                    Label { Layout.fillWidth: true; text: step.modelData.text; wrapMode: Text.Wrap; color: root.t.muted; font.pointSize: root.sizes.small }
                     Item { Layout.fillHeight: true }
                 }
             }
         }
     }
 
-    // One numbered step of the Anchor page: a round number, a title, then the step's own content.
-    component Step: RowLayout {
+    // One numbered step (Harbor's .flow li and .stp): a round number on s3, a title, then the step's own content. `across` puts
+    // the number above the text, for a row of steps (Home); `last` (with `across`) ends the hairline that joins one number to the next.
+    component Step: GridLayout {
         id: step
         property int n
         property string title
+        property bool across: false
+        property bool last: false
+        readonly property bool joined: across && !last && (!root.compactRows || n % 2 === 1)
         default property alias content: stepBody.data
         Layout.fillWidth: true
-        Layout.topMargin: 8
-        spacing: 12
+        Layout.topMargin: across ? 0 : 8
+        Layout.preferredWidth: across ? 1 : -1
+        columns: across ? 1 : 2; columnSpacing: 14; rowSpacing: 12
         Rectangle {
-            Layout.alignment: Qt.AlignTop
-            implicitWidth: 30; implicitHeight: 30; radius: 15; color: root.t.accentBg; border.color: root.t.accentBd
-            Label { anchors.centerIn: parent; text: step.n; color: root.t.accent; font.bold: true }
+            Layout.alignment: Qt.AlignTop | Qt.AlignLeft
+            implicitWidth: 30; implicitHeight: 30; radius: 15; color: root.t.hover
+            Label { anchors.centerIn: parent; text: step.n; font.pointSize: root.sizes.small; font.weight: Font.DemiBold }
+            Rectangle { visible: step.joined; x: 40; y: 14; width: step.width - 26; height: 1; color: root.t.bd }
         }
         ColumnLayout {
             id: stepBody
             Layout.fillWidth: true; Layout.alignment: Qt.AlignTop
-            spacing: 6
-            Label { Layout.topMargin: 2; text: step.title; font.weight: Font.DemiBold; font.pointSize: root.baseSize * 16 / 14 }
+            spacing: 4
+            Label { Layout.topMargin: step.across ? 0 : 3; Layout.fillWidth: true; wrapMode: Text.Wrap; text: step.title; font.weight: Font.DemiBold; font.pointSize: step.across ? root.sizes.body : root.sizes.lead }
         }
     }
 
@@ -2282,16 +2313,16 @@ Item {
         property string aside
         readonly property int pad: ListView.view.pad
         width: ListView.view.width
-        height: title.implicitHeight + (aside ? 18 : 12)
-        color: root.t.well
+        height: title.implicitHeight + (aside ? 18 : 20)   // a plain group title is Harbor's .pgrp: 12 px, muted, no band
+        color: aside ? root.t.well : "transparent"
         Label {
             id: title
             x: parent.pad; width: parent.width - 2 * parent.pad; anchors.verticalCenter: parent.verticalCenter
             wrapMode: Text.Wrap; textFormat: Text.StyledText
             text: "<b>" + root.esc(parent.section) + "</b>" + (parent.aside ? "&nbsp;&nbsp; <font color='" + root.t.muted + "'>" + root.esc(parent.aside) + "</font>" : "")
-            font.pointSize: parent.aside ? root.baseSize : root.smallSize; color: parent.aside ? root.t.fg : root.t.muted
+            font.pointSize: parent.aside ? root.baseSize : root.sizes.cap; color: parent.aside ? root.t.fg : root.t.muted
         }
-        Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: root.t.bd }
+        Rectangle { visible: parent.aside !== ""; anchors.bottom: parent.bottom; width: parent.width; height: 1; color: root.t.bd }
     }
 
     // One selectable row of the Report picker: a radio mark, the code (monospace), the name. A retired
@@ -2304,29 +2335,31 @@ Item {
         property bool picked: false
         property bool retired: false
         property bool explains: false
-        implicitHeight: Math.max(40, implicitContentHeight + topPadding + bottomPadding)   // a long (Hindi) name wraps
+        implicitHeight: Math.max(42, implicitContentHeight + topPadding + bottomPadding)   // a long (Hindi) name wraps
         topPadding: 5; bottomPadding: 5; leftPadding: 12; rightPadding: 12
         enabled: !retired || explains
         Accessible.role: Accessible.RadioButton
         Accessible.checked: choice.picked
-        background: Rectangle {
-            color: choice.picked ? root.t.accentBg : choice.hovered ? root.t.hover : root.t.page
-            Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: root.t.bd }
+        background: Rectangle {   // Harbor's .pl: a 12 px row, s2 on hover, an accent wash when picked
+            radius: root.radii.nav
+            color: choice.picked ? root.wash(root.t.accent, root.t.card, 0.12) : choice.hovered ? root.t.card : "transparent"
+            border.width: choice.visualFocus ? 2 : 0; border.color: root.t.focus
+            Behavior on color { EasedColor {} }
         }
         contentItem: RowLayout {
-            spacing: 8
-            Icon { name: choice.picked ? "radioOn" : "radio"; size: 16; color: choice.picked ? root.t.accent : root.t.ctlBd }
+            spacing: 12
+            Icon { name: choice.picked ? "radioOn" : "radio"; size: 18; color: choice.picked ? root.t.accent : root.t.ph }
             Label {
-                visible: choice.code !== ""; text: choice.code; textFormat: Text.PlainText
-                font.family: "monospace"; font.weight: Font.DemiBold; font.pointSize: root.smallSize; font.italic: choice.retired
-                color: choice.retired ? root.t.muted : root.t.fg
+                visible: choice.code !== ""; Layout.preferredWidth: 30; text: choice.code; textFormat: Text.PlainText
+                font.family: "monospace"; font.weight: Font.Medium; font.pointSize: root.sizes.cap; font.italic: choice.retired
+                color: root.t.muted
             }
             Label {
                 Layout.fillWidth: true; text: choice.text; wrapMode: Text.Wrap
-                font.weight: choice.picked ? Font.DemiBold : Font.Normal; font.italic: choice.retired
+                font.weight: Font.Medium; font.italic: choice.retired
                 color: choice.retired ? root.t.muted : root.t.fg
             }
-            Label { visible: choice.note !== ""; text: choice.note; font.pointSize: root.smallSize; color: root.t.muted }
+            Label { visible: choice.note !== ""; text: choice.note; font.pointSize: root.sizes.small; color: root.t.muted }
         }
     }
 
@@ -2380,15 +2413,14 @@ Item {
         Frame {
             Layout.fillWidth: true
             Layout.topMargin: pb.bare ? 0 : 2
-            Layout.preferredHeight: Math.min(list.contentHeight - 1, pb.maxHeight) + (pb.bare ? 0 : 2)
-            radius: pb.bare ? 0 : 6
-            border.width: pb.bare ? 0 : 1
-            border.color: pb.bare ? root.t.bd : root.t.ctlBd
+            Layout.preferredHeight: Math.min(list.contentHeight, pb.maxHeight)
+            radius: 0
+            border.width: 0
+            color: "transparent"
             ListView {
                 id: list
                 property int pad: pb.bare ? 16 : 12       // row inset, read by SectionHeader
                 anchors.fill: parent
-                anchors.margins: pb.bare ? 0 : 1
                 clip: true
                 cacheBuffer: 100000      // keep every row alive: text typed into a row survives scrolling
                 model: pb.places
@@ -2814,11 +2846,12 @@ Item {
             visible: !root.inSite
             Layout.fillWidth: true
             Layout.fillHeight: true
+            gap: root.gaps.gutter
             PageHead { title: "Report a problem, and see it fixed."; lede: "Pukaar keeps every report until the person who raised it says it works." }
             HowItWorks {}
             CollapsibleSection {
                 title: "Join a site"
-                open: true
+                open: true; panel: true; pad: 20
                 LabelledField {
                     id: joinField
                     label: "Site id"; sub: "(shown on the kiosk)"
@@ -2831,6 +2864,7 @@ Item {
             }
             CollapsibleSection {
                 title: "Create a site"; aside: "(site admin only)"
+                panel: true; pad: 20
                 Help { text: "Nothing is sent until you press Create site. Then the site goes to the chain, and that can take a minute or two. Places can be added later too, on the Places page." }
                 AccountBox {}
                 RowLayout {
@@ -2857,7 +2891,7 @@ Item {
                                 required property string modelData
                                 required property int index
                                 implicitWidth: catRow.implicitWidth + 12; implicitHeight: 36
-                                radius: 18; color: root.t.card; border.color: root.t.ctlBd
+                                radius: height / 2; color: root.t.card; border.color: root.t.ctlBd
                                 RowLayout {
                                     id: catRow
                                     x: 12; height: parent.height; spacing: 0
@@ -3030,6 +3064,7 @@ Item {
             }
             CollapsibleSection {
                 title: "Restore your identity"
+                panel: true; pad: 20
                 Help { text: "Paste the backup made on the Profile page, on your other device or before you reinstalled." }
                 FormRow {
                     label: "Identity backup"
@@ -3098,89 +3133,81 @@ Item {
                     // What waits for this viewer, one row each, only when there is some (late issues: for the staff, who can act on them).
                     // `mine` sets the Issue Tracker's switch.
                     readonly property var needs: [
-                        { n: (root.chat.threads || []).filter(function (c) { return c.unread === true }).length, page: "messages", glyph: "cmt",
+                        { n: (root.chat.threads || []).filter(function (c) { return c.unread === true }).length, page: "messages", glyph: "cmt", tone: root.t.progress.edge,
                           to: "Messages", one: "chat with unread messages", many: "chats with unread messages" },
-                        { n: root.meetAsks, page: "meet", glyph: "bell", to: "Meetings",
+                        { n: root.meetAsks, page: "meet", glyph: "bell", tone: root.t.awaiting.edge, to: "Meetings",
                           one: "meeting request waits for your answer", many: "meeting requests wait for your answer" },
                         { n: !root.staff ? 0 : root.issues.filter(function (i) { return !root.isTerminal(i.status) && (i.ack_overdue || i.fix_overdue) }).length,
-                          page: "board", mine: false, glyph: "warn", to: "Issue Tracker", one: "issue is past its target time", many: "issues are past their target time" },
+                          page: "board", mine: false, glyph: "warn", tone: root.t.reported.edge, to: "Issue Tracker", one: "issue is past its target time", many: "issues are past their target time" },
                         { n: root.issues.filter(function (i) { return i.reporter === root.me.key && !root.isTerminal(i.status) }).length,
-                          page: "board", mine: true, glyph: "rep", to: "Issue Tracker", one: "of your reports is still open", many: "of your reports are still open" },
-                        { n: root.isAdmin ? root.pending.length : 0, page: "people", glyph: "members", to: "People",
+                          page: "board", mine: true, glyph: "rep", tone: root.t.progress.edge, to: "Issue Tracker", one: "of your reports is still open", many: "of your reports are still open" },
+                        { n: root.isAdmin ? root.pending.length : 0, page: "people", glyph: "members", tone: root.t.accent, to: "People",
                           one: "person waits for approval", many: "people wait for approval" }
                     ].filter(function (r) { return r.n > 0 })
 
+                    function openBoard() { root.onlyMine = false; root.openPage("board") }
+
                     ColumnLayout {   // greeting, the site's name, what Pukaar is for, who you are here, the two ways in
-                        id: hero
-                        Layout.fillWidth: true; Layout.topMargin: 24
-                        spacing: 6
-                        opacity: 0
-                        transform: Translate { id: rise; y: 12 }
-                        // One entrance, the first time Home shows after the app opens. Nothing else on the page moves.
-                        readonly property bool live: root.inSite && root.page === "home"
-                        property bool entered: false
-                        function enter() { if (live && !entered) { entered = true; rising.start() } }
-                        onLiveChanged: enter()
-                        Component.onCompleted: enter()
-                        ParallelAnimation {
-                            id: rising
-                            NumberAnimation { target: hero; property: "opacity"; to: 1; duration: 450; easing.type: Easing.OutCubic }
-                            NumberAnimation { target: rise; property: "y"; to: 0; duration: 450; easing.type: Easing.OutCubic }
-                        }
+                        Layout.fillWidth: true; Layout.topMargin: 10
+                        spacing: 0
                         Label {
                             readonly property int hour: new Date(root.now * 1000).getHours()
                             Layout.fillWidth: true; wrapMode: Text.Wrap
                             text: (hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening") + (root.me.name ? ", " + root.me.name : "") + "."
-                            color: root.t.muted; font.pointSize: root.baseSize * 15 / 14
-                        }
-                        Label {
-                            Layout.fillWidth: true; wrapMode: Text.Wrap
-                            text: root.info.name || "Waiting for site data…"
-                            font.pointSize: root.baseSize * 34 / 14; font.weight: Font.DemiBold
+                            color: root.t.muted; font.pointSize: root.sizes.lead
                         }
                         Label {
                             Layout.fillWidth: true; Layout.topMargin: 4; wrapMode: Text.Wrap
-                            text: "Report what is broken, follow it until it is fixed, and keep the record honest."
-                            font.pointSize: root.baseSize * 16 / 14
+                            text: root.info.name || "Waiting for site data…"
+                            font.pointSize: root.sizes.hero; font.weight: Font.DemiBold; font.letterSpacing: -0.8
                         }
                         Label {
-                            Layout.fillWidth: true; wrapMode: Text.Wrap; color: root.t.muted
+                            Layout.fillWidth: true; Layout.maximumWidth: root.px(560); Layout.topMargin: 12; wrapMode: Text.Wrap
+                            text: "Report what is broken, follow it until it is fixed, and keep the record honest."
+                            font.pointSize: root.px(17)
+                        }
+                        Label {
+                            Layout.fillWidth: true; Layout.topMargin: 6; wrapMode: Text.Wrap; color: root.t.muted
                             text: root.approved ? "You are " + (/^[AEIOU]/.test(root.roleName) ? "an " : "a ") + root.roleName.toLowerCase() + " here."
                                 : root.removed ? "Your role here was removed. You can still read the record."
                                 : root.awaitingApproval ? "Waiting for approval. Once an admin approves you, you can report, meet and send messages."
                                 : "You do not have a role here yet."
                         }
                         Flow {
-                            Layout.fillWidth: true; Layout.topMargin: 10
-                            spacing: 8
+                            Layout.fillWidth: true; Layout.topMargin: 22
+                            spacing: 10
                             FramedButton { visible: root.approved; kind: "primary"; text: "Report an issue"; onClicked: root.openPage("report") }
                             FramedButton { text: "Open Issue Tracker"; onClicked: root.openPage("board") }
                         }
                     }
 
-                    Heading { Layout.topMargin: 36; text: "The site today" }
-                    Note { text: root.issues.length ? homePage.today : "No reports yet. When someone reports a fault, it shows here and in the Issue Tracker." }
+                    HomeHead { text: "The site today" }
+                    Note { Layout.bottomMargin: 6; font.pointSize: root.sizes.lead; text: root.issues.length ? homePage.today : "No reports yet. When someone reports a fault, it shows here and in the Issue Tracker." }
                     Item {   // one bar in the stage colours, as long as the counts are big; the legend under it says the numbers
                         id: stageBar
                         visible: homePage.stages.length > 0
-                        Layout.fillWidth: true; Layout.topMargin: 4
-                        implicitHeight: 10
+                        Layout.fillWidth: true
+                        implicitHeight: 14
                         Accessible.ignored: true
                         readonly property int total: homePage.open + homePage.tally.resolved
                         Row {
-                            spacing: 2
+                            spacing: 3
                             Repeater {
                                 model: homePage.stages
                                 delegate: Rectangle {
                                     required property string modelData
-                                    width: (stageBar.width - 2 * (homePage.stages.length - 1)) * homePage.tally[modelData] / stageBar.total
-                                    height: 10; radius: 3; color: root.t[modelData].edge
+                                    width: (stageBar.width - 3 * (homePage.stages.length - 1)) * homePage.tally[modelData] / stageBar.total
+                                    height: 14; radius: root.radii.box; color: root.t[modelData].edge
+                                    opacity: segHover.hovered ? 0.8 : 1
+                                    Behavior on opacity { Eased { duration: root.motion.fast } }
+                                    HoverHandler { id: segHover; cursorShape: Qt.PointingHandCursor }
+                                    TapHandler { onTapped: homePage.openBoard() }   // like the legend under it
                                 }
                             }
                         }
                     }
                     Flow {   // the legend: each count opens the Issue Tracker
-                        Layout.fillWidth: true; Layout.topMargin: 2
+                        Layout.fillWidth: true; Layout.topMargin: 4
                         spacing: 18
                         Repeater {
                             model: homePage.stages
@@ -3196,23 +3223,24 @@ Item {
                                 HoverHandler { cursorShape: Qt.PointingHandCursor }
                                 Keys.onReturnPressed: clicked()
                                 Keys.onEnterPressed: clicked()
-                                onClicked: { root.onlyMine = false; root.openPage("board") }
+                                onClicked: homePage.openBoard()
                                 contentItem: Row {
-                                    spacing: 6
+                                    spacing: 8
                                     Rectangle { anchors.verticalCenter: parent.verticalCenter; width: 8; height: 8; radius: 4; color: root.t[key.modelData].edge }
-                                    Label { text: key.words; color: key.hovered ? root.t.accent : root.t.fg; font.pointSize: root.smallSize }
+                                    Label { text: key.words; color: key.hovered ? root.t.fg : root.t.muted; font.pointSize: root.sizes.small; Behavior on color { EasedColor {} } }
                                 }
-                                background: Rectangle { radius: 4; color: "transparent"; border.width: key.visualFocus ? 2 : 0; border.color: root.t.focus }
+                                background: Rectangle { radius: root.radii.box; color: "transparent"; border.width: key.visualFocus ? 2 : 0; border.color: root.t.focus }
                             }
                         }
                     }
 
-                    Heading { Layout.topMargin: 28; text: "Needs you" }
+                    HomeHead { text: "Needs you" }
                     Note { visible: homePage.needs.length === 0; text: "Nothing waits for you."; color: root.t.muted }
                     Repeater {
                         model: homePage.needs
                         delegate: HomeRow {
                             required property var modelData
+                            flat: true; tint: modelData.tone
                             glyph: modelData.glyph; detail: modelData.to
                             text: modelData.n + " " + (modelData.n === 1 ? modelData.one : modelData.many)
                             onClicked: { if (modelData.mine !== undefined) root.onlyMine = modelData.mine; root.openPage(modelData.page) }
@@ -3220,49 +3248,57 @@ Item {
                     }
 
                     // The core's rule (logic/src/reducer.rs) in this site's own hours; a line shows only when the site has that value.
-                    Heading { Layout.topMargin: 28; text: "How reports move here" }
-                    Step { n: 1; title: "Someone reports a fault"; Help { text: "A member says what is broken, and where." } }
-                    Step {
-                        n: 2; title: "A steward acknowledges it"
-                        Help { visible: root.info.sla_ack_h !== undefined; text: "Within " + root.info.sla_ack_h + " h of the report." }
+                    HomeHead { text: "How reports move here" }
+                    GridLayout {
+                        Layout.fillWidth: true; Layout.topMargin: 8
+                        columns: root.compactRows ? 2 : 4; columnSpacing: 24; rowSpacing: 20
+                        uniformCellWidths: true
+                        Step { across: true; n: 1; title: "Someone reports a fault"; Help { text: "A member says what is broken, and where." } }
+                        Step {
+                            across: true; n: 2; title: "A steward acknowledges it"
+                            Help { visible: root.info.sla_ack_h !== undefined; text: "Within " + root.info.sla_ack_h + " h of the report." }
+                        }
+                        Step {
+                            across: true; n: 3; title: "A steward fixes it"
+                            Help { text: (root.info.sla_fix_h !== undefined ? "Within " + root.info.sla_fix_h + " h of the report, and says" : "And says") + " what was done." }
+                        }
+                        Step { across: true; last: true; n: 4; title: "The fix is confirmed"; Help { text: "The reporter confirms it, or two other residents do. Until then it stays open." } }
                     }
-                    Step {
-                        n: 3; title: "A steward fixes it"
-                        Help { text: (root.info.sla_fix_h !== undefined ? "Within " + root.info.sla_fix_h + " h of the report, and says" : "And says") + " what was done." }
-                    }
-                    Step { n: 4; title: "The fix is confirmed"; Help { text: "The reporter confirms it, or two other residents do. Until then it stays open." } }
                     Help {
-                        visible: root.info.max_open_per_author !== undefined; Layout.topMargin: 8
+                        visible: root.info.max_open_per_author !== undefined; Layout.topMargin: 10
                         text: "Each person can have " + root.info.max_open_per_author + " open reports at a time."
                     }
 
-                    Heading { Layout.topMargin: 28; Layout.fillWidth: true; wrapMode: Text.Wrap; text: "Everything in " + homePage.site }
+                    HomeHead { Layout.fillWidth: true; wrapMode: Text.Wrap; text: "Everything in " + homePage.site }
                     GridLayout {
                         Layout.fillWidth: true
-                        columns: root.compactRows ? 1 : 2; columnSpacing: 16; rowSpacing: 0
+                        columns: root.compactRows ? 1 : 2; columnSpacing: 28; rowSpacing: 2
+                        uniformCellWidths: true
                         Repeater {
                             model: root.sections.filter(function (e) { return e.page !== "home" })
                             delegate: HomeRow {
                                 required property var modelData
-                                Layout.preferredWidth: 1   // two equal columns
+                                Layout.alignment: Qt.AlignTop
                                 glyph: modelData.icon; text: modelData.label; detail: modelData.about
                                 onClicked: root.openPage(modelData.page)
                             }
                         }
                     }
 
-                    Rectangle { Layout.fillWidth: true; Layout.topMargin: 32; implicitHeight: 1; color: root.t.bd }
-                    Help { visible: root.categories.length > 0; text: "Kinds of fault reported here: " + root.andList(root.categories) + "." }
+                    Rule { Layout.topMargin: 32 }
+                    Help { visible: root.categories.length > 0; Layout.topMargin: 6; text: "Kinds of fault reported here: " + root.andList(root.categories) + "." }
                     RowLayout {   // the record's state in words, and the page that explains it
                         Layout.fillWidth: true; Layout.bottomMargin: 24
-                        spacing: 12
+                        spacing: 6
                         Help {
+                            Layout.fillWidth: false
                             color: root.anchorState === "mismatch" ? root.t.danger : root.t.muted
                             text: root.anchorState === "mismatch" ? "The record does not match its last anchor."
                                 : root.lastAnchor ? "The record was last anchored " + root.age(root.lastAnchor.ts) + "."
                                 : "The record has not been anchored yet."
                         }
                         LinkButton { text: "Integrity  ›"; Accessible.name: "Open Integrity"; onClicked: root.openPage("proof") }
+                        Item { Layout.fillWidth: true }
                     }
                 }
 
@@ -3419,89 +3455,110 @@ Item {
                     readonly property string missing: reportText.text.trim() === "" ? "Describe the problem in one line."
                         : pick === "" ? "Pick where it is."
                         : pick === "other" && landmark.text.trim() === "" ? "Describe the place." : ""
+                    maxWidth: 100000
+                    gap: root.gaps.gutter
                     PageHead { title: "What's wrong?"; lede: "A line or two is enough. A steward will see it in the Issue Tracker." }
-                    FormRow {
-                        label: "Category"
-                        FramedCombo { id: category; Accessible.name: "What is wrong (category)"; model: root.categories; Layout.fillWidth: true; Layout.maximumWidth: 372 }
-                    }
-                    // maximumLength counts characters; the core's 500 limit is bytes (Hindi is 3 B/char),
-                    // so a long non-Latin line comes back as "error: too long" instead. Return sends,
-                    // Shift+Return starts a new line.
-                    FormRow {
-                        label: "In a line or two"
-                        FramedTextArea {
-                            id: reportText
-                            boxHeight: 76; maxLength: 500; enterAccepts: true
-                            wrap: TextEdit.WrapAtWordBoundaryOrAnywhere
-                            placeholder: "e.g. Tap near tent 4 gives no water"
-                            name: "What is wrong"
-                            onAccepted: reportBtn.submit()
-                        }
-                    }
-                    Heading { text: "Where?" }
-                    PlaceBrowser {
-                        maxHeight: 220
-                        retiredPlace: reportPage.retired
-                        onReportOther: {      // keep category and description; the landmark starts as an editable "near ..."
-                            landmark.text = "near " + reportPage.retired.code + " " + reportPage.retired.label
-                            reportPage.choose("other")
-                            landmark.forceActiveFocus()
-                        }
-                        listHeader: Component {
-                            PlaceChoice {
-                                text: "Other (describe the place)"
-                                picked: reportPage.pick === "other"
-                                onClicked: reportPage.choose("other")
+                    GridLayout {   // Harbor's .rep: the form (420 px) beside the place list
+                        Layout.fillWidth: true
+                        columns: root.compactRows ? 1 : 2; columnSpacing: root.gaps.gutter; rowSpacing: root.gaps.gutter
+                        Panel {
+                            pad: 22; spacing: 14
+                            Layout.alignment: Qt.AlignTop
+                            Layout.fillWidth: root.compactRows; Layout.preferredWidth: root.compactRows ? -1 : 420
+                            FormRow {
+                                label: "Category"
+                                FramedCombo { id: category; Accessible.name: "What is wrong (category)"; model: root.categories; Layout.fillWidth: true }
+                            }
+                            // maximumLength counts characters; the core's 500 limit is bytes (Hindi is 3 B/char),
+                            // so a long non-Latin line comes back as "error: too long" instead. Return sends,
+                            // Shift+Return starts a new line.
+                            FormRow {
+                                label: "In a line or two"
+                                FramedTextArea {
+                                    id: reportText
+                                    boxHeight: 96; maxLength: 500; enterAccepts: true
+                                    wrap: TextEdit.WrapAtWordBoundaryOrAnywhere
+                                    placeholder: "e.g. Tap near tent 4 gives no water"
+                                    name: "What is wrong"
+                                    onAccepted: reportBtn.submit()
+                                }
+                                Help { Layout.alignment: Qt.AlignRight; Layout.fillWidth: false; text: reportText.text.length + " / 500"; font.pointSize: root.sizes.cap }
+                            }
+                            FormRow {
+                                visible: reportPage.pick !== ""
+                                label: reportPage.pick === "other" ? "Describe the place (required)" : "Landmark"
+                                sub: reportPage.pick === "other" ? "" : "(optional)"
+                                FramedField {
+                                    id: landmark; Layout.fillWidth: true; maximumLength: 500
+                                    Accessible.name: reportPage.pick === "other" ? "Describe the place" : "Landmark"
+                                    placeholderText: reportPage.pick === "other" ? "e.g. pipe behind tent 4, by the neem tree" : "e.g. the left tap, behind the water tank"
+                                }
+                            }
+                            Rule { Layout.topMargin: 4 }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 14
+                                ActionButton {
+                                    id: reportBtn
+                                    text: "Report"; kind: "primary"
+                                    Layout.preferredHeight: 40
+                                    allowed: reportPage.missing === ""
+                                    onClicked: root.run("report", [category.currentText, reportPage.pick, landmark.text, reportText.text],
+                                                        function () { reportText.text = ""; landmark.text = ""; reportPage.pick = ""; root.openPage("board") })
+                                }
+                                Help { visible: reportPage.missing !== ""; text: reportPage.missing }
+                            }
+                            RowLayout {   // who the report is from; no name yet: one line to Profile
+                                spacing: 6
+                                Help { Layout.fillWidth: false; text: "Reporting as " + root.who(root.me.key, root.me.name) + (root.me.name ? "" : " ·") }
+                                LinkButton { visible: !root.me.name; text: "Set a name"; onClicked: root.openPage("profile") }
                             }
                         }
-                        rowDelegate: Component {
-                            PlaceChoice {
-                                required property var modelData
-                                width: ListView.view.width
-                                code: modelData.code
-                                text: modelData.label
-                                note: modelData.state !== "active" ? "(" + root.placeState(modelData) + ")" : ""
-                                retired: modelData.state !== "active"
-                                explains: true
-                                picked: reportPage.pick === modelData.code
-                                onClicked: modelData.state !== "active" ? reportPage.retired = modelData : reportPage.choose(modelData.code)
+                        Panel {
+                            pad: 22; spacing: 12
+                            Layout.alignment: Qt.AlignTop
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 12
+                                Label { text: "Where?"; font.pointSize: root.sizes.h2; font.weight: Font.DemiBold }
+                                Item { Layout.fillWidth: true }
+                                Help {
+                                    Layout.fillWidth: false
+                                    text: reportPage.pick === "" ? "No place picked yet."
+                                        : reportPage.pick === "other" ? "Other place: describe it on the left."
+                                        : "Picked: " + root.placeLabel(reportPage.pick)
+                                }
+                            }
+                            PlaceBrowser {
+                                maxHeight: root.px(420)
+                                retiredPlace: reportPage.retired
+                                onReportOther: {      // keep category and description; the landmark starts as an editable "near ..."
+                                    landmark.text = "near " + reportPage.retired.code + " " + reportPage.retired.label
+                                    reportPage.choose("other")
+                                    landmark.forceActiveFocus()
+                                }
+                                listHeader: Component {
+                                    PlaceChoice {
+                                        text: "Other (describe the place)"
+                                        picked: reportPage.pick === "other"
+                                        onClicked: reportPage.choose("other")
+                                    }
+                                }
+                                rowDelegate: Component {
+                                    PlaceChoice {
+                                        required property var modelData
+                                        width: ListView.view.width
+                                        code: modelData.code
+                                        text: modelData.label
+                                        note: modelData.state !== "active" ? "(" + root.placeState(modelData) + ")" : ""
+                                        retired: modelData.state !== "active"
+                                        explains: true
+                                        picked: reportPage.pick === modelData.code
+                                        onClicked: modelData.state !== "active" ? reportPage.retired = modelData : reportPage.choose(modelData.code)
+                                    }
+                                }
                             }
                         }
-                    }
-                    Help {
-                        text: reportPage.pick === "" ? "No place picked yet."
-                            : reportPage.pick === "other" ? "Other place: describe it below."
-                            : "Picked: " + root.placeLabel(reportPage.pick)
-                    }
-                    FormRow {
-                        visible: reportPage.pick !== ""
-                        label: reportPage.pick === "other" ? "Describe the place (required)" : "Landmark"
-                        sub: reportPage.pick === "other" ? "" : "(optional)"
-                        FramedField {
-                            id: landmark; Layout.fillWidth: true; maximumLength: 500
-                            Accessible.name: reportPage.pick === "other" ? "Describe the place" : "Landmark"
-                            placeholderText: reportPage.pick === "other" ? "e.g. pipe behind tent 4, by the neem tree" : "e.g. the left tap, behind the water tank"
-                        }
-                    }
-                    RowLayout {
-                        Layout.fillWidth: true; Layout.topMargin: 4
-                        spacing: 12
-                        ActionButton {
-                            id: reportBtn
-                            text: "Report"; kind: "primary"
-                            Layout.preferredHeight: 40
-                            allowed: reportPage.missing === ""
-                            onClicked: root.run("report", [category.currentText, reportPage.pick, landmark.text, reportText.text],
-                                                function () { reportText.text = ""; landmark.text = ""; reportPage.pick = ""; root.openPage("board") })
-                        }
-                        Help { visible: reportPage.missing !== ""; text: reportPage.missing }
-                    }
-                    RowLayout {   // no name yet: one line to Profile
-                        visible: !root.me.name
-                        Layout.topMargin: 8
-                        spacing: 6
-                        Help { Layout.fillWidth: false; text: "Reporting as " + root.who(root.me.key, root.me.name) + " ·" }
-                        LinkButton { text: "Set a name"; onClicked: root.openPage("profile") }
                     }
                 }
 
@@ -3844,7 +3901,7 @@ Item {
                     CollapsibleSection {
                         title: "Places"
                         aside: "· " + root.plural(root.locations.length, "place") + (placesPage.retiredCount > 0 ? ", " + placesPage.retiredCount + " retired" : "")
-                        open: true; pad: 0
+                        open: true; pad: 0; panel: true
                         RowLayout {
                             Layout.fillWidth: true; Layout.margins: 16; Layout.bottomMargin: 8
                             spacing: 12
@@ -4055,50 +4112,58 @@ Item {
                 // anchor for any member: compute the checkpoint, then one button that writes it to the chain
                 TabPage {
                     enabled: !root.syncing
+                    maxWidth: 880
+                    gap: root.gaps.gutter
                     PageHead {
                         title: "Integrity"
                         lede: "Anyone can check that the record was not changed after the fact. An anchor writes a fingerprint of everyone's "
                             + "history to the Logos blockchain (LEZ), so no one, not even the admin, can quietly rewrite or delete past events."
                     }
-                    Note { text: root.plural(root.info.events || 0, "event") + " · " + root.conflicts; font.weight: Font.DemiBold }
-                    Flash {   // the newest anchor: one state at a time (root.anchorState)
-                        readonly property var a: root.lastAnchor
-                        err: root.anchorState === "mismatch"
-                        tone: err ? "err" : root.anchorState === "" ? "plain" : "warn"
-                        icon: tone === "plain" ? "anchor" : "warn"
-                        lead: err ? "This anchor doesn't match the record on this device." : ""
-                        text: ({ mismatch: "If it is still here after this device syncs, tell your admin.",
-                                 never: "Nothing has been anchored yet. Until then, history can be changed without anyone noticing.",
-                                 stale: a ? "Last anchor was " + root.age(a.ts) + ". Any member can anchor from this page." : "",
-                                 "": a ? root.anchorSummary(a) : "" })[root.anchorState]
-                    }
-                    Help { visible: !root.approved; text: "Members can anchor the record. After approval you can do this too." }
-                    Heading { visible: root.approved; text: "Anchor now" }
-                    Help {
-                        visible: root.approved
-                        text: "An anchor is one write to the chain. It costs about 0.0005 LEZ (523,304 lepta), and your network account pays it. "
-                            + "It can be written once for each state of the record."
-                    }
-                    Step {
-                        visible: root.approved
-                        n: 1; title: "Compute the checkpoint"
-                        ActionButton { text: "Compute checkpoint"; kind: "primary"; onClicked: root.run("checkpoint_now", [], function (r) { if (r && r.heads_root) root.checkpoint = r }) }
-                        Label {
-                            visible: !!root.checkpoint; Layout.topMargin: 2; textFormat: Text.RichText
-                            text: root.checkpoint ? root.checkpoint.n_events + " events, root <span style='font-family:monospace'>" + root.esc(root.checkpoint.heads_root.substr(0, 16)) + "…</span>" : ""
+                    Panel {   // the record's status
+                        pad: 22; spacing: 12
+                        Note { text: root.plural(root.info.events || 0, "event") + " · " + root.conflicts; font.weight: Font.DemiBold; font.pointSize: root.sizes.lead }
+                        Flash {   // the newest anchor: one state at a time (root.anchorState)
+                            readonly property var a: root.lastAnchor
+                            err: root.anchorState === "mismatch"
+                            tone: err ? "err" : root.anchorState === "" ? "plain" : "warn"
+                            icon: tone === "plain" ? "anchor" : "warn"
+                            lead: err ? "This anchor doesn't match the record on this device." : ""
+                            text: ({ mismatch: "If it is still here after this device syncs, tell your admin.",
+                                     never: "Nothing has been anchored yet. Until then, history can be changed without anyone noticing.",
+                                     stale: a ? "Last anchor was " + root.age(a.ts) + ". Any member can anchor from this page." : "",
+                                     "": a ? root.anchorSummary(a) : "" })[root.anchorState]
                         }
                     }
-                    Step {
-                        visible: root.approved
-                        n: 2; title: "Anchor it on the chain"
-                        Help { visible: root.anchorLive; text: "The anchor is on its way to the chain. This takes a minute or two." }
-                        Help { visible: root.balanceState === "short" && !root.anchorLive; text: root.balanceLine }
-                        ConfirmButton {
-                            text: root.anchorLive ? "Anchoring…" : "Anchor now"; kind: "primary"
-                            allowed: !root.anchorLive
-                            effect: "This sends one write to the chain. It costs about 0.0005 LEZ from your network account. If this record is anchored already, nothing is sent."
-                            confirmText: "Anchor now"
-                            onConfirmed: root.run("anchor_now", [], function () { root.checkpoint = null })
+                    Panel {   // the anchor, in two steps
+                        pad: 22; spacing: 8
+                        Help { visible: !root.approved; text: "Members can anchor the record. After approval you can do this too." }
+                        Label { visible: root.approved; text: "Anchor now"; font.pointSize: root.sizes.h2; font.weight: Font.DemiBold }
+                        Help {
+                            visible: root.approved
+                            text: "An anchor is one write to the chain. It costs about 0.0005 LEZ (523,304 lepta), and your network account pays it. "
+                                + "It can be written once for each state of the record."
+                        }
+                        Step {
+                            visible: root.approved
+                            n: 1; title: "Compute the checkpoint"
+                            ActionButton { text: "Compute checkpoint"; kind: "primary"; onClicked: root.run("checkpoint_now", [], function (r) { if (r && r.heads_root) root.checkpoint = r }) }
+                            Label {
+                                visible: !!root.checkpoint; Layout.topMargin: 2; textFormat: Text.RichText
+                                text: root.checkpoint ? root.checkpoint.n_events + " events, root <span style='font-family:monospace'>" + root.esc(root.checkpoint.heads_root.substr(0, 16)) + "…</span>" : ""
+                            }
+                        }
+                        Step {
+                            visible: root.approved
+                            n: 2; title: "Anchor it on the chain"
+                            Help { visible: root.anchorLive; text: "The anchor is on its way to the chain. This takes a minute or two." }
+                            Help { visible: root.balanceState === "short" && !root.anchorLive; text: root.balanceLine }
+                            ConfirmButton {
+                                text: root.anchorLive ? "Anchoring…" : "Anchor now"; kind: "primary"
+                                allowed: !root.anchorLive
+                                effect: "This sends one write to the chain. It costs about 0.0005 LEZ from your network account. If this record is anchored already, nothing is sent."
+                                confirmText: "Anchor now"
+                                onConfirmed: root.run("anchor_now", [], function () { root.checkpoint = null })
+                            }
                         }
                     }
                 }
@@ -4344,6 +4409,7 @@ Item {
                 TabPage {
                     id: hist
                     maxWidth: 100000
+                    gap: root.gaps.gutter
                     readonly property int pageSize: 40
                     property int limit: pageSize
                     property int status: 0        // All, Resolved, Closed without fix, Reopened ≥1×
@@ -4402,51 +4468,53 @@ Item {
                             : "Every resolved and closed issue, " + (hist.oldestFirst ? "oldest" : "newest") + " first. The Issue Tracker shows resolved issues for 14 days and closed ones for 30; "
                               + "after that they are only here. <b>Nothing is deleted</b>, and any of them can be reopened."
                     }
-                    RowLayout {
-                        Layout.fillWidth: true; Layout.topMargin: 8
-                        spacing: 12
-                        FormRow {
-                            label: "Search"; compact: true
-                            FramedField { id: search; Layout.fillWidth: true; placeholderText: "e.g. tap, नल, or a place code"; Accessible.name: "Search History" }
+                    Panel {   // Harbor's .filters: search and place, then the status and date segments
+                        pad: 20; spacing: 14
+                        RowLayout {
+                            Layout.fillWidth: true; Layout.topMargin: 8
+                            spacing: 12
+                            FormRow {
+                                label: "Search"; compact: true
+                                FramedField { id: search; Layout.fillWidth: true; placeholderText: "e.g. tap, नल, or a place code"; Accessible.name: "Search History" }
+                            }
+                            FormRow {
+                                label: "Place"; compact: true
+                                Layout.fillWidth: false
+                                FramedCombo {   // a card's place link sets the filter too, so the shown text follows root.historyPlace
+                                    Layout.preferredWidth: 200
+                                    Accessible.name: "Filter by place"
+                                    textRole: "label"; valueRole: "code"
+                                    model: [{ code: "", label: "All places" }]
+                                        .concat(root.allPlaces.map(function (l) { return { code: l.code, label: l.code + " " + l.label } }))
+                                        .concat([{ code: "other", label: "Other (not on the list)" }])
+                                    displayText: hist.place === "" ? "All places" : hist.place === "other" ? "Other" : root.placeLabel(hist.place)
+                                    onActivated: function (index) { root.historyPlace = valueAt(index) }
+                                }
+                            }
                         }
-                        FormRow {
-                            label: "Place"; compact: true
-                            Layout.fillWidth: false
-                            FramedCombo {   // a card's place link sets the filter too, so the shown text follows root.historyPlace
-                                Layout.preferredWidth: 200
-                                Accessible.name: "Filter by place"
-                                textRole: "label"; valueRole: "code"
-                                model: [{ code: "", label: "All places" }]
-                                    .concat(root.allPlaces.map(function (l) { return { code: l.code, label: l.code + " " + l.label } }))
-                                    .concat([{ code: "other", label: "Other (not on the list)" }])
-                                displayText: hist.place === "" ? "All places" : hist.place === "other" ? "Other" : root.placeLabel(hist.place)
-                                onActivated: function (index) { root.historyPlace = valueAt(index) }
+                        Flow {
+                            Layout.fillWidth: true; Layout.bottomMargin: 4
+                            spacing: 12
+                            FormRow {
+                                id: statusRow
+                                label: "Status"; compact: true
+                                Segmented { name: "Status"; options: ["All", "Resolved", "Closed without fix", "Reopened ≥1×"]; current: hist.status; onPicked: function (i) { hist.status = i } }
+                            }
+                            FormRow {
+                                label: "When"; compact: true
+                                Segmented { name: "When"; options: ["7 days", "30 days", "3 months", "All"]; current: hist.since; onPicked: function (i) { hist.since = i } }
+                            }
+                            Item {   // on the segments' line, level with their buttons; wrapped, just the box
+                                width: mine.implicitWidth; height: y > 0 ? mine.implicitHeight : statusRow.height
+                                MineCheck { id: mine; anchors.bottom: parent.bottom }
                             }
                         }
                     }
-                    Flow {
-                        Layout.fillWidth: true; Layout.bottomMargin: 4
-                        spacing: 12
-                        FormRow {
-                            id: statusRow
-                            label: "Status"; compact: true
-                            Segmented { name: "Status"; options: ["All", "Resolved", "Closed without fix", "Reopened ≥1×"]; current: hist.status; onPicked: function (i) { hist.status = i } }
-                        }
-                        FormRow {
-                            label: "When"; compact: true
-                            Segmented { name: "When"; options: ["7 days", "30 days", "3 months", "All"]; current: hist.since; onPicked: function (i) { hist.since = i } }
-                        }
-                        Item {   // on the segments' line, level with their buttons; wrapped, just the box
-                            width: mine.implicitWidth; height: y > 0 ? mine.implicitHeight : statusRow.height
-                            MineCheck { id: mine; anchors.bottom: parent.bottom }
-                        }
-                    }
-                    Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: root.t.bd }
                     Rectangle {   // the place view: what happened here, and the way back to every place
                         visible: hist.place !== ""
                         Layout.fillWidth: true; Layout.topMargin: 4
                         implicitHeight: psum.implicitHeight + 20
-                        radius: 6; color: root.t.card; border.color: root.t.bd
+                        radius: root.radii.card; color: root.t.card
                         ColumnLayout {
                             id: psum
                             x: 12; y: 10; width: parent.width - 24
@@ -4492,7 +4560,7 @@ Item {
                         visible: hist.rows.length > 0
                         Layout.fillWidth: true; Layout.topMargin: 4; Layout.bottomMargin: 16
                         implicitHeight: histList.contentHeight + 2
-                        radius: 8; color: root.t.card; border.color: root.t.bd
+                        radius: root.radii.panel; color: root.t.well; border.color: root.t.bd
                         ListView {
                             id: histList
                             property int pad: 16            // row inset, read by SectionHeader
@@ -4550,6 +4618,8 @@ Item {
                 TabPage {
                     id: meetPage
                     enabled: !root.syncing
+                    maxWidth: 1000
+                    gap: root.gaps.gutter
                     readonly property var guests: root.meetGuests
                     readonly property int maxGuests: 8   // the core's MAX_INVITEES
                     readonly property string guestNames: guests.map(function (g) { return root.who(g.key, g.name) }).join(", ")
@@ -4683,7 +4753,7 @@ Item {
                     Heading { visible: meetPage.requests.length > 0; text: "Requests" }
                     Frame {
                         visible: meetPage.requests.length > 0
-                        Layout.fillWidth: true; implicitHeight: reqs.implicitHeight; fill: root.t.card; edge: root.t.bd
+                        Layout.fillWidth: true; implicitHeight: reqs.implicitHeight; fill: root.t.well; edge: root.t.bd; radius: root.radii.card; clip: true
                         ColumnLayout {
                             id: reqs
                             width: parent.width; spacing: 0
@@ -4825,7 +4895,7 @@ Item {
                     Blank { visible: meetPage.upcoming.length === 0; icon: "bell"; title: "No meetings planned"; text: "Choose who above, or use 1:1 meeting in People." }
                     Frame {
                         visible: meetPage.upcoming.length > 0
-                        Layout.fillWidth: true; implicitHeight: ups.implicitHeight; fill: root.t.card; edge: root.t.bd
+                        Layout.fillWidth: true; implicitHeight: ups.implicitHeight; fill: root.t.well; edge: root.t.bd; radius: root.radii.card; clip: true
                         ColumnLayout {
                             id: ups
                             width: parent.width; spacing: 0
@@ -4847,7 +4917,7 @@ Item {
                     Heading { visible: meetPage.history.length > 0; text: "History" }
                     Frame {
                         visible: meetPage.history.length > 0
-                        Layout.fillWidth: true; implicitHeight: hists.implicitHeight; fill: root.t.card; edge: root.t.bd
+                        Layout.fillWidth: true; implicitHeight: hists.implicitHeight; fill: root.t.well; edge: root.t.bd; radius: root.radii.card; clip: true
                         ColumnLayout {
                             id: hists
                             width: parent.width; spacing: 0
@@ -4887,6 +4957,7 @@ Item {
                     Flash { visible: meetPage.leadError !== ""; err: true; text: meetPage.leadError }
                     CollapsibleSection {   // closed until the member opens it
                         title: "Backup settings"
+                        panel: true; pad: 20
                         aside: meetPage.backup.job ? "working…" : meetPage.backup.error ? "needs attention" : ""
                         Help { text: "A backup puts your meeting history in Storage. The file is encrypted with a key from your account. Then its CID goes into one record of yours on the chain, so a new device can find it. The chain write costs a small fee. Meeting details never go on the chain. If Storage is not reachable, the backup is skipped and your local history stays." }
                         Flash { visible: !!meetPage.backup.error; err: true; text: meetPage.backup.error || "" }
