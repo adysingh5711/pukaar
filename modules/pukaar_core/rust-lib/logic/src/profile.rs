@@ -56,8 +56,8 @@ pub struct About {
 }
 
 pub const SOCIAL_LABELS: [&str; 7] = ["website", "github", "x", "linkedin", "telegram", "working", "other"];
-pub const MAX_SOCIALS: usize = 4;
-/// Shorter than a full address on purpose: with 4 links, 500 + 500 characters of text and 3 admin
+pub const MAX_SOCIALS: usize = 7;
+/// Shorter than a full address on purpose: with 7 links, 400 + 400 characters of text and 3 admin
 /// wraps the file stays under `MAX_INLINE_PROFILE` (the test `a_full_profile_fits_the_inline_cap`).
 pub const MAX_SOCIAL_URL: usize = 30;
 
@@ -565,13 +565,13 @@ mod tests {
 
     #[test]
     fn a_full_profile_fits_the_inline_cap() {
-        // The most that the UI allows: 64 name, 500 bio and 500 experience characters, 4 links, 3 admin wraps.
+        // The most that the UI allows: 64 name, 400 bio and 400 experience characters, 7 links, 3 admin wraps.
         let socials = (0..MAX_SOCIALS).map(|_| ("linkedin".to_string(), "u".repeat(MAX_SOCIAL_URL))).collect();
-        let long = Body { display_name: "n".repeat(64), bio: "b".repeat(500), experience: "e".repeat(500), socials, private: true };
+        let long = Body { display_name: "n".repeat(64), bio: "b".repeat(400), experience: "e".repeat(400), socials, private: true };
         let admins = [pk(1), pk(2), pk(3)];
         let e = build(&sk(4), &SITE_ID, &USER, 1, 1, &long, Some(&[7; 32]), &admins).unwrap();
         let n = to_bytes(&e).len();
-        assert!(n <= MAX_INLINE_PROFILE, "{n} bytes: measured 3658 without links on 2026-10-27");
+        assert!(n <= MAX_INLINE_PROFILE, "{n} bytes: measured 3956 on 2026-10-29");
     }
 
     #[test]
@@ -602,9 +602,9 @@ mod tests {
         for (l, u) in [("mastodon", "a.b"), ("website", ""), ("website", "https://"), ("website", "a b.c"), ("website", "ftp://a.b"), ("website", "é.com"), ("website", &"u".repeat(MAX_SOCIAL_URL + 1))] {
             assert!(social(l, u).is_err(), "{l} {u}");
         }
-        let five: Vec<_> = (0..=MAX_SOCIALS).map(|i| ("other".to_string(), format!("a{i}.com"))).collect();
-        assert!(socials(&five).is_err(), "too many");
-        assert_eq!(socials(&five[..MAX_SOCIALS]).unwrap().len(), MAX_SOCIALS);
+        let eight: Vec<_> = (0..=MAX_SOCIALS).map(|i| ("other".to_string(), format!("a{i}.com"))).collect();
+        assert!(socials(&eight).is_err(), "too many");
+        assert_eq!(socials(&eight[..MAX_SOCIALS]).unwrap().len(), MAX_SOCIALS);
         assert_eq!(socials_from_json(r#"[["x","x.com/a"]]"#).unwrap(), [("x".to_string(), "x.com/a".to_string())]);
         assert!(socials_from_json("{").is_err() && socials_from_json(" ").unwrap().is_empty());
     }
