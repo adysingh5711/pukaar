@@ -1045,10 +1045,10 @@ Item {
         id: flag
         required property string modelData
         spacing: 6
-        Icon { y: 2; name: "warn"; size: 15; color: root.t.danger }
+        Icon { y: 1; name: "warn"; size: 14; color: root.t.danger }
         Label {
-            width: flag.width - 21; wrapMode: Text.Wrap; text: flag.modelData
-            font.pointSize: root.smallSize; font.weight: Font.DemiBold; color: root.t.danger
+            width: flag.width - 20; wrapMode: Text.Wrap; text: flag.modelData
+            font.pointSize: root.sizes.cap; font.weight: Font.Medium; color: root.t.danger
         }
     }
 
@@ -1154,33 +1154,26 @@ Item {
         readonly property color ink: issue.location_retired ? root.t.muted : root.t.fg   // a retired place's card is quieter
         readonly property bool linked: issue.location !== "other"
         width: ListView.view.width
-        topPadding: 10; bottomPadding: 12; rightPadding: 12
-        leftPadding: current ? 16 : 12
-        background: Frame {
-            ring: card.visualFocus
-            radius: 6
+        padding: root.gaps.pad
+        hoverEnabled: true
+        background: Rectangle {   // Harbor's .card: s2 on the lane, s3 when hovered, pressed or open in the pane (then edged in its stage colour)
+            radius: root.radii.card
+            color: card.down || card.hovered || card.current ? root.t.hover : card.issue.location_retired ? root.t.well : root.t.card
             border.width: card.visualFocus ? 2 : 1
-            fill: card.down ? Qt.darker(root.t.card, 1.06) : card.issue.location_retired ? root.t.well : root.t.card
-            edge: card.current || card.hovered ? root.t.ctlBd : root.t.bd
-            Shape {   // 5 px strip, round on its outer corners only
-                visible: card.current
-                x: -1; y: -1; width: 5; height: card.height + 2
-                preferredRendererType: Shape.CurveRenderer
-                ShapePath {
-                    strokeColor: "transparent"; fillColor: card.stage.edge
-                    PathSvg { path: "M5 0H6A6 6 0 0 0 0 6V" + (card.height - 4) + "A6 6 0 0 0 6 " + (card.height + 2) + "H5Z" }
-                }
-            }
+            border.color: card.visualFocus ? root.t.focus : card.current ? card.stage.edge : root.t.bd
+            Behavior on color { EasedColor {} }
+            Behavior on border.color { EasedColor {} }
         }
         Accessible.name: card.placeText + ": " + card.issue.text
         Accessible.description: card.issue.stage + ". " + card.hintText + " " + card.flags.join(" ")
         contentItem: Column {
-            spacing: 6
+            spacing: root.gaps.row
             Item {   // the code is a PlaceLink laid over the first line, which is indented to make room
                 width: parent.width; implicitHeight: placeLine.implicitHeight
                 Label {
                     id: placeLine
-                    width: parent.width; wrapMode: Text.Wrap; textFormat: Text.RichText; color: card.ink; font.weight: Font.DemiBold
+                    width: parent.width; wrapMode: Text.Wrap; textFormat: Text.RichText; color: root.t.muted
+                    font.pointSize: root.sizes.cap; font.weight: Font.Medium
                     text: card.linked ? "<div style='text-indent:" + (codeLink.width + 6) + "px'>" + root.esc(root.placeName(card.issue)) + "</div>"
                                       : root.mono(root.placeCode(card.issue)) + " " + root.esc(root.placeName(card.issue))
                 }
@@ -1190,9 +1183,9 @@ Item {
                     y: placeLine.baselineOffset - baselineOffset   // on the first line's baseline
                 }
             }
-            Label { width: parent.width; wrapMode: Text.Wrap; color: card.ink; font.pointSize: root.baseSize * 1.07; text: card.issue.text }
+            Label { width: parent.width; wrapMode: Text.Wrap; color: card.ink; font.pointSize: root.sizes.body; font.weight: Font.DemiBold; text: card.issue.text }
             Flow {
-                width: parent.width; spacing: 4
+                width: parent.width; spacing: root.gaps.row
                 StatusChip { label: card.issue.stage; stage: card.stage; icon: root.stageIcon(card.issue.status); maxWidth: parent.width }
                 StatusChip {
                     visible: card.issue.reopen_count > 0; maxWidth: parent.width
@@ -1204,7 +1197,7 @@ Item {
                     stage: ({ fg: root.t.onPrimary, bg: root.t.primary, bd: root.t.primary })
                 }
             }
-            Label { width: parent.width; wrapMode: Text.Wrap; font.pointSize: root.smallSize; color: root.t.muted; text: card.hintText }
+            Label { width: parent.width; wrapMode: Text.Wrap; font.pointSize: root.sizes.cap; color: root.t.muted; text: card.hintText }
             Repeater {
                 model: card.flags
                 delegate: FlagLine { width: card.availableWidth }
@@ -1226,16 +1219,17 @@ Item {
             : !a || state === "never" ? root.plural(root.info.events || 0, "event") + " recorded, none anchored"
             : root.plural(root.info.events || 0, "event") + (root.newerEvents(a) ? ", " + root.newerEvents(a) + " newer not anchored yet" : ""))
             + (root.info.forks > 0 ? " · " + root.conflicts : "")
-        Layout.fillWidth: true; Layout.bottomMargin: 8
-        implicitHeight: line.implicitHeight + 16
-        radius: 8; color: root.t.well; border.color: root.t.bd
+        Layout.fillWidth: true; Layout.bottomMargin: root.gaps.row
+        implicitHeight: Math.max(44, line.implicitHeight + 20)
+        radius: root.radii.panel; color: root.t.well; border.color: root.t.bd   // Harbor's .integrity: a 44 px panel
         Accessible.role: Accessible.StaticText; Accessible.name: head + ", " + detail
-        Flow {   // the dot is a glyph, so the text and the link wrap as two units
+        Flow {   // the icon, the text and the link wrap as units
             id: line
-            x: 12; y: 8; width: parent.width - 24; spacing: 10
+            x: 16; y: (parent.height - height) / 2; width: parent.width - 32; spacing: 10
+            Icon { name: "shield"; size: 18; color: strip.tone }
             Label {
-                textFormat: Text.StyledText; font.pointSize: root.smallSize
-                text: "<font color='" + strip.tone + "'>●</font>&nbsp; <b><font color='" + strip.tone + "'>" + strip.head + "</font></b> <font color='" + root.t.muted + "'>· " + strip.detail + "</font>"
+                textFormat: Text.StyledText; font.pointSize: root.sizes.small
+                text: "<b><font color='" + root.t.fg + "'>" + strip.head + "</font></b> <font color='" + root.t.muted + "'>· " + strip.detail + "</font>"
             }
             LinkButton { text: "Open Integrity  ›"; Accessible.name: "Open Integrity"; onClicked: root.openPage("proof") }
         }
@@ -1322,26 +1316,35 @@ Item {
         }
     }
 
-    // A board column's title: stage icon, name, count pill, and a one-line subtitle.
-    component ColumnHeader: Column {
+    // A board lane's head (Harbor's .lane-head): a stage-tinted band with the icon tile, name, count pill and subtitle.
+    component ColumnHeader: Rectangle {
         id: head
         required property string title
         required property string subtitle
         required property string icon
         required property color tint
         required property int count
-        width: parent.width; spacing: 2; bottomPadding: 8
-        RowLayout {   // the title wraps, the count chip stays beside it
-            width: parent.width; spacing: 8
-            Icon { Layout.alignment: Qt.AlignTop; Layout.topMargin: 2; name: head.icon; size: 16; color: head.tint }
-            Label { Layout.fillWidth: true; text: head.title; font.weight: Font.DemiBold; wrapMode: Text.Wrap }
-            Rectangle {
-                Layout.alignment: Qt.AlignTop
-                implicitWidth: Math.max(22, countText.implicitWidth + 14); implicitHeight: 20; radius: 10; color: root.t.closed.bg
-                Label { id: countText; anchors.centerIn: parent; text: head.count; font.pointSize: root.smallSize; font.weight: Font.DemiBold }
+        implicitHeight: headCol.implicitHeight + 26
+        topLeftRadius: root.radii.panel - 1; topRightRadius: root.radii.panel - 1   // inside the lane's 1 px border
+        color: root.wash(tint, root.t.well, 0.06)
+        Column {
+            id: headCol
+            x: 16; y: 14; width: parent.width - 32; spacing: 6
+            RowLayout {   // the title wraps, the count chip stays beside it
+                width: parent.width; spacing: root.gaps.row
+                Rectangle {
+                    implicitWidth: 30; implicitHeight: 30; radius: root.radii.ctl; color: root.wash(head.tint, root.t.well)
+                    Icon { anchors.centerIn: parent; name: head.icon; size: 16; color: head.tint }
+                }
+                Label { Layout.fillWidth: true; text: head.title; font.pointSize: root.sizes.lead; font.weight: Font.DemiBold; wrapMode: Text.Wrap }
+                Rectangle {
+                    Layout.alignment: Qt.AlignTop
+                    implicitWidth: Math.max(26, countText.implicitWidth + 16); implicitHeight: 24; radius: 12; color: root.t.hover
+                    Label { id: countText; anchors.centerIn: parent; text: head.count; font.pointSize: root.sizes.small; font.weight: Font.DemiBold }
+                }
             }
+            Label { width: parent.width; wrapMode: Text.Wrap; text: head.subtitle; font.pointSize: root.sizes.cap; color: root.t.muted }
         }
-        Label { width: parent.width; wrapMode: Text.Wrap; text: head.subtitle; font.pointSize: root.smallSize; color: root.t.muted }
     }
 
     // One timeline entry (an issue_timeline() event): a node on the spine, the plain label then the
@@ -1356,7 +1359,7 @@ Item {
         Rectangle {
             Layout.alignment: Qt.AlignTop
             implicitWidth: 28; implicitHeight: 28; radius: 14
-            color: row.rejected ? root.t.dangerBg : root.t.well
+            color: row.rejected ? root.t.dangerBg : root.t.card
             border.color: row.rejected ? root.t.dangerBd : root.t.bd
             Icon { anchors.centerIn: parent; name: row.rejected ? "reject" : row.kind[2] || "cmt"; size: 16; color: row.rejected ? root.t.danger : root.t.muted }
         }
@@ -1393,94 +1396,78 @@ Item {
         }
     }
 
-    // "Why it isn't closed yet" (proposal F): the steps root.whyCard() returns, tinted by the issue's stage.
+    // "Why it isn't closed yet" (proposal F): the steps root.whyCard() returns (Harbor's .why: an s1 box, a 16 px title, a
+    // dot per step that gets a tick when done). The stage tints the title icon and the tick's wash.
     // A finished issue shows "How it was closed" (root.closedCard()) in the same frame.
     component WhyCard: Rectangle {
         id: why
         required property var card      // whyCard(): {intro, steps: [{title, hint, meter?, done?}], never, flags?, foot?}
-        required property var stage     // stageStyle(): header tint, icon and border
+        required property var stage     // stageStyle(): the title icon's tint
         property string title: "Why it isn't closed yet"
         property string icon: "info"
-        implicitHeight: whyCol.implicitHeight + 2
-        radius: 8; color: root.t.card; border.color: why.stage.bd
+        implicitHeight: whyCol.implicitHeight + 34
+        radius: root.radii.card; color: root.t.well
         Accessible.role: Accessible.Grouping; Accessible.name: why.title
         ColumnLayout {
             id: whyCol
-            x: 1; y: 1; width: parent.width - 2
-            spacing: 0
-            Rectangle {
-                Layout.fillWidth: true
-                implicitHeight: whyHead.implicitHeight + 16
-                color: why.stage.bg; topLeftRadius: 7; topRightRadius: 7
-                RowLayout {
-                    id: whyHead
-                    anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; margins: 12 }
-                    spacing: 8
-                    Icon { name: why.icon; size: 16; color: why.stage.fg }
-                    Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: why.title; font.weight: Font.DemiBold }
-                }
+            x: 18; y: 16; width: parent.width - 36
+            spacing: root.gaps.row
+            RowLayout {
+                Layout.fillWidth: true; spacing: root.gaps.row
+                Icon { name: why.icon; size: 16; color: why.stage.fg }
+                Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: why.title; font.pointSize: root.sizes.h3; font.weight: Font.DemiBold }
             }
-            ColumnLayout {
-                Layout.fillWidth: true; Layout.margins: 12; Layout.topMargin: 10; Layout.bottomMargin: 10
-                spacing: 0
-                Label { visible: why.card.intro !== ""; Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.RichText; text: why.card.intro; bottomPadding: 6 }
-                Repeater {
-                    model: why.card.steps
-                    delegate: ColumnLayout {
-                        id: step
-                        required property var modelData
-                        required property int index
-                        readonly property bool dashed: index > 0 || why.card.intro !== ""
+            Label { visible: why.card.intro !== ""; Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.RichText; text: why.card.intro }
+            Repeater {
+                model: why.card.steps
+                delegate: RowLayout {
+                    id: step
+                    required property var modelData
+                    Layout.fillWidth: true; Layout.topMargin: 4
+                    spacing: 12
+                    Rectangle {   // the dot: empty, then a green-washed tick once the step is done
+                        Layout.alignment: Qt.AlignTop
+                        implicitWidth: 22; implicitHeight: 22; radius: 11
+                        color: step.modelData.done ? root.t.resolved.bg : "transparent"
+                        border.width: step.modelData.done ? 0 : 1; border.color: root.t.ph
+                        Icon { anchors.centerIn: parent; visible: !!step.modelData.done; name: "tick"; size: 14; color: root.t.resolved.fg }
+                    }
+                    ColumnLayout {
                         Layout.fillWidth: true
-                        spacing: 0
-                        DashLine { visible: step.dashed; Layout.fillWidth: true }   // between the steps
-                        RowLayout {
-                            Layout.fillWidth: true; Layout.topMargin: step.dashed ? 8 : 0; Layout.bottomMargin: 8
-                            spacing: 10
-                            Rectangle {
-                                Layout.alignment: Qt.AlignTop
-                                implicitWidth: 24; implicitHeight: 24; radius: 12; color: "transparent"
-                                border.width: 2; border.color: step.modelData.done ? root.t.resolved.fg : root.t.ctlBd
-                                Label {
-                                    anchors.centerIn: parent; text: step.index + 1; font.pointSize: root.smallSize; font.bold: true
-                                    color: step.modelData.done ? root.t.resolved.fg : root.t.fg
-                                }
-                            }
-                            ColumnLayout {
-                                Layout.fillWidth: true
-                                spacing: 2
-                                Label { Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.RichText; text: step.modelData.title }
-                                Rectangle {   // the residents' votes so far, of 2
-                                    visible: step.modelData.meter !== undefined
-                                    Layout.fillWidth: true; Layout.maximumWidth: 160; Layout.topMargin: 4; implicitHeight: 8
-                                    radius: 4; color: root.t.bd
-                                    Accessible.role: Accessible.Indicator; Accessible.name: step.modelData.hint
-                                    Rectangle { width: parent.width * Math.min(step.modelData.meter || 0, 2) / 2; height: 8; radius: 4; color: root.t.resolved.fg }
-                                }
-                                Label {
-                                    visible: text !== ""; Layout.fillWidth: true; wrapMode: Text.Wrap
-                                    text: step.modelData.hint; font.pointSize: root.smallSize; color: root.t.muted
-                                }
-                            }
+                        spacing: 2
+                        Label {
+                            Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.RichText; text: step.modelData.title
+                            font.weight: Font.Medium; color: step.modelData.done ? root.t.muted : root.t.fg
+                        }
+                        Rectangle {   // the residents' votes so far, of 2
+                            visible: step.modelData.meter !== undefined
+                            Layout.fillWidth: true; Layout.maximumWidth: 160; Layout.topMargin: 4; implicitHeight: 8
+                            radius: 4; color: root.t.hover
+                            Accessible.role: Accessible.Indicator; Accessible.name: step.modelData.hint
+                            Rectangle { width: parent.width * Math.min(step.modelData.meter || 0, 2) / 2; height: 8; radius: 4; color: root.t.resolved.fg }
+                        }
+                        Label {
+                            visible: text !== ""; Layout.fillWidth: true; wrapMode: Text.Wrap
+                            text: step.modelData.hint; font.pointSize: root.sizes.cap; color: root.t.muted
                         }
                     }
                 }
-                Rectangle {   // the fixer never confirms their own fix
-                    visible: why.card.never !== ""
-                    Layout.fillWidth: true
-                    implicitHeight: neverRow.implicitHeight + 12
-                    radius: 6; color: root.t.dangerBg; border.color: root.t.dangerBd
-                    RowLayout {
-                        id: neverRow
-                        anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; leftMargin: 10; rightMargin: 10 }
-                        spacing: 8
-                        Icon { Layout.alignment: Qt.AlignTop; Layout.topMargin: 1; name: "warn"; size: 15; color: root.t.danger }
-                        Label { Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.RichText; text: why.card.never; font.pointSize: root.smallSize }
-                    }
-                }
-                Repeater { model: why.card.flags || []; delegate: FlagLine { Layout.fillWidth: true; Layout.bottomMargin: 4 } }
-                Help { visible: !!why.card.foot; text: why.card.foot || "" }
             }
+            Rectangle {   // the fixer never confirms their own fix
+                visible: why.card.never !== ""
+                Layout.fillWidth: true; Layout.topMargin: 4
+                implicitHeight: neverRow.implicitHeight + 20
+                radius: root.radii.ctl; color: root.t.dangerBg
+                RowLayout {
+                    id: neverRow
+                    anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; leftMargin: 12; rightMargin: 12 }
+                    spacing: root.gaps.row
+                    Icon { Layout.alignment: Qt.AlignTop; Layout.topMargin: 1; name: "warn"; size: 15; color: root.t.danger }
+                    Label { Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.RichText; text: why.card.never; font.pointSize: root.sizes.small }
+                }
+            }
+            Repeater { model: why.card.flags || []; delegate: FlagLine { Layout.fillWidth: true } }
+            Help { visible: !!why.card.foot; text: why.card.foot || "" }
         }
     }
 
@@ -1618,39 +1605,48 @@ Item {
         Row { id: blankActs; Layout.alignment: Qt.AlignHCenter; Layout.topMargin: children.length > 0 ? 8 : 0; spacing: 8 }
     }
 
-    // A row of joined toggle buttons, one pressed (History's Status and When). `current` is the
-    // pressed index, bound by the caller; a press emits picked(index).
-    component Segmented: Row {
+    // Harbor's .seg: a pill of toggle buttons on the field colour, the pressed one lifted to s3 (History's Status and
+    // When, the meeting lengths and reminders). `current` is the pressed index, bound by the caller; a press emits picked(index).
+    component Segmented: Rectangle {
         id: seg
         property var options: []
         property int current: 0
         property string name
         signal picked(int index)
-        spacing: -1                          // neighbours share one border
+        implicitWidth: segRow.implicitWidth + 6; implicitHeight: 36
+        radius: root.radii.nav; color: root.t.field; border.color: root.t.bd
         Accessible.role: Accessible.Grouping; Accessible.name: name
-        Repeater {
-            model: seg.options
-            delegate: AbstractButton {
-                id: opt
-                required property string modelData
-                required property int index
-                readonly property bool on: seg.current === index
-                readonly property real r: index === 0 ? 6 : 0
-                readonly property real rr: index === seg.options.length - 1 ? 6 : 0
-                text: modelData
-                implicitHeight: 36; leftPadding: 12; rightPadding: 12
-                hoverEnabled: true
-                focusPolicy: Qt.StrongFocus
-                Accessible.role: Accessible.Button; Accessible.checkable: true; Accessible.checked: on
-                Keys.onReturnPressed: clicked()
-                Keys.onEnterPressed: clicked()
-                onClicked: seg.picked(index)
-                contentItem: Label { text: opt.text; color: opt.on ? root.t.accent : root.t.fg; font.weight: opt.on ? Font.DemiBold : Font.Normal; verticalAlignment: Text.AlignVCenter }
-                background: Rectangle {
-                    z: opt.visualFocus ? 1 : 0
-                    color: opt.on ? root.t.accentBg : opt.hovered ? root.t.hover : root.t.field
-                    topLeftRadius: opt.r; bottomLeftRadius: opt.r; topRightRadius: opt.rr; bottomRightRadius: opt.rr
-                    border.width: opt.visualFocus ? 2 : 1; border.color: opt.visualFocus ? root.t.focus : root.t.ctlBd
+        Row {
+            id: segRow
+            x: 3; y: 3; spacing: 2
+            Repeater {
+                model: seg.options
+                delegate: AbstractButton {
+                    id: opt
+                    required property string modelData
+                    required property int index
+                    readonly property bool on: seg.current === index
+                    text: modelData
+                    implicitHeight: 28; leftPadding: 12; rightPadding: 12
+                    hoverEnabled: true
+                    focusPolicy: Qt.StrongFocus
+                    Accessible.role: Accessible.Button; Accessible.checkable: true; Accessible.checked: on
+                    Keys.onReturnPressed: clicked()
+                    Keys.onEnterPressed: clicked()
+                    onClicked: seg.picked(index)
+                    scale: down ? 0.97 : 1
+                    Behavior on scale { Eased { duration: 100 } }
+                    contentItem: Label {
+                        text: opt.text; font.pointSize: root.sizes.small; font.weight: Font.Medium; verticalAlignment: Text.AlignVCenter
+                        color: opt.on || opt.hovered ? root.t.fg : root.t.muted
+                        Behavior on color { EasedColor {} }
+                    }
+                    background: Rectangle {
+                        radius: root.radii.chip
+                        color: opt.on ? root.t.hover : "transparent"
+                        border.width: opt.visualFocus ? 2 : 0; border.color: root.t.focus
+                        Behavior on color { EasedColor {} }
+                    }
                 }
             }
         }
@@ -1991,8 +1987,9 @@ Item {
         Keys.onReturnPressed: clicked()
         Keys.onEnterPressed: clicked()
         background: Rectangle {
-            radius: 6; color: more.hovered ? root.t.hover : root.t.card
-            border.width: more.visualFocus ? 2 : 1; border.color: more.visualFocus ? root.t.focus : root.t.ctlBd
+            radius: root.radii.ctl; color: more.hovered ? root.t.hover : root.t.card
+            border.width: more.visualFocus ? 2 : 1; border.color: more.visualFocus ? root.t.focus : root.t.bd
+            Behavior on color { EasedColor {} }
         }
         contentItem: RowLayout {
             spacing: 8
@@ -3214,19 +3211,20 @@ Item {
                         root.issues.forEach(function (i) { if (root.mineOk(i)) c[!root.isTerminal(i.status) ? 0 : root.onBoard(i) ? 1 : 2]++ })
                         return c
                     }
-                    RowLayout {
+                    spacing: root.gaps.gutter
+                    RowLayout {   // the title with its counts, and the filter on the right
                         Layout.fillWidth: true
                         spacing: 16
-                        MineCheck {}
-                        Label {
-                            Layout.fillWidth: true; horizontalAlignment: Text.AlignRight; wrapMode: Text.Wrap
-                            text: boardPage.tally[0] + " open · " + boardPage.tally[1] + " recently done · " + boardPage.tally[2] + " older"
-                            font.pointSize: root.smallSize; color: root.t.muted
+                        PageHead {
+                            Layout.bottomMargin: 0
+                            title: "Issue Tracker"
+                            lede: "<b><font color='" + root.t.fg + "'>" + boardPage.tally[0] + "</font></b> open · <b><font color='" + root.t.fg + "'>" + boardPage.tally[1]
+                                  + "</font></b> recently done · <b><font color='" + root.t.fg + "'>" + boardPage.tally[2] + "</font></b> older"
                         }
+                        MineCheck { Layout.alignment: Qt.AlignTop }
                     }
                     Flash {   // the record no longer matches its anchor: every member sees it, on every Board visit
                         visible: root.anchorState === "mismatch"
-                        Layout.bottomMargin: 8
                         err: true
                         lead: "The site record does not match its last anchor."
                         text: "Someone may have changed history after it was anchored."
@@ -3235,7 +3233,6 @@ Item {
                     }
                     Flash {   // an empty board says why, and what to do
                         visible: root.boardCount === 0
-                        Layout.bottomMargin: 8
                         text: !root.approved ? "No reports yet."
                             : root.onlyMine ? "You haven't reported anything yet. Use Report to raise a fault."
                                             : "No reports yet. Use Report to raise the first one."
@@ -3243,7 +3240,7 @@ Item {
                         onActivated: root.openPage("report")
                     }
                     RowLayout {   // the four columns
-                        spacing: 12
+                        spacing: root.gaps.gutter
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         Repeater {
@@ -3268,36 +3265,30 @@ Item {
                                 Layout.fillHeight: true
                                 Layout.preferredWidth: 1   // equal shares of the width...
                                 Layout.minimumWidth: 160   // ...but never thinner than this
-                                color: root.t.well; radius: 8; border.color: root.t.bd
+                                color: root.t.well; radius: root.radii.panel; border.color: root.t.bd   // Harbor's .lane: a panel
                                 ColumnLayout {
-                                    anchors { fill: parent; margins: 8 }
+                                    anchors { fill: parent; margins: 1 }
                                     spacing: 0
                                     ColumnHeader {   // the count is everything in the window, so it matches "+N more"
-                                        Layout.fillWidth: true; Layout.topMargin: 4; Layout.leftMargin: 4
+                                        Layout.fillWidth: true
                                         title: col.modelData.title; subtitle: col.modelData.subtitle; count: col.cards.length
                                         icon: root.stageIcon(col.modelData.status); tint: root.stageStyle(col.modelData.status).fg
                                     }
-                                    Label {   // an empty column says so, in a dashed box
-                                        id: empty
+                                    Label {   // an empty column says so
                                         visible: col.cards.length === 0
-                                        Layout.fillWidth: true; padding: 12; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap
+                                        Layout.fillWidth: true; Layout.margins: root.gaps.gutter; Layout.topMargin: 18
+                                        horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap
                                         text: root.onlyMine ? "None of your reports here yet." : col.older > 0 ? col.modelData.quiet : col.modelData.empty
-                                        font.pointSize: root.smallSize; color: root.t.muted
-                                        background: Shape {
-                                            preferredRendererType: Shape.CurveRenderer
-                                            ShapePath {
-                                                strokeColor: root.t.ctlBd; strokeWidth: 1; fillColor: "transparent"
-                                                strokeStyle: ShapePath.DashLine; dashPattern: [4, 3]
-                                                PathSvg { path: root.box(0.5, 0.5, empty.width - 1, empty.height - 1, 6) }
-                                            }
-                                        }
+                                        font.pointSize: root.sizes.small; color: root.t.ph
                                     }
                                     ListView {
                                         id: cardList
                                         Layout.fillWidth: true
                                         Layout.fillHeight: true
+                                        Layout.leftMargin: root.gaps.gutter; Layout.rightMargin: root.gaps.gutter
+                                        topMargin: root.gaps.gutter; bottomMargin: root.gaps.gutter
                                         clip: true
-                                        spacing: 8
+                                        spacing: root.gaps.gutter
                                         model: col.over > 0 && !col.showAll ? col.cards.slice(0, root.boardCap) : col.cards
                                         delegate: IssueCard {
                                             required property var modelData
@@ -3306,7 +3297,7 @@ Item {
                                         }
                                         footer: Column {   // "+N more" under the last card, then the way to the older ones
                                             width: cardList.width
-                                            topPadding: col.cards.length > 0 && (col.over > 0 || col.older > 0) ? 8 : 0
+                                            topPadding: col.cards.length > 0 && (col.over > 0 || col.older > 0) ? root.gaps.row : 0
                                             spacing: 4
                                             MoreToggle {
                                                 visible: col.over > 0
@@ -3326,20 +3317,20 @@ Item {
                                                 Keys.onReturnPressed: clicked()
                                                 Keys.onEnterPressed: clicked()
                                                 background: Rectangle {
-                                                    color: olderLink.hovered ? root.t.hover : "transparent"; bottomLeftRadius: 6; bottomRightRadius: 6
+                                                    radius: root.radii.ctl; color: olderLink.hovered ? root.t.hover : "transparent"
                                                     border.width: olderLink.visualFocus ? 2 : 0; border.color: root.t.focus
-                                                    DashLine { width: parent.width; color: root.t.ctlBd; pattern: [4, 3] }
+                                                    Behavior on color { EasedColor {} }
                                                 }
                                                 contentItem: Flow {
                                                     spacing: 6
                                                     Label {
                                                         width: Math.min(implicitWidth, parent.width); wrapMode: Text.Wrap; textFormat: Text.StyledText
                                                         text: "<b><font color='" + root.t.fg + "'>" + col.older + " older</font></b> " + col.modelData.older + ", nothing deleted."
-                                                        font.pointSize: root.smallSize; color: root.t.muted
+                                                        font.pointSize: root.sizes.cap; color: root.t.muted
                                                     }
                                                     Row {
                                                         spacing: 2
-                                                        Label { text: "History"; color: root.t.accent; font.pointSize: root.smallSize; font.weight: Font.DemiBold }
+                                                        Label { text: "History"; color: root.t.accent; font.pointSize: root.sizes.cap; font.weight: Font.DemiBold }
                                                         Icon { anchors.verticalCenter: parent.verticalCenter; name: "chev"; size: 14; color: root.t.accent }
                                                     }
                                                 }
@@ -3350,6 +3341,7 @@ Item {
                             }
                         }
                     }
+                    IntegrityStrip { Layout.bottomMargin: 0 }   // Harbor's footer: the anchor at a glance, a link to Integrity
                 }
 
                 // Report: two steps, "What's wrong?" and "Where?" (one grouped, filterable place list)
@@ -5273,311 +5265,333 @@ Item {
                 }
             }
 
-            // The issue pane: header, the report, why it isn't closed yet, then the actions grouped by
-            // who they are for, what isn't available (and why), and the timeline last. It scrolls whole.
-            ScrollView {
-                id: detail
-                visible: root.paneOpen
+            // The issue pane (Harbor's .sheet): a floating s2 panel with a fixed head (code, stage chips, close, place name) and a
+            // scrolling body: the report, why it isn't closed yet, the actions grouped by who they are for, what isn't available
+            // (and why), and the timeline last. It fades and slides in from the right over 220 ms and out over 160 ms; the issue it
+            // shows is kept (`snap`) until it has gone. Narrow, it takes the page's place (no exit animation: both would share the width).
+            Item {
+                id: sheet
+                property var snap: null
+                Binding { target: sheet; property: "snap"; value: root.selected; when: root.selected !== null; restoreMode: Binding.RestoreNone }
+                visible: root.paneOpen || (opacity > 0 && !root.narrow)
+                opacity: root.paneOpen ? 1 : 0
+                Behavior on opacity { Eased { duration: root.paneOpen ? root.motion.slow : root.motion.base } }
+                transform: Translate {
+                    x: root.paneOpen ? 0 : root.gaps.gutter + 4
+                    Behavior on x { Eased { duration: root.paneOpen ? root.motion.slow : root.motion.base } }
+                }
                 Layout.fillWidth: root.narrow   // wide: a fixed pane beside the page; narrow: it takes over
                 Layout.preferredWidth: root.narrow ? -1 : 400
                 Layout.minimumWidth: 260
                 Layout.fillHeight: true
-                contentWidth: availableWidth
-                clip: true
-                leftPadding: root.narrow ? 0 : 16
-                background: Rectangle {
-                    color: root.t.page
-                    Rectangle { visible: !root.narrow; width: 1; height: parent.height; color: root.t.bd }
+                Rectangle {
+                    anchors.fill: parent
+                    radius: root.radii.panel; color: root.t.card; border.color: root.t.bd
+                    Elevation {}
                 }
-                property var issue: root.selected ? root.selected.issue : ({})
-                property string st: issue.status || ""
-                property bool mine: issue.reporter === root.me.key
-                readonly property var stage: root.stageStyle(st)
-                // The rules (root.stewardWhy/confirmWhy/reopenWhy): "" = this viewer may.
-                readonly property bool steward: root.stewardWhy(issue) === ""
-                readonly property bool canConfirm: root.confirmWhy(issue) === ""
-                readonly property bool canReopen: root.reopenWhy(issue) === ""
-                readonly property bool finished: root.isTerminal(st)   // resolved or closed: Still broken? Reopen
-                Keys.onEscapePressed: root.closeIssue()
-                property bool hasNote: note.text.trim() !== ""   // the core rejects these without one
-                readonly property string issueId: issue.id || ""
-                onIssueIdChanged: { wontFix.armed = false; markDup.armed = false }   // a confirm never carries over to another issue
-                readonly property int etaHours: parseInt(eta.text) || 0
-                function act(a, eta) {
-                    root.run("act", [issue.id, a, note.text, nextStep.text, eta | 0],
-                             function () { note.text = ""; nextStep.text = "" })
-                }
-                // The reporter brings it straight back to Reported (and the board shows it there); another
-                // resident's reopen is one of two votes, so it may stay where it is.
-                function reopenOld() {
-                    var i = issue, code = root.placeCode(i)
-                    root.run("act", [i.id, "reopen", reopenReason.text, "", 0], function () {
-                        reopenReason.text = ""
-                        if (i.reporter !== root.me.key) {
-                            root.notice = "Your reopen of " + code + " is recorded. It goes back to the Issue Tracker once a second resident, or the reporter, reopens it too."
-                            return
-                        }
-                        root.notice = code + " is back in the Issue Tracker, in Reported. It carries its whole history and shows Reopened " + (i.reopen_count + 1) + "×."
-                        root.openPage("board")
-                    })
-                }
+                MouseArea { anchors.fill: parent; z: 2; visible: !root.paneOpen; hoverEnabled: true }   // nothing is clickable while it fades out
                 ColumnLayout {
-                    x: (detail.availableWidth - width) / 2
-                    width: Math.min(detail.availableWidth, 760)
+                    anchors { fill: parent; margins: 1 }
                     spacing: 0
-                    RowLayout {
-                        Layout.fillWidth: true; Layout.bottomMargin: 8
-                        Item { visible: !root.narrow; Layout.fillWidth: true }
-                        FramedButton {   // wide: an icon-only ×; narrow: back to the page underneath ("Close" reads like an outcome)
-                            id: paneBack
-                            readonly property string pageName: root.page === "history" ? "History" : "Issue Tracker"
-                            text: root.narrow ? "Back" : ""; iconName: root.narrow ? "chevl" : "x"
-                            Accessible.name: root.narrow ? "Back to " + pageName : "Close panel"
-                            onClicked: root.closeIssue()
-                            SideTip { visible: !root.narrow && (paneBack.hovered || paneBack.visualFocus); text: "Close panel"; x: parent.width - width; y: parent.height + 6 }
+                    ColumnLayout {   // the head stays put while the body scrolls
+                        Layout.fillWidth: true; Layout.maximumWidth: 760 + 48; Layout.alignment: Qt.AlignHCenter   // lines up with the body's 760 px column
+                        Layout.margins: 24; Layout.topMargin: 18; Layout.bottomMargin: 18
+                        spacing: 10
+                        RowLayout {   // wide: the chips, then an icon-only close; narrow: "Back" first, to the page underneath ("Close" reads like an outcome)
+                            Layout.fillWidth: true
+                            layoutDirection: root.narrow ? Qt.RightToLeft : Qt.LeftToRight
+                            spacing: root.gaps.row
+                            Flow {   // code, stage, reopens, the reporter's call to action, category
+                                Layout.fillWidth: true; Layout.alignment: Qt.AlignTop
+                                spacing: 6
+                                Item {   // the code: a link to that place's History ("Other" has no page of its own)
+                                    width: other ? otherCode.implicitWidth : paneCode.implicitWidth; height: 24
+                                    readonly property bool other: detail.issue.location === "other"
+                                    Label { id: otherCode; visible: parent.other; height: 24; verticalAlignment: Text.AlignVCenter; textFormat: Text.RichText; text: root.mono("Other") }
+                                    PlaceLink { id: paneCode; visible: !parent.other; anchors.verticalCenter: parent.verticalCenter; code: detail.issue.location || "" }
+                                }
+                                StatusChip { label: detail.issue.stage || ""; stage: detail.stage; icon: root.stageIcon(detail.st); maxWidth: parent.width }
+                                StatusChip {
+                                    visible: detail.issue.reopen_count > 0; maxWidth: parent.width
+                                    label: "Reopened " + detail.issue.reopen_count + "×"; stage: root.t.closed; icon: "reopen"
+                                }
+                                StatusChip {
+                                    visible: detail.mine && detail.canConfirm; maxWidth: parent.width; strong: true
+                                    label: "Needs your confirmation"; icon: "bell"
+                                    stage: ({ fg: root.t.onPrimary, bg: root.t.primary, bd: root.t.primary })
+                                }
+                                Label { height: 24; verticalAlignment: Text.AlignVCenter; text: "· " + (detail.issue.category || ""); font.pointSize: root.sizes.cap; color: root.t.muted }
+                            }
+                            FramedButton {
+                                id: paneBack
+                                Layout.alignment: Qt.AlignTop
+                                readonly property string pageName: root.page === "history" ? "History" : "Issue Tracker"
+                                text: root.narrow ? "Back" : ""; iconName: root.narrow ? "chevl" : "x"
+                                Accessible.name: root.narrow ? "Back to " + pageName : "Close panel"
+                                onClicked: root.closeIssue()
+                                SideTip { visible: !root.narrow && (paneBack.hovered || paneBack.visualFocus); text: "Close panel"; x: parent.width - width; y: parent.height + 6 }
+                            }
+                        }
+                        Label {
+                            Layout.fillWidth: true; wrapMode: Text.Wrap
+                            text: !detail.issue.location ? "" : root.placeName(detail.issue) || root.placeCode(detail.issue)
+                            font.pointSize: root.sizes.h2; font.weight: Font.DemiBold
                         }
                     }
-                    Flow {   // code, stage, reopens, the reporter's call to action, category
-                        Layout.fillWidth: true; Layout.bottomMargin: 4
-                        spacing: 6
-                        Item {   // the code: a link to that place's History ("Other" has no page of its own)
-                        width: other ? otherCode.implicitWidth : paneCode.implicitWidth; height: 24
-                        readonly property bool other: detail.issue.location === "other"
-                        Label { id: otherCode; visible: parent.other; height: 24; verticalAlignment: Text.AlignVCenter; textFormat: Text.RichText; text: root.mono("Other") }
-                        PlaceLink { id: paneCode; visible: !parent.other; anchors.verticalCenter: parent.verticalCenter; code: detail.issue.location || "" }
-                    }
-                        StatusChip { label: detail.issue.stage || ""; stage: detail.stage; icon: root.stageIcon(detail.st); maxWidth: parent.width }
-                        StatusChip {
-                            visible: detail.issue.reopen_count > 0; maxWidth: parent.width
-                            label: "Reopened " + detail.issue.reopen_count + "×"; stage: root.t.closed; icon: "reopen"
+                    Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: root.t.bd }
+                    ScrollView {
+                        id: detail
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        contentWidth: availableWidth
+                        clip: true
+                        leftPadding: 24; rightPadding: 24; topPadding: 20; bottomPadding: 8   // the clip stays inside the rounded corners
+                        property var issue: sheet.snap ? sheet.snap.issue : ({})
+                        property string st: issue.status || ""
+                        property bool mine: issue.reporter === root.me.key
+                        readonly property var stage: root.stageStyle(st)
+                        // The rules (root.stewardWhy/confirmWhy/reopenWhy): "" = this viewer may.
+                        readonly property bool steward: root.stewardWhy(issue) === ""
+                        readonly property bool canConfirm: root.confirmWhy(issue) === ""
+                        readonly property bool canReopen: root.reopenWhy(issue) === ""
+                        readonly property bool finished: root.isTerminal(st)   // resolved or closed: Still broken? Reopen
+                        Keys.onEscapePressed: root.closeIssue()
+                        property bool hasNote: note.text.trim() !== ""   // the core rejects these without one
+                        readonly property string issueId: issue.id || ""
+                        onIssueIdChanged: { wontFix.armed = false; markDup.armed = false }   // a confirm never carries over to another issue
+                        readonly property int etaHours: parseInt(eta.text) || 0
+                        function act(a, eta) {
+                            root.run("act", [issue.id, a, note.text, nextStep.text, eta | 0],
+                                     function () { note.text = ""; nextStep.text = "" })
                         }
-                        StatusChip {
-                            visible: detail.mine && detail.canConfirm; maxWidth: parent.width; strong: true
-                            label: "Needs your confirmation"; icon: "bell"
-                            stage: ({ fg: root.t.onPrimary, bg: root.t.primary, bd: root.t.primary })
+                        // The reporter brings it straight back to Reported (and the board shows it there); another
+                        // resident's reopen is one of two votes, so it may stay where it is.
+                        function reopenOld() {
+                            var i = issue, code = root.placeCode(i)
+                            root.run("act", [i.id, "reopen", reopenReason.text, "", 0], function () {
+                                reopenReason.text = ""
+                                if (i.reporter !== root.me.key) {
+                                    root.notice = "Your reopen of " + code + " is recorded. It goes back to the Issue Tracker once a second resident, or the reporter, reopens it too."
+                                    return
+                                }
+                                root.notice = code + " is back in the Issue Tracker, in Reported. It carries its whole history and shows Reopened " + (i.reopen_count + 1) + "×."
+                                root.openPage("board")
+                            })
                         }
-                        Label { height: 24; verticalAlignment: Text.AlignVCenter; text: "· " + (detail.issue.category || ""); font.pointSize: root.smallSize; color: root.t.muted }
-                    }
-                    Label {
-                        Layout.fillWidth: true; Layout.topMargin: 4; wrapMode: Text.Wrap
-                        text: !detail.issue.location ? "" : root.placeName(detail.issue) || root.placeCode(detail.issue)
-                        font.pointSize: root.baseSize * 17 / 14; font.weight: Font.DemiBold
-                    }
-                    Flash {   // an old issue: why it is not on the board, and that nothing is lost
-                        visible: detail.finished && !root.onBoard(detail.issue)
-                        Layout.topMargin: 8; Layout.bottomMargin: 4
-                        text: visible ? root.offBoardText(detail.issue) : ""
-                    }
-                    Rectangle {   // the report itself, as the reporter wrote it
-                        Layout.fillWidth: true; Layout.topMargin: 6; Layout.bottomMargin: 14
-                        implicitHeight: quote.implicitHeight + 2
-                        radius: 6; color: root.t.page; border.color: root.t.bd
                         ColumnLayout {
-                            id: quote
-                            x: 1; y: 1; width: parent.width - 2
+                            x: (detail.availableWidth - width) / 2
+                            width: Math.min(detail.availableWidth, 760)
                             spacing: 0
-                            Label {
-                                Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.RichText
-                                leftPadding: 12; rightPadding: 12; topPadding: 6; bottomPadding: 6
-                                font.pointSize: root.smallSize; color: root.t.muted
-                                text: "Reported by " + root.esc(root.who(detail.issue.reporter, detail.issue.reporter_name)) + " "
-                                      + root.mono(String(detail.issue.reporter).substr(0, 6)) + root.formerTag(detail.issue.former) + " · " + root.when(detail.issue.reported_ts)
-                                background: Rectangle {
-                                    color: root.t.well; topLeftRadius: 5; topRightRadius: 5
-                                    Rectangle { width: parent.width; height: 1; anchors.bottom: parent.bottom; color: root.t.bd }
+                            Flash {   // an old issue: why it is not on the board, and that nothing is lost
+                                visible: detail.finished && !root.onBoard(detail.issue)
+                                Layout.bottomMargin: 16
+                                text: visible ? root.offBoardText(detail.issue) : ""
+                            }
+                            Rectangle {   // the report itself, as the reporter wrote it
+                                Layout.fillWidth: true; Layout.bottomMargin: 24
+                                implicitHeight: quote.implicitHeight + 28
+                                radius: root.radii.card; color: root.t.well
+                                ColumnLayout {
+                                    id: quote
+                                    x: 18; y: 14; width: parent.width - 36
+                                    spacing: 6
+                                    Label {
+                                        Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.RichText
+                                        font.pointSize: root.sizes.cap; color: root.t.muted
+                                        text: "Reported by " + root.esc(root.who(detail.issue.reporter, detail.issue.reporter_name)) + " "
+                                              + root.mono(String(detail.issue.reporter).substr(0, 6)) + root.formerTag(detail.issue.former) + " · " + root.when(detail.issue.reported_ts)
+                                    }
+                                    Label {
+                                        Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
+                                        text: detail.issue.text || ""; font.pointSize: root.sizes.lead
+                                    }
                                 }
                             }
-                            Label {
-                                Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
-                                leftPadding: 12; rightPadding: 12; topPadding: 8; bottomPadding: 8
-                                text: detail.issue.text || ""; font.pointSize: root.baseSize * 16 / 14
+                            WhyCard {
+                                readonly property var plan: detail.finished ? root.closedCard(detail.issue) : root.whyCard(detail.issue)
+                                visible: plan !== null
+                                Layout.fillWidth: true; Layout.bottomMargin: 24
+                                card: plan || ({ intro: "", steps: [], never: "" }); stage: detail.stage
+                                title: detail.finished ? "How it was closed" : "Why it isn't closed yet"
+                                icon: detail.finished ? root.stageIcon(detail.st) : "info"
                             }
-                        }
-                    }
-                    WhyCard {
-                        readonly property var plan: detail.finished ? root.closedCard(detail.issue) : root.whyCard(detail.issue)
-                        visible: plan !== null
-                        Layout.fillWidth: true; Layout.bottomMargin: 16
-                        card: plan || ({ intro: "", steps: [], never: "" }); stage: detail.stage
-                        title: detail.finished ? "How it was closed" : "Why it isn't closed yet"
-                        icon: detail.finished ? root.stageIcon(detail.st) : "info"
-                    }
-                    ActionGroup {
-                        // the reporter decides alone; another resident's confirm or reopen is one of two votes
-                        title: detail.mine ? "For the person who reported it" : "For residents"
-                        visible: detail.canConfirm
-                        enabled: !root.syncing
-                        Layout.bottomMargin: 14
-                        ActionButton {
-                            kind: "primary"
-                            text: detail.mine ? "Confirm it's fixed" : "Confirm (" + detail.issue.confirms + " of 2 residents so far)"
-                            onClicked: detail.act("confirm", 0)
-                        }
-                    }
-                    Rectangle {   // a claimed fix or a finished issue: reopen it, with its own reason, rather than report it again
-                        visible: detail.canReopen
-                        Layout.fillWidth: true; Layout.bottomMargin: 14
-                        implicitHeight: stillCol.implicitHeight + 24
-                        radius: 8; color: root.t.card; border.color: root.t.ctlBd
-                        Accessible.role: Accessible.Grouping; Accessible.name: "Still broken? Reopen"
-                        ColumnLayout {
-                            id: stillCol
-                            x: 12; y: 12; width: parent.width - 24
-                            spacing: 6
-                            RowLayout {
-                                spacing: 8
-                                Icon { name: "reopen"; size: 16; color: root.t.accent }
-                                Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: "Still broken? Reopen"; font.weight: Font.DemiBold; font.pointSize: root.baseSize * 15 / 14 }
+                            ActionGroup {
+                                // the reporter decides alone; another resident's confirm or reopen is one of two votes
+                                title: detail.mine ? "For the person who reported it" : "For residents"
+                                visible: detail.canConfirm
+                                enabled: !root.syncing
+                                Layout.bottomMargin: 14
+                                ActionButton {
+                                    kind: "primary"
+                                    text: detail.mine ? "Confirm it's fixed" : "Confirm (" + detail.issue.confirms + " of 2 residents so far)"
+                                    onClicked: detail.act("confirm", 0)
+                                }
                             }
-                            Help {
-                                text: "Reopen this issue rather than reporting a new one. It goes back to Reported with its whole history and shows Reopened "
-                                    + ((detail.issue.reopen_count || 0) + 1) + "×."
+                            Rectangle {   // a claimed fix or a finished issue: reopen it, with its own reason, rather than report it again
+                                visible: detail.canReopen
+                                Layout.fillWidth: true; Layout.bottomMargin: 14
+                                implicitHeight: stillCol.implicitHeight + 24
+                                radius: root.radii.card; color: root.t.well
+                                Accessible.role: Accessible.Grouping; Accessible.name: "Still broken? Reopen"
+                                ColumnLayout {
+                                    id: stillCol
+                                    x: 12; y: 12; width: parent.width - 24
+                                    spacing: 6
+                                    RowLayout {
+                                        spacing: 8
+                                        Icon { name: "reopen"; size: 16; color: root.t.accent }
+                                        Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: "Still broken? Reopen"; font.weight: Font.DemiBold; font.pointSize: root.sizes.lead }
+                                    }
+                                    Help {
+                                        text: "Reopen this issue rather than reporting a new one. It goes back to Reported with its whole history and shows Reopened "
+                                            + ((detail.issue.reopen_count || 0) + 1) + "×."
+                                    }
+                                    FormRow {
+                                        label: "Reason"; sub: "(what is wrong now)"
+                                        FramedTextArea {
+                                            id: reopenReason
+                                            name: "Reason for reopening"; boxHeight: 60; maxLength: 500
+                                            wrap: TextEdit.WrapAtWordBoundaryOrAnywhere
+                                            placeholder: "e.g. Leaking again under the tap"
+                                        }
+                                    }
+                                    ActionButton {
+                                        kind: detail.canConfirm ? "default" : "primary"
+                                        allowed: reopenReason.text.trim() !== ""
+                                        text: "Reopen (reason)" + (detail.issue.reopen_count > 0 ? ", reopened " + detail.issue.reopen_count + "×" : "")
+                                        onClicked: detail.reopenOld()
+                                    }
+                                }
                             }
                             FormRow {
-                                label: "Reason"; sub: "(what is wrong now)"
-                                FramedTextArea {
-                                    id: reopenReason
-                                    name: "Reason for reopening"; boxHeight: 60; maxLength: 500
-                                    wrap: TextEdit.WrapAtWordBoundaryOrAnywhere
-                                    placeholder: "e.g. Leaking again under the tap"
-                                }
+                                visible: root.approved
+                                label: "Note"; sub: "(what was seen, done or why)"
+                                FramedField { id: note; Layout.fillWidth: true; maximumLength: 500; Accessible.name: "Note"; placeholderText: "e.g. Pump checked, handle is loose"; onAccepted: comment.submit() }
                             }
-                            ActionButton {
-                                kind: detail.canConfirm ? "default" : "primary"
-                                allowed: reopenReason.text.trim() !== ""
-                                text: "Reopen (reason)" + (detail.issue.reopen_count > 0 ? ", reopened " + detail.issue.reopen_count + "×" : "")
-                                onClicked: detail.reopenOld()
-                            }
-                        }
-                    }
-                    FormRow {
-                        visible: root.approved
-                        label: "Note"; sub: "(what was seen, done or why)"
-                        FramedField { id: note; Layout.fillWidth: true; maximumLength: 500; Accessible.name: "Note"; placeholderText: "e.g. Pump checked, handle is loose"; onAccepted: comment.submit() }
-                    }
-                    RowLayout {
-                        visible: detail.steward
-                        Layout.topMargin: 10
-                        spacing: 8
-                        FormRow {
-                            label: "Next step"; sub: "(for updates)"
-                            FramedField { id: nextStep; Layout.fillWidth: true; maximumLength: 500; Accessible.name: "Next step"; placeholderText: "e.g. Plumber visits tomorrow" }
-                        }
-                        FormRow {
-                            label: "ETA (hours)"
-                            Layout.fillWidth: false
-                            FramedField {
-                                id: eta
-                                Layout.preferredWidth: 96
-                                text: "4"
-                                placeholderText: "e.g. 4"
-                                inputMethodHints: Qt.ImhDigitsOnly
-                                validator: IntValidator { bottom: 0; top: 168 }
-                                Accessible.name: "ETA in hours"
-                            }
-                        }
-                    }
-                    ColumnLayout {
-                        Layout.fillWidth: true; Layout.topMargin: 6
-                        enabled: !root.syncing
-                        spacing: 6
-                        ActionGroup {
-                            title: "For stewards"
-                            visible: detail.steward
-                            ActionButton { visible: detail.st === "Open"; kind: "primary"; text: "Acknowledge"; onClicked: detail.act("acknowledge", detail.etaHours) }
-                            ActionButton { allowed: detail.hasNote; text: "Post update"; onClicked: detail.act("update", detail.etaHours) }
-                            ActionButton {
-                                allowed: detail.hasNote; kind: detail.st === "Open" ? "default" : "primary"
-                                text: "Claim fixed (say what was done)"; onClicked: detail.act("claim_resolved", 0)
-                            }
-                            FramedButton { id: more; checkable: true; text: "More"; iconName: checked ? "chevd" : "chev" }   // close without a fix
-                            ConfirmButton {
-                                id: wontFix
-                                visible: more.checked; allowed: detail.hasNote; kind: "danger"; text: "Won't fix (reason)"; confirmText: "Confirm won't fix"
-                                effect: "Closes it without a fix."
-                                onConfirmed: detail.act("close_wontfix", 0)
-                            }
-                            RowLayout {   // close this one as a duplicate of another open issue
-                                visible: more.checked
-                                width: parent.width
+                            RowLayout {
+                                visible: detail.steward
+                                Layout.topMargin: 10
                                 spacing: 8
-                                FramedCombo {
-                                    // The model is rebuilt on every 2 s refresh, which resets currentIndex,
-                                    // so the user's pick is kept in `target`, never read from currentIndex.
-                                    id: dupOf
-                                    Accessible.name: "Duplicate of another report"
-                                    property string target: ""
-                                    property string targetLabel: ""
-                                    property string forIssue: detail.issue.id || ""
-                                    onForIssueChanged: target = ""
-                                    Layout.fillWidth: true
-                                    Layout.preferredWidth: 260
-                                    textRole: "label"
-                                    valueRole: "id"
-                                    displayText: target ? targetLabel : "Duplicate of…"
-                                    model: root.duplicateTargets(detail.issue.id)
-                                    onActivated: function (index) { target = valueAt(index); targetLabel = textAt(index) }
+                                FormRow {
+                                    label: "Next step"; sub: "(for updates)"
+                                    FramedField { id: nextStep; Layout.fillWidth: true; maximumLength: 500; Accessible.name: "Next step"; placeholderText: "e.g. Plumber visits tomorrow" }
                                 }
-                                ConfirmButton {
-                                    id: markDup
-                                    text: "Mark duplicate"; confirmText: "Confirm duplicate"
-                                    effect: "Closes it in favour of the other."
-                                    allowed: dupOf.target !== ""
-                                    onConfirmed: root.run("act", [detail.issue.id, "mark_duplicate", dupOf.target, "", 0],
-                                                          function () { dupOf.target = "" })
+                                FormRow {
+                                    label: "ETA (hours)"
+                                    Layout.fillWidth: false
+                                    FramedField {
+                                        id: eta
+                                        Layout.preferredWidth: 96
+                                        text: "4"
+                                        placeholderText: "e.g. 4"
+                                        inputMethodHints: Qt.ImhDigitsOnly
+                                        validator: IntValidator { bottom: 0; top: 168 }
+                                        Accessible.name: "ETA in hours"
+                                    }
                                 }
                             }
-                        }
-                        ActionGroup {
-                            title: "For everyone"
-                            visible: root.approved
-                            ActionButton { id: comment; allowed: detail.hasNote; text: "Comment"; onClicked: detail.act("comment", 0) }
-                        }
-                    }
-                    Rectangle {   // what this viewer can't do here, and why (the same rules as above)
-                        id: na
-                        readonly property var lines: root.unavailable(detail.issue, detail.hasNote)
-                        visible: root.approved && (lines.length > 0 || detail.finished)
-                        Layout.fillWidth: true; Layout.topMargin: 14; Layout.bottomMargin: 16
-                        implicitHeight: naCol.implicitHeight + 20
-                        radius: 6; color: root.t.well; border.color: root.t.bd
-                        Column {
-                            id: naCol
-                            x: 12; y: 10; width: parent.width - 24
-                            spacing: 2
-                            Label { visible: detail.finished; width: naCol.width; wrapMode: Text.Wrap; text: "A comment does not bring it back to the Issue Tracker."; font.pointSize: root.smallSize; font.weight: Font.DemiBold }
-                            Label {
-                                visible: detail.finished; width: naCol.width; wrapMode: Text.Wrap; bottomPadding: na.lines.length > 0 ? 6 : 0
-                                text: "It is added to the record, and the issue stays where it is. To bring it back, reopen it."; font.pointSize: root.smallSize; color: root.t.muted
-                            }
-                            Label { visible: na.lines.length > 0; text: "Not available to you:"; font.pointSize: root.smallSize; font.weight: Font.DemiBold }
-                            Repeater {
-                                model: na.lines
-                                delegate: Label {
-                                    required property string modelData
-                                    width: naCol.width; wrapMode: Text.Wrap
-                                    text: modelData; font.pointSize: root.smallSize; color: root.t.muted
+                            ColumnLayout {
+                                Layout.fillWidth: true; Layout.topMargin: 6
+                                enabled: !root.syncing
+                                spacing: 6
+                                ActionGroup {
+                                    title: "For stewards"
+                                    visible: detail.steward
+                                    ActionButton { visible: detail.st === "Open"; kind: "primary"; text: "Acknowledge"; onClicked: detail.act("acknowledge", detail.etaHours) }
+                                    ActionButton { allowed: detail.hasNote; text: "Post update"; onClicked: detail.act("update", detail.etaHours) }
+                                    ActionButton {
+                                        allowed: detail.hasNote; kind: detail.st === "Open" ? "default" : "primary"
+                                        text: "Claim fixed (say what was done)"; onClicked: detail.act("claim_resolved", 0)
+                                    }
+                                    FramedButton { id: more; checkable: true; text: "More"; iconName: checked ? "chevd" : "chev" }   // close without a fix
+                                    ConfirmButton {
+                                        id: wontFix
+                                        visible: more.checked; allowed: detail.hasNote; kind: "danger"; text: "Won't fix (reason)"; confirmText: "Confirm won't fix"
+                                        effect: "Closes it without a fix."
+                                        onConfirmed: detail.act("close_wontfix", 0)
+                                    }
+                                    RowLayout {   // close this one as a duplicate of another open issue
+                                        visible: more.checked
+                                        width: parent.width
+                                        spacing: 8
+                                        FramedCombo {
+                                            // The model is rebuilt on every 2 s refresh, which resets currentIndex,
+                                            // so the user's pick is kept in `target`, never read from currentIndex.
+                                            id: dupOf
+                                            Accessible.name: "Duplicate of another report"
+                                            property string target: ""
+                                            property string targetLabel: ""
+                                            property string forIssue: detail.issue.id || ""
+                                            onForIssueChanged: target = ""
+                                            Layout.fillWidth: true
+                                            Layout.preferredWidth: 260
+                                            textRole: "label"
+                                            valueRole: "id"
+                                            displayText: target ? targetLabel : "Duplicate of…"
+                                            model: root.duplicateTargets(detail.issue.id)
+                                            onActivated: function (index) { target = valueAt(index); targetLabel = textAt(index) }
+                                        }
+                                        ConfirmButton {
+                                            id: markDup
+                                            text: "Mark duplicate"; confirmText: "Confirm duplicate"
+                                            effect: "Closes it in favour of the other."
+                                            allowed: dupOf.target !== ""
+                                            onConfirmed: root.run("act", [detail.issue.id, "mark_duplicate", dupOf.target, "", 0],
+                                                                  function () { dupOf.target = "" })
+                                        }
+                                    }
+                                }
+                                ActionGroup {
+                                    title: "For everyone"
+                                    visible: root.approved
+                                    ActionButton { id: comment; allowed: detail.hasNote; text: "Comment"; onClicked: detail.act("comment", 0) }
                                 }
                             }
-                        }
-                    }
-                    Rectangle { Layout.fillWidth: true; Layout.bottomMargin: 14; implicitHeight: 1; color: root.t.bd }
-                    Label { Layout.bottomMargin: 8; text: "Timeline"; font.pointSize: root.smallSize; font.weight: Font.DemiBold; color: root.t.muted }
-                    Item {   // the events on one spine
-                        Layout.fillWidth: true; Layout.bottomMargin: 16
-                        implicitHeight: events.implicitHeight
-                        Rectangle { x: 13; y: 6; width: 2; height: Math.max(0, parent.height - 12); color: root.t.bd }
-                        ColumnLayout {
-                            id: events
-                            width: parent.width
-                            spacing: 12
-                            Repeater {
-                                model: root.selected ? root.selected.events : []
-                                delegate: TimelineRow {
-                                    required property var modelData
-                                    Layout.fillWidth: true
-                                    event: modelData
-                                    byReporter: modelData.author === detail.issue.reporter
+                            Rectangle {   // what this viewer can't do here, and why (the same rules as above)
+                                id: na
+                                readonly property var lines: root.unavailable(detail.issue, detail.hasNote)
+                                visible: root.approved && (lines.length > 0 || detail.finished)
+                                Layout.fillWidth: true; Layout.topMargin: 14; Layout.bottomMargin: 16
+                                implicitHeight: naCol.implicitHeight + 20
+                                radius: root.radii.card; color: root.t.well
+                                Column {
+                                    id: naCol
+                                    x: 12; y: 10; width: parent.width - 24
+                                    spacing: 2
+                                    Label { visible: detail.finished; width: naCol.width; wrapMode: Text.Wrap; text: "A comment does not bring it back to the Issue Tracker."; font.pointSize: root.smallSize; font.weight: Font.DemiBold }
+                                    Label {
+                                        visible: detail.finished; width: naCol.width; wrapMode: Text.Wrap; bottomPadding: na.lines.length > 0 ? 6 : 0
+                                        text: "It is added to the record, and the issue stays where it is. To bring it back, reopen it."; font.pointSize: root.smallSize; color: root.t.muted
+                                    }
+                                    Label { visible: na.lines.length > 0; text: "Not available to you:"; font.pointSize: root.smallSize; font.weight: Font.DemiBold }
+                                    Repeater {
+                                        model: na.lines
+                                        delegate: Label {
+                                            required property string modelData
+                                            width: naCol.width; wrapMode: Text.Wrap
+                                            text: modelData; font.pointSize: root.smallSize; color: root.t.muted
+                                        }
+                                    }
+                                }
+                            }
+                            Label { Layout.bottomMargin: 14; text: "Timeline"; font.pointSize: root.sizes.h3; font.weight: Font.DemiBold }
+                            Item {   // the events on one spine
+                                Layout.fillWidth: true; Layout.bottomMargin: 20
+                                implicitHeight: events.implicitHeight
+                                Rectangle { x: 13; y: 14; width: 1; height: Math.max(0, parent.height - 28); color: root.t.bd }
+                                ColumnLayout {
+                                    id: events
+                                    width: parent.width
+                                    spacing: 18
+                                    Repeater {
+                                        model: sheet.snap ? sheet.snap.events : []
+                                        delegate: TimelineRow {
+                                            required property var modelData
+                                            Layout.fillWidth: true
+                                            event: modelData
+                                            byReporter: modelData.author === detail.issue.reporter
+                                        }
+                                    }
                                 }
                             }
                         }
